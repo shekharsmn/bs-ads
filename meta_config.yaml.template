@@ -1,0 +1,8 @@
+# Meta Ads API Credentials
+# Copy this file to meta_config.yaml and fill in your values
+# NEVER commit meta_config.yaml to version control
+
+app_id: YOUR_APP_ID
+app_secret: YOUR_APP_SECRET
+access_token: YOUR_SYSTEM_USER_ACCESS_TOKEN
+ad_account_id: act_YOUR_AD_ACCOUNT_ID

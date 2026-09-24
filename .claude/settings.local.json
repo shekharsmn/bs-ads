@@ -1,0 +1,16 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(py:*)",
+      "WebSearch",
+      "Bash(php:*)",
+      "Bash(mkdir:*)",
+      "Bash(composer require:*)",
+      "Bash(npm create:*)",
+      "Bash(npm install:*)",
+      "Bash(php artisan:*)",
+      "Bash(curl:*)",
+      "Bash(xargs grep:*)"
+    ]
+  }
+}

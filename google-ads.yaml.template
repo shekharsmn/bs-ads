@@ -1,0 +1,10 @@
+# Google Ads API Credentials
+# Copy this file to google-ads.yaml and fill in your values
+# NEVER commit google-ads.yaml to version control
+
+developer_token: YOUR_DEVELOPER_TOKEN
+client_id: YOUR_CLIENT_ID
+client_secret: YOUR_CLIENT_SECRET
+refresh_token: YOUR_REFRESH_TOKEN
+login_customer_id: YOUR_MCC_ID  # Optional: remove if not using MCC
+use_proto_plus: True
