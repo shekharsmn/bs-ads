@@ -35,7 +35,7 @@ export default function GoogleReportTabs({ report, compare }) {
   const cid = report.google_account?.customer_id
   const snap = report.google_snapshot || {}
   const methodology = report.methodology || {}
-  const checks = report.checks || []
+  const checks = useMemo(() => report.checks || [], [report.checks])
   const currency = snap.currency || report.google_account?.currency || 'USD'
 
   const sections = useMemo(

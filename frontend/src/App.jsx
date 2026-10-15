@@ -3,7 +3,6 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { AuthProvider, useAuth } from './context/AuthContext'
 import Layout from './components/Layout'
 import LoginPage from './pages/LoginPage'
-import RegisterPage from './pages/RegisterPage'
 import Dashboard from './pages/Dashboard'
 import AccountsPage from './pages/AccountsPage'
 import AddAccountPage from './pages/AddAccountPage'
@@ -15,6 +14,12 @@ import PrintReportPage from './pages/PrintReportPage'
 import DataInspectorPage from './pages/DataInspectorPage'
 import AiLogsPage from './pages/AiLogsPage'
 import GoogleCallbackPage from './pages/GoogleCallbackPage'
+import ClientsPage from './pages/ClientsPage'
+import AlertInboxPage from './pages/AlertInboxPage'
+import AlertRulesPage from './pages/AlertRulesPage'
+import ScheduledReportsPage from './pages/ScheduledReportsPage'
+import PublicPerformanceReportPage from './pages/PublicPerformanceReportPage'
+import ConnectionsPage from './pages/ConnectionsPage'
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -53,13 +58,19 @@ export default function App() {
         <AuthProvider>
           <Routes>
             <Route path="/share/reports/:token" element={<PublicReportPage />} />
+            <Route path="/shared/reports/:token" element={<PublicPerformanceReportPage />} />
             <Route path="/login" element={<GuestRoute><LoginPage /></GuestRoute>} />
-            <Route path="/register" element={<GuestRoute><RegisterPage /></GuestRoute>} />
             <Route
               path="/"
               element={<ProtectedRoute><Layout /></ProtectedRoute>}
             >
               <Route index element={<Dashboard />} />
+              <Route path="clients" element={<ClientsPage />} />
+              <Route path="connections" element={<ConnectionsPage />} />
+              <Route path="alerts" element={<AlertInboxPage />} />
+              <Route path="alerts/:id" element={<AlertInboxPage />} />
+              <Route path="alert-rules" element={<AlertRulesPage />} />
+              <Route path="scheduled-reports" element={<ScheduledReportsPage />} />
               <Route path="accounts" element={<AccountsPage />} />
               <Route path="accounts/new" element={<AddAccountPage />} />
               <Route path="accounts/:id/edit" element={<EditAccountPage />} />

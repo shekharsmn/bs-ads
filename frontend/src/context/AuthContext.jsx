@@ -14,28 +14,17 @@ export function AuthProvider({ children }) {
       .finally(() => setLoading(false))
   }, [])
 
-  const login = async (email, password) => {
-    const res = await api.login({ email, password })
-    setUser(res.data.user)
-    return res.data.user
-  }
-
-  const register = async (name, email, password, password_confirmation) => {
-    const res = await api.register({ name, email, password, password_confirmation })
-    setUser(res.data.user)
-    return res.data.user
-  }
-
   const logout = async () => {
     await api.logout()
     setUser(null)
   }
 
   return (
-    <AuthContext.Provider value={{ user, loading, login, register, logout }}>
+    <AuthContext.Provider value={{ user, loading, logout }}>
       {children}
     </AuthContext.Provider>
   )
 }
 
+// eslint-disable-next-line react-refresh/only-export-components
 export const useAuth = () => useContext(AuthContext)

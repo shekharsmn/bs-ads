@@ -25,9 +25,10 @@ class RunGoogleAuditJob implements ShouldQueue
 
     public function handle(): void
     {
-        $report = Report::with('googleAccount')->findOrFail($this->reportId);
+        $report = Report::with(['googleAccount', 'adAccount.connection'])->findOrFail($this->reportId);
         $account = $report->googleAccount;
-        if (! $account) {
+        $operational = $report->adAccount;
+        if (! $account && ! $operational) {
             throw new \RuntimeException('Report has no Google account.');
         }
 
@@ -41,12 +42,12 @@ class RunGoogleAuditJob implements ShouldQueue
             @ini_set('memory_limit', '768M');
 
             $client = GoogleAdsClientFactory::fromRefreshToken(
-                $account->refresh_token,
-                $account->login_customer_id
+                $account?->refresh_token ?? $operational->connection->credentials['refresh_token'],
+                $account?->login_customer_id ?? ($operational->connection->credentials['login_customer_id'] ?? $operational->connection->manager_external_id)
             );
             $period = $report->period ?? 'last_30d';
             $literal = GoogleFetchService::dateLiteralFromPeriod($period);
-            $fetcher = new GoogleFetchService($client, $account->customer_id, $literal, forInspector: false);
+            $fetcher = new GoogleFetchService($client, $account?->customer_id ?? $operational->external_id, $literal, forInspector: false);
             $data = $fetcher->fetchAll();
             if ($this->reportAbortIfCancelled($report)) {
                 return;

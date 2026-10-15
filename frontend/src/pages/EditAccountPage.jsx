@@ -29,6 +29,7 @@ export default function EditAccountPage() {
     if (!accounts || form) return
     const account = accounts.find(a => String(a.id) === String(id))
     if (account) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setForm({
         label: account.label || '',
         account_id: account.account_id || '',
@@ -37,7 +38,7 @@ export default function EditAccountPage() {
         access_token: '',
       })
     }
-  }, [accounts, id])
+  }, [accounts, id, form])
 
   const mutation = useMutation({
     mutationFn: (data) => api.updateAccount(id, data),
@@ -119,7 +120,7 @@ export default function EditAccountPage() {
         background: 'white', border: '1px solid #e2e8f0', borderRadius: '14px', padding: '32px',
       }}>
         <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
-          {fields.map(({ key, label, type, placeholder, help, sensitive }) => {
+          {fields.map(({ key, label, placeholder, help, sensitive }) => {
             const isShown = showFields[key]
             const inputType = sensitive && !isShown ? 'password' : 'text'
             return (

@@ -11,3 +11,4 @@ backend/storage/framework/cache/
 backend/storage/framework/sessions/
 backend/storage/framework/views/
 backend/bootstrap/cache/
+.graphify/

@@ -113,7 +113,7 @@ class GeminiAnalyzerService
     private string $logAdName        = '';
     private string $logCallType      = 'unknown';
 
-    public function setLogContext(int $userId, int $reportId, int $metaAccountId): void
+    public function setLogContext(int $userId, int $reportId, ?int $metaAccountId): void
     {
         $this->logUserId        = $userId;
         $this->logReportId      = $reportId;

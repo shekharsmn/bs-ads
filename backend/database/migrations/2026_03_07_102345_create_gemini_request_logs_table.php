@@ -15,7 +15,7 @@ return new class extends Migration
             $table->id();
             $table->foreignId('user_id')->constrained()->cascadeOnDelete();
             $table->foreignId('report_id')->constrained()->cascadeOnDelete();
-            $table->foreignId('meta_account_id')->constrained()->cascadeOnDelete();
+            $table->foreignId('meta_account_id')->nullable()->constrained()->nullOnDelete();
             $table->string('ad_name')->nullable();
             $table->string('call_type'); // transcript | static_analysis | video_analysis
             $table->unsignedBigInteger('input_tokens')->default(0);

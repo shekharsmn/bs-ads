@@ -29,7 +29,7 @@ export default function MetaReportTabs({ report, compare }) {
   const actId = report.meta_account?.account_id
   const snap = report.meta_snapshot || {}
   const methodology = report.methodology || {}
-  const checks = report.checks || []
+  const checks = useMemo(() => report.checks || [], [report.checks])
 
   const sections = useMemo(
     () => [...new Set(checks.map(c => c.section).filter(Boolean))].sort(),

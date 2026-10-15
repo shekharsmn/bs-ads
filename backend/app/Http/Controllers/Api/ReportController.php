@@ -8,6 +8,8 @@ use App\Jobs\RunMetaAuditJob;
 use App\Models\Report;
 use App\Models\MetaAccount;
 use App\Models\GoogleAccount;
+use App\Models\AdAccount;
+use App\Services\ClientAccess;
 use App\Services\Audit\GoogleCheckMethodology;
 use App\Services\Audit\MetaCheckMethodology;
 use Illuminate\Http\Request;
@@ -18,13 +20,15 @@ class ReportController extends Controller
 {
     public function index(Request $request)
     {
-        $reports = $request->user()->reports()
+        $clientIds = ClientAccess::clientsFor($request->user())->pluck('id');
+        $reports = Report::query()->where(fn ($q) => $q->where('user_id', $request->user()->id)->orWhereIn('client_id', $clientIds))
             ->with([
                 'metaAccount:id,label,account_name',
                 'googleAccount:id,label,customer_id,account_name',
+                'adAccount:id,name,external_id,platform',
             ])
             ->orderByDesc('created_at')
-            ->get(['id', 'platform', 'meta_account_id', 'google_account_id', 'status', 'health_score', 'grade', 'period', 'error_message', 'started_at', 'completed_at', 'created_at']);
+            ->get(['id', 'client_id', 'ad_account_id', 'platform', 'meta_account_id', 'google_account_id', 'status', 'health_score', 'grade', 'period', 'error_message', 'started_at', 'completed_at', 'created_at']);
         return response()->json($reports);
     }
 
@@ -36,12 +40,24 @@ class ReportController extends Controller
 
         $data = $request->validate([
             'platform' => 'required|string|in:meta,google',
-            'meta_account_id' => 'exclude_unless:platform,meta|required|integer|exists:meta_accounts,id',
-            'google_account_id' => 'exclude_unless:platform,google|required|integer|exists:google_accounts,id',
+            'meta_account_id' => 'nullable|integer|exists:meta_accounts,id',
+            'google_account_id' => 'nullable|integer|exists:google_accounts,id',
+            'ad_account_id' => 'nullable|integer|exists:ad_accounts,id',
             'period' => 'nullable|string|in:last_7d,last_30d,last_90d',
         ]);
 
-        if ($data['platform'] === 'meta') {
+        if ($data['ad_account_id'] ?? null) {
+            $account = AdAccount::with('client')->findOrFail($data['ad_account_id']);
+            ClientAccess::authorize($request->user(), $account->client, true);
+            abort_unless($account->platform->value === $data['platform'], 422, 'Account platform does not match the requested audit.');
+            $report = Report::create([
+                'user_id' => $request->user()->id, 'client_id' => $account->client_id, 'ad_account_id' => $account->id,
+                'platform' => $data['platform'], 'meta_account_id' => null, 'google_account_id' => null,
+                'status' => 'pending', 'period' => $data['period'] ?? 'last_30d',
+            ]);
+            $data['platform'] === 'meta' ? RunMetaAuditJob::dispatch($report->id) : RunGoogleAuditJob::dispatch($report->id);
+        } elseif ($data['platform'] === 'meta') {
+            abort_unless($data['meta_account_id'] ?? null, 422, 'Choose an account.');
             $account = MetaAccount::findOrFail($data['meta_account_id']);
             if ($account->user_id !== $request->user()->id) {
                 abort(403);
@@ -56,6 +72,7 @@ class ReportController extends Controller
             ]);
             RunMetaAuditJob::dispatch($report->id);
         } else {
+            abort_unless($data['google_account_id'] ?? null, 422, 'Choose an account.');
             $account = GoogleAccount::findOrFail($data['google_account_id']);
             if ($account->user_id !== $request->user()->id) {
                 abort(403);
@@ -76,11 +93,12 @@ class ReportController extends Controller
 
     public function show(Request $request, Report $report)
     {
-        if ($report->user_id !== $request->user()->id) abort(403);
+        $this->authorizeReport($request, $report);
 
         $with = [
             'metaAccount:id,label,account_name,currency',
             'googleAccount:id,label,customer_id,account_name,currency,time_zone',
+            'adAccount:id,client_id,name,external_id,currency,timezone,platform',
             'sectionScores',
             'checks',
         ];
@@ -108,20 +126,20 @@ class ReportController extends Controller
      */
     public function compare(Request $request, Report $report)
     {
-        if ($report->user_id !== $request->user()->id) {
-            abort(403);
-        }
+        $this->authorizeReport($request, $report);
 
         $report->load(['checks', 'sectionScores']);
 
         $q = Report::query()
-            ->where('user_id', $report->user_id)
+            ->when($report->client_id, fn ($query) => $query->where('client_id', $report->client_id), fn ($query) => $query->where('user_id', $report->user_id))
             ->where('platform', $report->platform)
             ->where('status', 'complete')
             ->where('id', '<>', $report->id)
             ->where('period', $report->period);
 
-        if ($report->platform === 'google') {
+        if ($report->ad_account_id) {
+            $q->where('ad_account_id', $report->ad_account_id);
+        } elseif ($report->platform === 'google') {
             $q->where('google_account_id', $report->google_account_id);
         } else {
             $q->where('meta_account_id', $report->meta_account_id);
@@ -209,9 +227,7 @@ class ReportController extends Controller
 
     public function exportCsv(Request $request, Report $report): StreamedResponse
     {
-        if ($report->user_id !== $request->user()->id) {
-            abort(403);
-        }
+        $this->authorizeReport($request, $report);
         $report->load('checks');
 
         $filename = 'report-'.$report->id.'-checks.csv';
@@ -243,9 +259,7 @@ class ReportController extends Controller
 
     public function enableShare(Request $request, Report $report)
     {
-        if ($report->user_id !== $request->user()->id) {
-            abort(403);
-        }
+        $this->authorizeReport($request, $report);
         if ($report->status !== 'complete') {
             return response()->json(['message' => 'Only completed reports can be shared.'], 422);
         }
@@ -263,9 +277,7 @@ class ReportController extends Controller
 
     public function disableShare(Request $request, Report $report)
     {
-        if ($report->user_id !== $request->user()->id) {
-            abort(403);
-        }
+        $this->authorizeReport($request, $report);
         $report->update(['public_token' => null]);
 
         return response()->json(['message' => 'Share link revoked.']);
@@ -273,9 +285,7 @@ class ReportController extends Controller
 
     public function status(Request $request, Report $report)
     {
-        if ($report->user_id !== $request->user()->id) {
-            abort(403);
-        }
+        $this->authorizeReport($request, $report);
 
         return response()->json([
             'status' => $report->status,
@@ -291,9 +301,7 @@ class ReportController extends Controller
      */
     public function cancel(Request $request, Report $report)
     {
-        if ($report->user_id !== $request->user()->id) {
-            abort(403);
-        }
+        $this->authorizeReport($request, $report);
 
         if (in_array($report->status, ['complete', 'failed', 'cancelled'], true)) {
             return response()->json([
@@ -324,8 +332,13 @@ class ReportController extends Controller
 
     public function destroy(Request $request, Report $report)
     {
-        if ($report->user_id !== $request->user()->id) abort(403);
+        $this->authorizeReport($request, $report);
         $report->delete();
         return response()->json(['message' => 'Report deleted']);
+    }
+    private function authorizeReport(Request $request, Report $report): void
+    {
+        if ($report->user_id === $request->user()->id) return;
+        abort_unless($report->client_id && $request->user()->canAccessClient($report->client_id), 403);
     }
 }

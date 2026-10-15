@@ -2,11 +2,16 @@ import { NavLink, Outlet, useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import {
   LayoutDashboard, Settings, PlayCircle, LogOut,
-  Zap, ChevronRight, User, Search, Cpu,
+  BarChart3, ChevronRight, User, Search, Cpu, Building2, BellRing, SlidersHorizontal, CalendarClock, Cable,
 } from 'lucide-react'
 
 const navItems = [
-  { to: '/', icon: LayoutDashboard, label: 'Dashboard', exact: true },
+  { to: '/', icon: LayoutDashboard, label: 'Command Center', exact: true },
+  { to: '/alerts', icon: BellRing, label: 'Alert Inbox' },
+  { to: '/alert-rules', icon: SlidersHorizontal, label: 'Alert Policies' },
+  { to: '/clients', icon: Building2, label: 'Clients' },
+  { to: '/connections', icon: Cable, label: 'Connections' },
+  { to: '/scheduled-reports', icon: CalendarClock, label: 'Scheduled Reports' },
   { to: '/reports/new', icon: PlayCircle, label: 'Run Audit' },
   { to: '/inspector', icon: Search, label: 'Data Inspector' },
   { to: '/ai-logs', icon: Cpu, label: 'AI Request Log' },
@@ -56,7 +61,7 @@ export default function Layout() {
               display: 'flex', alignItems: 'center', justifyContent: 'center',
               boxShadow: '0 0 16px rgba(59,130,246,0.4)',
             }}>
-              <Zap size={16} color="white" strokeWidth={2.5} />
+              <BarChart3 size={16} color="white" strokeWidth={2.5} />
             </div>
             <span style={{
               fontFamily: 'Syne, sans-serif',
@@ -65,7 +70,7 @@ export default function Layout() {
               color: 'white',
               letterSpacing: '-0.02em',
             }}>
-              AdAudit
+              Pulse
             </span>
           </div>
         </div>
@@ -76,13 +81,14 @@ export default function Layout() {
             fontSize: '10px', fontWeight: 600, color: 'rgba(255,255,255,0.3)',
             letterSpacing: '0.1em', textTransform: 'uppercase',
             padding: '0 8px', marginBottom: '8px', marginTop: 0,
-          }}>Navigation</p>
+          }}>Operations</p>
 
-          {navItems.map(({ to, icon: Icon, label, exact }) => (
-            <NavLink
-              key={to}
-              to={to}
-              end={exact}
+          {navItems.map((item) => {
+            const NavIcon = item.icon
+            return <NavLink
+              key={item.to}
+              to={item.to}
+              end={item.exact}
               style={({ isActive }) => ({
                 display: 'flex',
                 alignItems: 'center',
@@ -101,15 +107,11 @@ export default function Layout() {
                 paddingLeft: isActive ? '10px' : '12px',
               })}
             >
-              {({ isActive }) => (
-                <>
-                  <Icon size={15} strokeWidth={isActive ? 2.5 : 2} />
-                  <span>{label}</span>
-                  {isActive && <ChevronRight size={12} style={{ marginLeft: 'auto', opacity: 0.6 }} />}
-                </>
-              )}
+              <NavIcon size={15} strokeWidth={2} />
+              <span>{item.label}</span>
+              <ChevronRight size={12} style={{ marginLeft: 'auto', opacity: 0.35 }} />
             </NavLink>
-          ))}
+          })}
         </nav>
 
         {/* User section */}

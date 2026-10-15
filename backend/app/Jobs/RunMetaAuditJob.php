@@ -33,8 +33,9 @@ class RunMetaAuditJob implements ShouldQueue
 
     public function handle(): void
     {
-        $report = Report::with('metaAccount')->findOrFail($this->reportId);
+        $report = Report::with(['metaAccount', 'adAccount.connection'])->findOrFail($this->reportId);
         $account = $report->metaAccount;
+        $operational = $report->adAccount;
 
         if ($this->reportAbortIfCancelled($report)) {
             return;
@@ -45,11 +46,12 @@ class RunMetaAuditJob implements ShouldQueue
         try {
             // 1. Fetch all data from Meta API
             $fetcher = new MetaFetchService(
-                $account->account_id,
-                $account->access_token,
-                $account->app_id,
-                $account->app_secret,
+                $account?->account_id ?? $operational->external_id,
+                $account?->access_token ?? $operational->connection->credentials['access_token'],
+                $account?->app_id ?? ($operational->connection->credentials['app_id'] ?? ''),
+                $account?->app_secret ?? ($operational->connection->credentials['app_secret'] ?? ''),
             );
+            $fetcher->setPeriod($report->period ?? 'last_30d');
             $data = $fetcher->fetchAll();
             if ($this->reportAbortIfCancelled($report)) {
                 return;

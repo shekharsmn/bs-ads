@@ -7,7 +7,7 @@ use Illuminate\Database\Eloquent\Model;
 class Report extends Model
 {
     protected $fillable = [
-        'user_id', 'platform', 'meta_account_id', 'google_account_id', 'status', 'health_score',
+        'user_id', 'client_id', 'ad_account_id', 'platform', 'meta_account_id', 'google_account_id', 'status', 'health_score',
         'grade', 'period', 'error_message', 'started_at', 'completed_at',
         'cancel_requested_at', 'cancelled_at',
         'gemini_input_tokens', 'gemini_output_tokens', 'google_snapshot',
@@ -26,6 +26,16 @@ class Report extends Model
     public function user()
     {
         return $this->belongsTo(User::class);
+    }
+
+    public function client()
+    {
+        return $this->belongsTo(Client::class);
+    }
+
+    public function adAccount()
+    {
+        return $this->belongsTo(AdAccount::class);
     }
 
     public function metaAccount()

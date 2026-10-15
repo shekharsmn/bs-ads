@@ -56,6 +56,11 @@ class AuthController extends Controller
 
     public function me(Request $request)
     {
-        return response()->json(['user' => $request->user()]);
+        $user = $request->user();
+        return response()->json(['user' => $user->load('clients:id,name,slug'), 'permissions' => [
+            'manage_clients' => $user->isAdmin(),
+            'manage_connections' => $user->isAdmin(),
+            'manage_alerts' => $user->canManage(),
+        ]]);
     }
 }

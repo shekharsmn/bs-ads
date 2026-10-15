@@ -32,10 +32,34 @@ client.interceptors.response.use(
 
 export const api = {
   // Auth
-  login: (data) => client.post('/api/login', data),
-  register: (data) => client.post('/api/register', data),
+  workspaceLoginUrl: '/api/auth/google/redirect',
   logout: () => client.post('/api/logout'),
   me: () => client.get('/api/me'),
+
+  // Performance operations
+  getClients: () => client.get('/api/clients'),
+  getClient: (id) => client.get(`/api/clients/${id}`),
+  createClient: (data) => client.post('/api/clients', data),
+  updateClient: (id, data) => client.put(`/api/clients/${id}`, data),
+  testClientChat: (id) => client.post(`/api/clients/${id}/google-chat/test`),
+  getConnections: () => client.get('/api/connections'),
+  createConnection: (data) => client.post('/api/connections', data),
+  discoverAccounts: (id) => client.post(`/api/connections/${id}/discover`),
+  assignDiscoveredAccount: (id, data) => client.post(`/api/connections/${id}/accounts`, data),
+  getMetricSummary: (params) => client.get('/api/metrics/summary', { params }),
+  getMetricTrends: (params) => client.get('/api/metrics/trends', { params }),
+  getCampaignMetrics: (params) => client.get('/api/metrics/campaigns', { params }),
+  getAlerts: (params) => client.get('/api/alerts', { params }),
+  getAlert: (id) => client.get(`/api/alerts/${id}`),
+  alertAction: (id, action, data = {}) => client.post(`/api/alerts/${id}/${action}`, data),
+  getAlertTemplates: () => client.get('/api/alert-templates'),
+  getAlertRules: (params) => client.get('/api/alert-rules', { params }),
+  createAlertRule: (data) => client.post('/api/alert-rules', data),
+  updateAlertRule: (id, data) => client.put(`/api/alert-rules/${id}`, data),
+  deleteAlertRule: (id) => client.delete(`/api/alert-rules/${id}`),
+  getReportSchedules: () => client.get('/api/report-schedules'),
+  saveReportSchedule: (data) => client.post('/api/report-schedules', data),
+  generateReport: (clientId, data) => client.post(`/api/clients/${clientId}/report-runs`, data),
 
   // Accounts
   getAccounts: () => client.get('/api/accounts'),

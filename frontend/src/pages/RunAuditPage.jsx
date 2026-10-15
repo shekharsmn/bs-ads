@@ -26,6 +26,7 @@ export default function RunAuditPage() {
     platform: 'meta',
     meta_account_id: '',
     google_account_id: '',
+    ad_account_id: '',
     period: 'last_30d',
   })
   const [reportId, setReportId] = useState(null)
@@ -44,8 +45,15 @@ export default function RunAuditPage() {
     queryFn: () => api.getGoogleAccounts().then(r => r.data),
   })
 
-  const accountsLoading = metaLoading || googleLoading
-  const accounts = form.platform === 'meta' ? metaAccounts : googleAccounts
+  const { data: clients = [], isLoading: clientsLoading } = useQuery({
+    queryKey: ['clients'],
+    queryFn: () => api.getClients().then(r => r.data),
+  })
+
+  const operationalAccounts = clients.flatMap(client => (client.ad_accounts || []).map(account => ({ ...account, client_name: client.name, normalized: true })))
+  const legacyAccounts = (form.platform === 'meta' ? metaAccounts : googleAccounts).map(account => ({ ...account, normalized: false }))
+  const accountsLoading = metaLoading || googleLoading || clientsLoading
+  const accounts = [...operationalAccounts.filter(account => account.platform === form.platform), ...legacyAccounts]
 
   const startMutation = useMutation({
     mutationFn: (data) => api.createReport(data),
@@ -108,7 +116,9 @@ export default function RunAuditPage() {
   const handleSubmit = (e) => {
     e.preventDefault()
     const period = form.period
-    if (form.platform === 'meta') {
+    if (form.ad_account_id) {
+      startMutation.mutate({ platform: form.platform, ad_account_id: parseInt(form.ad_account_id, 10), period })
+    } else if (form.platform === 'meta') {
       startMutation.mutate({
         platform: 'meta',
         meta_account_id: parseInt(form.meta_account_id, 10),
@@ -129,8 +139,8 @@ export default function RunAuditPage() {
   const isCancelled = jobStatus?.status === 'cancelled'
 
   const accountOk = form.platform === 'meta'
-    ? !!form.meta_account_id
-    : !!form.google_account_id
+    ? !!form.meta_account_id || !!form.ad_account_id
+    : !!form.google_account_id || !!form.ad_account_id
 
   return (
     <div style={{ padding: '32px', maxWidth: '560px', margin: '0 auto' }}>
@@ -169,7 +179,7 @@ export default function RunAuditPage() {
               <AlertCircle size={14} />
               No {form.platform === 'meta' ? 'Meta' : 'Google'} accounts connected.{' '}
               <button
-                onClick={() => navigate('/accounts')}
+                onClick={() => navigate('/connections')}
                 style={{ background: 'none', border: 'none', color: '#d97706', fontWeight: 700, cursor: 'pointer', padding: 0, fontFamily: 'inherit', fontSize: '13px' }}
               >Connect one →</button>
             </div>
@@ -193,6 +203,7 @@ export default function RunAuditPage() {
                       platform: id,
                       meta_account_id: '',
                       google_account_id: '',
+                      ad_account_id: '',
                     }))}
                     style={{
                       flex: 1, padding: '10px',
@@ -213,12 +224,13 @@ export default function RunAuditPage() {
               </label>
               <select
                 required
-                value={form.platform === 'meta' ? form.meta_account_id : form.google_account_id}
-                onChange={e => setForm(f => (
-                  f.platform === 'meta'
-                    ? { ...f, meta_account_id: e.target.value }
-                    : { ...f, google_account_id: e.target.value }
-                ))}
+                value={form.ad_account_id ? `ops:${form.ad_account_id}` : (form.platform === 'meta' ? form.meta_account_id : form.google_account_id)}
+                onChange={e => setForm(f => {
+                  if (e.target.value.startsWith('ops:')) return { ...f, ad_account_id: e.target.value.slice(4), meta_account_id: '', google_account_id: '' }
+                  return f.platform === 'meta'
+                    ? { ...f, ad_account_id: '', meta_account_id: e.target.value }
+                    : { ...f, ad_account_id: '', google_account_id: e.target.value }
+                })}
                 disabled={accountsLoading}
                 style={{
                   width: '100%', padding: '10px 14px',
@@ -228,17 +240,9 @@ export default function RunAuditPage() {
                 }}
               >
                 <option value="">Select an account...</option>
-                {form.platform === 'meta'
-                  ? metaAccounts.map(a => (
-                    <option key={a.id} value={a.id}>
-                      {a.label}{a.account_name && a.account_name !== a.label ? ` (${a.account_name})` : ''}
-                    </option>
-                  ))
-                  : googleAccounts.map(a => (
-                    <option key={a.id} value={a.id}>
-                      {a.label}{a.account_name && a.account_name !== a.label ? ` (${a.account_name})` : ''} · {a.customer_id}
-                    </option>
-                  ))}
+                {accounts.map(a => <option key={`${a.normalized ? 'ops' : 'legacy'}-${a.id}`} value={a.normalized ? `ops:${a.id}` : a.id}>
+                  {a.normalized ? `${a.client_name} · ${a.name} · ${a.external_id}` : `${a.label}${a.account_name && a.account_name !== a.label ? ` (${a.account_name})` : ''}${a.customer_id ? ` · ${a.customer_id}` : ''}`}
+                </option>)}
               </select>
             </div>
 

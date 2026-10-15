@@ -39,4 +39,12 @@ return [
         'api_key' => env('GEMINI_API_KEY'),
     ],
 
+    'google_workspace' => [
+        'client_id' => env('GOOGLE_WORKSPACE_CLIENT_ID', env('GOOGLE_OAUTH_CLIENT_ID')),
+        'client_secret' => env('GOOGLE_WORKSPACE_CLIENT_SECRET', env('GOOGLE_OAUTH_CLIENT_SECRET')),
+        'redirect_uri' => env('GOOGLE_WORKSPACE_REDIRECT_URI', 'http://localhost:5173/api/auth/google/callback'),
+        'frontend_url' => env('FRONTEND_URL', 'http://localhost:5173'),
+        'allowed_domain' => env('GOOGLE_WORKSPACE_DOMAIN', 'brandshark.com'),
+    ],
+
 ];

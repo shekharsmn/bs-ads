@@ -88,7 +88,7 @@ export default function AddAccountPage() {
         background: 'white', border: '1px solid #e2e8f0', borderRadius: '14px', padding: '32px',
       }}>
         <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
-          {fields.map(({ key, label, type, placeholder, help, sensitive }) => {
+          {fields.map(({ key, label, placeholder, help, sensitive }) => {
             const isShown = showFields[key]
             const inputType = sensitive && !isShown ? 'password' : 'text'
             return (

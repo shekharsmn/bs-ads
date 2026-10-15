@@ -25,7 +25,7 @@ php artisan serve --host=127.0.0.1 --port=8000 &
 PID_API=$!
 echo -e "${GREEN}[API]     Laravel → http://localhost:8000  (pid $PID_API)${NC}"
 
-php artisan queue:work --timeout=300 --sleep=3 --tries=1 &
+php artisan queue:work --timeout=600 --sleep=3 --tries=1 &
 PID_QUEUE=$!
 echo -e "${GREEN}[QUEUE]   Worker started                  (pid $PID_QUEUE)${NC}"
 

@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Enums\UserRole;
 // use Illuminate\Contracts\Auth\MustVerifyEmail;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Foundation\Auth\User as Authenticatable;
@@ -21,6 +22,10 @@ class User extends Authenticatable
         'name',
         'email',
         'password',
+        'google_subject',
+        'role',
+        'avatar_url',
+        'last_login_at',
     ];
 
     /**
@@ -43,6 +48,8 @@ class User extends Authenticatable
         return [
             'email_verified_at' => 'datetime',
             'password' => 'hashed',
+            'role' => UserRole::class,
+            'last_login_at' => 'datetime',
         ];
     }
 
@@ -59,5 +66,25 @@ class User extends Authenticatable
     public function reports()
     {
         return $this->hasMany(Report::class);
+    }
+
+    public function clients()
+    {
+        return $this->belongsToMany(Client::class)->withTimestamps();
+    }
+
+    public function isAdmin(): bool
+    {
+        return $this->role === UserRole::Admin;
+    }
+
+    public function canManage(): bool
+    {
+        return $this->role?->canManage() ?? false;
+    }
+
+    public function canAccessClient(int $clientId): bool
+    {
+        return $this->isAdmin() || $this->clients()->whereKey($clientId)->exists();
     }
 }
