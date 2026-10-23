@@ -1,0 +1,16 @@
+services:
+  meta-ad-library-scraper:
+    build:
+      context: ./services/meta-ad-library-scraper
+    environment:
+      SCRAPER_SERVICE_TOKEN: ${AD_LIBRARY_SCRAPER_TOKEN:?Set AD_LIBRARY_SCRAPER_TOKEN}
+      FACEBOOK_PROXY: ${FACEBOOK_PROXY:-}
+      TWOCAPTCHA_KEY: ${TWOCAPTCHA_KEY:-}
+    ports:
+      - "127.0.0.1:8090:8090"
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: "1.5"
+          memory: 2G

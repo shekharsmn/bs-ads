@@ -3,8 +3,10 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Models\AdAccount;
 use App\Models\GoogleAccount;
 use App\Models\MetaAccount;
+use App\Services\ClientAccess;
 use App\Services\GoogleAdsClientFactory;
 use App\Services\GoogleFetchService;
 use App\Services\MetaFetchService;
@@ -17,6 +19,7 @@ class InspectorController extends Controller
         $request->validate([
             'platform' => 'nullable|string|in:meta,google',
             'account_id' => 'required|integer',
+            'account_source' => 'nullable|string|in:legacy,operational',
             'period' => 'nullable|in:last_7d,last_30d,last_90d',
         ]);
 
@@ -162,13 +165,31 @@ class InspectorController extends Controller
 
     private function fetchGoogle(Request $request)
     {
-        $request->validate([
-            'account_id' => 'required|integer|exists:google_accounts,id',
-        ]);
+        // Operational ad accounts are canonical. Keeping legacy explicit prevents
+        // older/cached inspector clients from accidentally querying an MCC record.
+        $source = $request->input('account_source', 'operational');
+        if ($source === 'operational') {
+            $request->validate(['account_id' => 'required|integer|exists:ad_accounts,id']);
+            $account = AdAccount::with('connection')->whereKey($request->account_id)->where('platform', 'google')->firstOrFail();
+            ClientAccess::authorize($request->user(), $account->client_id);
+            abort_unless($account->connection, 422, 'This ad account has no platform connection. Reconnect it from Ad Platforms.');
 
-        $account = GoogleAccount::where('id', $request->account_id)
-            ->where('user_id', $request->user()->id)
-            ->firstOrFail();
+            $credentials = $account->connection->credentials;
+            $refreshToken = $credentials['refresh_token'] ?? null;
+            abort_unless($refreshToken, 422, 'This Google Ads connection has no refresh token. Reconnect it from Ad Platforms.');
+            $customerId = $account->external_id;
+            $loginCustomerId = $account->manager_external_id
+                ?? ($credentials['login_customer_id'] ?? null)
+                ?? $account->connection->manager_external_id;
+        } else {
+            $request->validate(['account_id' => 'required|integer|exists:google_accounts,id']);
+            $account = GoogleAccount::where('id', $request->account_id)
+                ->where('user_id', $request->user()->id)
+                ->firstOrFail();
+            $refreshToken = $account->refresh_token;
+            $customerId = $account->customer_id;
+            $loginCustomerId = $account->login_customer_id;
+        }
 
         $period = $request->period ?? 'last_30d';
         $literal = GoogleFetchService::dateLiteralFromPeriod($period);
@@ -184,20 +205,23 @@ class InspectorController extends Controller
 
         try {
             $client = GoogleAdsClientFactory::fromRefreshToken(
-                $account->refresh_token,
-                $account->login_customer_id
+                $refreshToken,
+                $loginCustomerId
             );
-            $fetch = new GoogleFetchService($client, $account->customer_id, $literal, forInspector: true);
+            $fetch = new GoogleFetchService($client, $customerId, $literal, forInspector: true);
             $payload = $fetch->fetchAll();
 
             return response()->json([
                 'platform' => 'google',
                 'period' => $period,
-                'customer_id' => $account->customer_id,
+                'customer_id' => $customerId,
                 'payload' => $payload,
             ]);
         } catch (\Throwable $e) {
             $msg = $e->getMessage() !== '' ? $e->getMessage() : $e::class;
+            if (str_contains($msg, 'REQUESTED_METRICS_FOR_MANAGER')) {
+                $msg = 'This is a Google Ads manager account, which cannot return performance metrics. Open Ad Platforms, discover its client accounts, assign the required client account, then select that client account in Data Inspector.';
+            }
 
             return response()->json(['error' => $msg, 'message' => $msg], 422);
         }

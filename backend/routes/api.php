@@ -1,6 +1,9 @@
 <?php
 
 use App\Http\Controllers\Api\AiLogsController;
+use App\Http\Controllers\Api\AiModelController;
+use App\Http\Controllers\Api\AdLibraryController;
+use App\Http\Controllers\Api\AdLibraryAuditController;
 use App\Http\Controllers\Api\AuthController;
 use App\Http\Controllers\Api\AlertController;
 use App\Http\Controllers\Api\AlertRuleController;
@@ -52,6 +55,8 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::put('/connections/{connection}', [ConnectionController::class, 'update'])->middleware('role:admin');
     Route::post('/connections/{connection}/discover', [ConnectionController::class, 'discover'])->middleware('role:admin');
     Route::post('/connections/{connection}/accounts', [ConnectionController::class, 'assignAccount'])->middleware('role:admin');
+    Route::post('/connections/{connection}/accounts/bulk', [ConnectionController::class, 'assignAccounts'])->middleware('role:admin');
+    Route::get('/connections/google/redirect', [GoogleOAuthController::class, 'connectionRedirect'])->middleware('role:admin');
 
     Route::get('/metrics/summary', [MetricsController::class, 'summary']);
     Route::get('/metrics/trends', [MetricsController::class, 'trends']);
@@ -91,6 +96,46 @@ Route::middleware('auth:sanctum')->group(function () {
 
     // AI logs
     Route::get('/ai-logs', [AiLogsController::class, 'index']);
+
+    // Admin settings
+    Route::get('/settings/ai-models', [AiModelController::class, 'index'])->middleware('role:admin');
+    Route::post('/settings/ai-models', [AiModelController::class, 'store'])->middleware('role:admin');
+    Route::put('/settings/ai-models/{aiModel}', [AiModelController::class, 'update'])->middleware('role:admin');
+    Route::delete('/settings/ai-models/{aiModel}', [AiModelController::class, 'destroy'])->middleware('role:admin');
+
+    Route::get('/ad-library/searches', [AdLibraryController::class, 'searches']);
+    Route::post('/ad-library/searches', [AdLibraryController::class, 'store']);
+    Route::put('/ad-library/searches/{search}', [AdLibraryController::class, 'update']);
+    Route::delete('/ad-library/searches/{search}', [AdLibraryController::class, 'destroySearch']);
+    Route::post('/ad-library/searches/{search}/runs', [AdLibraryController::class, 'run']);
+    Route::get('/ad-library/runs', [AdLibraryController::class, 'runs']);
+    Route::get('/ad-library/runs/{run}', [AdLibraryController::class, 'showRun']);
+    Route::get('/ad-library/runs/{run}/json', [AdLibraryController::class, 'runJson']);
+    Route::get('/ad-library/runs/{run}/ads', [AdLibraryController::class, 'results']);
+    Route::delete('/ad-library/runs/{run}', [AdLibraryController::class, 'destroyRun']);
+
+    Route::get('/ad-library/audit-models', [AdLibraryAuditController::class, 'models']);
+    Route::get('/ad-library/audits', [AdLibraryAuditController::class, 'index']);
+    Route::post('/ad-library/audits', [AdLibraryAuditController::class, 'store']);
+    Route::get('/ad-library/audits/{audit}', [AdLibraryAuditController::class, 'show']);
+    Route::put('/ad-library/audits/{audit}', [AdLibraryAuditController::class, 'update']);
+    Route::delete('/ad-library/audits/{audit}', [AdLibraryAuditController::class, 'destroy']);
+    Route::post('/ad-library/audits/{audit}/context/collect', [AdLibraryAuditController::class, 'collectContext']);
+    Route::put('/ad-library/audits/{audit}/context', [AdLibraryAuditController::class, 'updateContext']);
+    Route::post('/ad-library/audits/{audit}/personas/generate', [AdLibraryAuditController::class, 'generatePersonas']);
+    Route::post('/ad-library/audits/{audit}/personas', [AdLibraryAuditController::class, 'storePersona']);
+    Route::put('/ad-library/audits/{audit}/personas/{persona}', [AdLibraryAuditController::class, 'updatePersona']);
+    Route::delete('/ad-library/audits/{audit}/personas/{persona}', [AdLibraryAuditController::class, 'destroyPersona']);
+    Route::put('/ad-library/audits/{audit}/personas-order', [AdLibraryAuditController::class, 'reorderPersonas']);
+    Route::post('/ad-library/audits/{audit}/personas/confirm', [AdLibraryAuditController::class, 'confirmPersonas']);
+    Route::post('/ad-library/audits/{audit}/analyze', [AdLibraryAuditController::class, 'analyze']);
+    Route::post('/ad-library/audits/{audit}/retry-failed', [AdLibraryAuditController::class, 'retryFailed']);
+    Route::get('/ad-library/audits/{audit}/creatives', [AdLibraryAuditController::class, 'creatives']);
+    Route::put('/ad-library/audits/{audit}/creatives/{creative}', [AdLibraryAuditController::class, 'updateCreative']);
+    Route::post('/ad-library/audits/{audit}/grid/confirm', [AdLibraryAuditController::class, 'confirmGrid']);
+    Route::post('/ad-library/audits/{audit}/insights', [AdLibraryAuditController::class, 'generateInsights']);
+    Route::get('/ad-library/audits/{audit}/export.csv', [AdLibraryAuditController::class, 'exportCsv']);
+    Route::get('/ad-library/audits/{audit}/export.json', [AdLibraryAuditController::class, 'exportJson']);
 
     // Reports
     Route::get('/reports', [ReportController::class, 'index']);

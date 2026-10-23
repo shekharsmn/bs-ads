@@ -3,6 +3,7 @@ import axios from 'axios'
 const client = axios.create({
   baseURL: '/',
   withCredentials: true,
+  timeout: 15_000,
   headers: { 'Accept': 'application/json', 'Content-Type': 'application/json' },
 })
 
@@ -23,7 +24,8 @@ client.interceptors.request.use(async (config) => {
 client.interceptors.response.use(
   res => res,
   err => {
-    if (err.response?.status === 401 && !window.location.pathname.startsWith('/login')) {
+    const isPublicShare = window.location.pathname.startsWith('/share/') || window.location.pathname.startsWith('/shared/')
+    if (err.response?.status === 401 && !isPublicShare && !window.location.pathname.startsWith('/login')) {
       window.location.href = '/login'
     }
     return Promise.reject(err)
@@ -46,6 +48,8 @@ export const api = {
   createConnection: (data) => client.post('/api/connections', data),
   discoverAccounts: (id) => client.post(`/api/connections/${id}/discover`),
   assignDiscoveredAccount: (id, data) => client.post(`/api/connections/${id}/accounts`, data),
+  assignDiscoveredAccounts: (id, accounts) => client.post(`/api/connections/${id}/accounts/bulk`, { accounts }),
+  googleConnectionUrl: (data) => `/api/connections/google/redirect?${new URLSearchParams(Object.fromEntries(Object.entries(data).filter(([, value]) => value !== '' && value != null)))}`,
   getMetricSummary: (params) => client.get('/api/metrics/summary', { params }),
   getMetricTrends: (params) => client.get('/api/metrics/trends', { params }),
   getCampaignMetrics: (params) => client.get('/api/metrics/campaigns', { params }),
@@ -79,6 +83,46 @@ export const api = {
 
   // AI logs
   getAiLogs: (params) => client.get('/api/ai-logs', { params }),
+
+  // Admin settings
+  getAiModels: () => client.get('/api/settings/ai-models'),
+  createAiModel: (data) => client.post('/api/settings/ai-models', data),
+  updateAiModel: (id, data) => client.put(`/api/settings/ai-models/${id}`, data),
+  deleteAiModel: (id) => client.delete(`/api/settings/ai-models/${id}`),
+
+  // Meta Ad Library research
+  getAdLibrarySearches: (params) => client.get('/api/ad-library/searches', { params }),
+  createAdLibrarySearch: (data) => client.post('/api/ad-library/searches', data),
+  updateAdLibrarySearch: (id, data) => client.put(`/api/ad-library/searches/${id}`, data),
+  deleteAdLibrarySearch: (id) => client.delete(`/api/ad-library/searches/${id}`),
+  runAdLibrarySearch: (id) => client.post(`/api/ad-library/searches/${id}/runs`),
+  getAdLibraryRuns: (params) => client.get('/api/ad-library/runs', { params }),
+  getAdLibraryRun: (id) => client.get(`/api/ad-library/runs/${id}`),
+  getAdLibraryRunJson: (id) => client.get(`/api/ad-library/runs/${id}/json`),
+  getAdLibraryResults: (id, params) => client.get(`/api/ad-library/runs/${id}/ads`, { params }),
+  deleteAdLibraryRun: (id) => client.delete(`/api/ad-library/runs/${id}`),
+  getAdLibraryAuditModels: (mediaDepth) => client.get('/api/ad-library/audit-models', { params: { media_depth: mediaDepth } }),
+  getAdLibraryAudits: (params) => client.get('/api/ad-library/audits', { params }),
+  createAdLibraryAudit: (data) => client.post('/api/ad-library/audits', data),
+  getAdLibraryAudit: (id) => client.get(`/api/ad-library/audits/${id}`),
+  updateAdLibraryAudit: (id, data) => client.put(`/api/ad-library/audits/${id}`, data),
+  deleteAdLibraryAudit: (id) => client.delete(`/api/ad-library/audits/${id}`),
+  collectAdLibraryAuditContext: (id) => client.post(`/api/ad-library/audits/${id}/context/collect`),
+  updateAdLibraryAuditContext: (id, data) => client.put(`/api/ad-library/audits/${id}/context`, data),
+  generateAdLibraryAuditPersonas: (id) => client.post(`/api/ad-library/audits/${id}/personas/generate`),
+  createAdLibraryAuditPersona: (id, data) => client.post(`/api/ad-library/audits/${id}/personas`, data),
+  updateAdLibraryAuditPersona: (auditId, personaId, data) => client.put(`/api/ad-library/audits/${auditId}/personas/${personaId}`, data),
+  deleteAdLibraryAuditPersona: (auditId, personaId) => client.delete(`/api/ad-library/audits/${auditId}/personas/${personaId}`),
+  reorderAdLibraryAuditPersonas: (id, personaIds) => client.put(`/api/ad-library/audits/${id}/personas-order`, { persona_ids: personaIds }),
+  confirmAdLibraryAuditPersonas: (id) => client.post(`/api/ad-library/audits/${id}/personas/confirm`),
+  analyzeAdLibraryAudit: (id) => client.post(`/api/ad-library/audits/${id}/analyze`),
+  retryFailedAdLibraryAuditCreatives: (id) => client.post(`/api/ad-library/audits/${id}/retry-failed`),
+  getAdLibraryAuditCreatives: (id, params) => client.get(`/api/ad-library/audits/${id}/creatives`, { params }),
+  updateAdLibraryAuditCreative: (auditId, creativeId, data) => client.put(`/api/ad-library/audits/${auditId}/creatives/${creativeId}`, data),
+  confirmAdLibraryAuditGrid: (id) => client.post(`/api/ad-library/audits/${id}/grid/confirm`),
+  generateAdLibraryAuditInsights: (id) => client.post(`/api/ad-library/audits/${id}/insights`),
+  getAdLibraryAuditCsvUrl: (id) => `/api/ad-library/audits/${id}/export.csv`,
+  getAdLibraryAuditJsonUrl: (id) => `/api/ad-library/audits/${id}/export.json`,
 
   // Reports
   getReports: () => client.get('/api/reports'),

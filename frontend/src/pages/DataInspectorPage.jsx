@@ -303,12 +303,22 @@ export default function DataInspectorPage() {
     enabled: form.platform === 'meta',
   })
 
-  const { data: googleAccounts = [] } = useQuery({
-    queryKey: ['google-accounts'],
-    queryFn: () => api.getGoogleAccounts().then(r => r.data),
+  const { data: googleConnections = [] } = useQuery({
+    queryKey: ['connections'],
+    queryFn: () => api.getConnections().then(r => r.data),
     enabled: form.platform === 'google',
   })
 
+  const googleAccounts = googleConnections
+    .filter(connection => connection.platform === 'google')
+    .flatMap(connection => (connection.ad_accounts || []).map(account => ({
+      id: account.id,
+      label: account.name,
+      customer_id: account.external_id,
+      client_name: account.client?.name,
+      connection_name: connection.name,
+      account_source: 'operational',
+    })))
   const accounts = form.platform === 'meta' ? metaAccounts : googleAccounts
 
   const mutation = useMutation({
@@ -324,6 +334,7 @@ export default function DataInspectorPage() {
     mutation.mutate({
       platform: form.platform,
       account_id: parseInt(form.account_id, 10),
+      account_source: form.platform === 'google' ? 'operational' : undefined,
       period: form.period,
     })
   }
@@ -403,13 +414,18 @@ export default function DataInspectorPage() {
                 fontFamily: 'inherit', outline: 'none',
               }}
             >
-              <option value="">Select account...</option>
+              <option value="">{form.platform === 'google' && accounts.length === 0 ? 'No assigned client accounts' : 'Select account...'}</option>
               {accounts.map(a => (
                 <option key={a.id} value={a.id}>
-                  {a.label}{form.platform === 'google' && a.customer_id ? ` · ${a.customer_id}` : ''}
+                  {a.label}{form.platform === 'google' && a.customer_id ? ` · ${a.customer_id}${a.client_name ? ` · ${a.client_name}` : ''}` : ''}
                 </option>
               ))}
             </select>
+            {form.platform === 'google' && accounts.length === 0 && (
+              <small style={{ display: 'block', marginTop: '6px', color: '#b45309', fontSize: '10px' }}>
+                Discover and assign a client account under Ad Platforms first. Manager accounts cannot be queried for metrics.
+              </small>
+            )}
           </div>
 
           <div style={{ flex: 1, minWidth: '160px' }}>

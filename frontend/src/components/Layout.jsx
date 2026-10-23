@@ -1,8 +1,8 @@
 import { NavLink, Outlet, useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import {
-  LayoutDashboard, Settings, PlayCircle, LogOut,
-  BarChart3, ChevronRight, User, Search, Cpu, Building2, BellRing, SlidersHorizontal, CalendarClock, Cable,
+  LayoutDashboard, PlayCircle, LogOut,
+  BarChart3, ChevronRight, User, Search, Cpu, Building2, BellRing, SlidersHorizontal, CalendarClock, Cable, LibraryBig, Settings,
 } from 'lucide-react'
 
 const navItems = [
@@ -10,16 +10,17 @@ const navItems = [
   { to: '/alerts', icon: BellRing, label: 'Alert Inbox' },
   { to: '/alert-rules', icon: SlidersHorizontal, label: 'Alert Policies' },
   { to: '/clients', icon: Building2, label: 'Clients' },
-  { to: '/connections', icon: Cable, label: 'Connections' },
-  { to: '/scheduled-reports', icon: CalendarClock, label: 'Scheduled Reports' },
+  { to: '/connections', icon: Cable, label: 'Ad Platforms' },
+  { to: '/scheduled-reports', icon: CalendarClock, label: 'Reports' },
   { to: '/reports/new', icon: PlayCircle, label: 'Run Audit' },
   { to: '/inspector', icon: Search, label: 'Data Inspector' },
   { to: '/ai-logs', icon: Cpu, label: 'AI Request Log' },
-  { to: '/accounts', icon: Settings, label: 'Meta Accounts' },
+  { to: '/ad-library', icon: LibraryBig, label: 'Ad Library', feature: 'ad_library' },
+  { to: '/settings/ai-models', icon: Settings, label: 'Settings', adminOnly: true },
 ]
 
 export default function Layout() {
-  const { user, logout } = useAuth()
+  const { user, features, logout } = useAuth()
   const navigate = useNavigate()
 
   const handleLogout = async () => {
@@ -83,7 +84,7 @@ export default function Layout() {
             padding: '0 8px', marginBottom: '8px', marginTop: 0,
           }}>Operations</p>
 
-          {navItems.map((item) => {
+          {navItems.filter(item => (!item.feature || features?.[item.feature]) && (!item.adminOnly || user?.role === 'admin')).map((item) => {
             const NavIcon = item.icon
             return <NavLink
               key={item.to}

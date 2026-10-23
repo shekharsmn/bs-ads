@@ -13,12 +13,16 @@ use Illuminate\Support\Str;
 class GenerateReportSnapshotJob implements ShouldQueue
 {
     use Queueable;
+
     public int $timeout = 120;
+
     public function __construct(public readonly int $reportRunId) {}
+
     public function handle(MetricsQueryService $metrics, GoogleChatNotifier $chat): void
     {
         $run = ReportRun::with('client')->findOrFail($this->reportRunId);
         try {
+            $run->update(['status' => 'running', 'error_message' => null]);
             $filters = ['client_id' => $run->client_id, 'client' => $run->client, 'start_date' => $run->period_start->toDateString(), 'end_date' => $run->period_end->toDateString()];
             $snapshot = [
                 'client' => $run->client->only(['name', 'slug', 'timezone', 'currency', 'objective', 'goals']),

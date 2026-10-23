@@ -15,6 +15,7 @@ class ReportScheduleController extends Controller
     public function index(Request $request)
     {
         $ids = ClientAccess::clientsFor($request->user())->pluck('id');
+
         return ['schedules' => ReportSchedule::whereIn('client_id', $ids)->with('client:id,name')->get(), 'runs' => ReportRun::whereIn('client_id', $ids)->with('client:id,name')->latest()->limit(100)->get()->map(fn ($r) => $this->runPayload($r))];
     }
 
@@ -22,6 +23,7 @@ class ReportScheduleController extends Controller
     {
         $data = $this->validateSchedule($request);
         ClientAccess::authorize($request->user(), Client::findOrFail($data['client_id']), true);
+
         return response()->json(ReportSchedule::updateOrCreate(['client_id' => $data['client_id'], 'frequency' => $data['frequency']], $data), 201);
     }
 
@@ -29,15 +31,35 @@ class ReportScheduleController extends Controller
     {
         ClientAccess::authorize($request->user(), Client::findOrFail($reportSchedule->client_id), true);
         $reportSchedule->update($this->validateSchedule($request, true));
+
         return $reportSchedule->fresh();
     }
 
     public function generate(Request $request, Client $client)
     {
         ClientAccess::authorize($request->user(), $client, true);
-        $data = $request->validate(['frequency' => 'required|in:weekly,monthly', 'period_start' => 'required|date', 'period_end' => 'required|date|after_or_equal:period_start']);
+        $data = $request->validate([
+            'frequency' => 'nullable|in:instant,weekly,monthly',
+            'preset' => 'nullable|in:last_7d,last_30d,month_to_date',
+            'period_start' => 'required_without:preset|date',
+            'period_end' => 'required_without:preset|date|after_or_equal:period_start',
+        ]);
+
+        if ($data['preset'] ?? null) {
+            $today = now($client->timezone)->startOfDay();
+            $data['period_start'] = match ($data['preset']) {
+                'last_7d' => $today->copy()->subDays(6)->toDateString(),
+                'month_to_date' => $today->copy()->startOfMonth()->toDateString(),
+                default => $today->copy()->subDays(29)->toDateString(),
+            };
+            $data['period_end'] = $today->toDateString();
+        }
+
+        unset($data['preset']);
+        $data['frequency'] = $data['frequency'] ?? 'instant';
         $run = ReportRun::create($data + ['client_id' => $client->id, 'status' => 'pending']);
         GenerateReportSnapshotJob::dispatch($run->id);
+
         return response()->json($this->runPayload($run), 202);
     }
 

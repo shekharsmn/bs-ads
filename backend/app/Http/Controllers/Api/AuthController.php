@@ -60,7 +60,12 @@ class AuthController extends Controller
         return response()->json(['user' => $user->load('clients:id,name,slug'), 'permissions' => [
             'manage_clients' => $user->isAdmin(),
             'manage_connections' => $user->isAdmin(),
+            'manage_ai_models' => $user->isAdmin(),
             'manage_alerts' => $user->canManage(),
+            'manage_ad_library' => $user->canManage(),
+        ], 'features' => [
+            'ad_library' => (bool) config('services.ad_library.enabled'),
+            'ad_library_audits' => (bool) config('services.ad_library.enabled') && (bool) config('ad_library_audit.enabled'),
         ]]);
     }
 }

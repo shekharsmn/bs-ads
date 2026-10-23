@@ -43,7 +43,7 @@ class RunGoogleAuditJob implements ShouldQueue
 
             $client = GoogleAdsClientFactory::fromRefreshToken(
                 $account?->refresh_token ?? $operational->connection->credentials['refresh_token'],
-                $account?->login_customer_id ?? ($operational->connection->credentials['login_customer_id'] ?? $operational->connection->manager_external_id)
+                $account?->login_customer_id ?? ($operational->manager_external_id ?? $operational->connection->credentials['login_customer_id'] ?? $operational->connection->manager_external_id)
             );
             $period = $report->period ?? 'last_30d';
             $literal = GoogleFetchService::dateLiteralFromPeriod($period);

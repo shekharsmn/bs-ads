@@ -6,6 +6,9 @@ backend/.env
 frontend/.env
 backend/vendor/
 frontend/node_modules/
+**/__pycache__/
+*.py[cod]
+.pytest_cache/
 backend/storage/logs/
 backend/storage/framework/cache/
 backend/storage/framework/sessions/

@@ -4,9 +4,6 @@ import { AuthProvider, useAuth } from './context/AuthContext'
 import Layout from './components/Layout'
 import LoginPage from './pages/LoginPage'
 import Dashboard from './pages/Dashboard'
-import AccountsPage from './pages/AccountsPage'
-import AddAccountPage from './pages/AddAccountPage'
-import EditAccountPage from './pages/EditAccountPage'
 import RunAuditPage from './pages/RunAuditPage'
 import ReportPage from './pages/ReportPage'
 import PublicReportPage from './pages/PublicReportPage'
@@ -20,6 +17,9 @@ import AlertRulesPage from './pages/AlertRulesPage'
 import ScheduledReportsPage from './pages/ScheduledReportsPage'
 import PublicPerformanceReportPage from './pages/PublicPerformanceReportPage'
 import ConnectionsPage from './pages/ConnectionsPage'
+import AdLibraryPage from './pages/AdLibraryPage'
+import AdLibraryAuditPage from './pages/AdLibraryAuditPage'
+import AiModelSettingsPage from './pages/AiModelSettingsPage'
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -51,6 +51,11 @@ function GuestRoute({ children }) {
   return children
 }
 
+function AdminRoute({ children }) {
+  const { user } = useAuth()
+  return user?.role === 'admin' ? children : <Navigate to="/" replace />
+}
+
 export default function App() {
   return (
     <QueryClientProvider client={queryClient}>
@@ -71,14 +76,18 @@ export default function App() {
               <Route path="alerts/:id" element={<AlertInboxPage />} />
               <Route path="alert-rules" element={<AlertRulesPage />} />
               <Route path="scheduled-reports" element={<ScheduledReportsPage />} />
-              <Route path="accounts" element={<AccountsPage />} />
-              <Route path="accounts/new" element={<AddAccountPage />} />
-              <Route path="accounts/:id/edit" element={<EditAccountPage />} />
+              <Route path="accounts" element={<Navigate to="/connections" replace />} />
+              <Route path="accounts/new" element={<Navigate to="/connections" replace />} />
+              <Route path="accounts/:id/edit" element={<Navigate to="/connections" replace />} />
               <Route path="reports/new" element={<RunAuditPage />} />
               <Route path="reports/:id" element={<ReportPage />} />
               <Route path="reports/:id/print" element={<PrintReportPage />} />
               <Route path="inspector" element={<DataInspectorPage />} />
               <Route path="ai-logs" element={<AiLogsPage />} />
+              <Route path="settings/ai-models" element={<AdminRoute><AiModelSettingsPage /></AdminRoute>} />
+              <Route path="ad-library" element={<AdLibraryPage />} />
+              <Route path="ad-library/audits" element={<AdLibraryAuditPage />} />
+              <Route path="ad-library/audits/:id" element={<AdLibraryAuditPage />} />
               <Route path="accounts/google/callback" element={<GoogleCallbackPage />} />
             </Route>
             <Route path="*" element={<Navigate to="/" replace />} />

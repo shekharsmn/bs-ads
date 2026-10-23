@@ -39,12 +39,24 @@ return [
         'api_key' => env('GEMINI_API_KEY'),
     ],
 
+    'ad_library' => [
+        'enabled' => env('AD_LIBRARY_ENABLED', false),
+        'url' => env('AD_LIBRARY_SCRAPER_URL', 'http://127.0.0.1:8090'),
+        'token' => env('AD_LIBRARY_SCRAPER_TOKEN'),
+        'connect_timeout' => (int) env('AD_LIBRARY_CONNECT_TIMEOUT', 5),
+        'read_timeout' => (int) env('AD_LIBRARY_READ_TIMEOUT', 780),
+        'max_response_bytes' => (int) env('AD_LIBRARY_MAX_RESPONSE_BYTES', 26214400),
+    ],
+
     'google_workspace' => [
         'client_id' => env('GOOGLE_WORKSPACE_CLIENT_ID', env('GOOGLE_OAUTH_CLIENT_ID')),
         'client_secret' => env('GOOGLE_WORKSPACE_CLIENT_SECRET', env('GOOGLE_OAUTH_CLIENT_SECRET')),
         'redirect_uri' => env('GOOGLE_WORKSPACE_REDIRECT_URI', 'http://localhost:5173/api/auth/google/callback'),
         'frontend_url' => env('FRONTEND_URL', 'http://localhost:5173'),
-        'allowed_domain' => env('GOOGLE_WORKSPACE_DOMAIN', 'brandshark.com'),
+        'allowed_domains' => array_values(array_filter(array_map(
+            static fn (string $domain): string => strtolower(trim($domain)),
+            explode(',', env('GOOGLE_WORKSPACE_DOMAINS', env('GOOGLE_WORKSPACE_DOMAIN', 'brandshark.com')))
+        ))),
     ],
 
 ];

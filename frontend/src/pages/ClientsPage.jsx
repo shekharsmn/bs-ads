@@ -1,26 +1,107 @@
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Building2, Plus, Send } from 'lucide-react'
+import { Building2, Pencil, Plus, Send, X } from 'lucide-react'
 import { api } from '../api/client'
 import { useAuth } from '../context/AuthContext'
 
+const emptyForm = {
+  name: '',
+  timezone: 'Asia/Kolkata',
+  currency: 'INR',
+  objective: 'both',
+  chat_visibility: 'internal',
+  google_chat_webhook: '',
+  remove_google_chat_webhook: false,
+  active: true,
+}
+
 export default function ClientsPage() {
-  const { user } = useAuth(); const qc = useQueryClient(); const [open, setOpen] = useState(false)
-  const [form, setForm] = useState({ name: '', timezone: 'Asia/Kolkata', currency: 'INR', objective: 'both', chat_visibility: 'internal', google_chat_webhook: '' })
+  const { user } = useAuth()
+  const qc = useQueryClient()
+  const [editingId, setEditingId] = useState(null)
+  const [form, setForm] = useState(emptyForm)
   const clients = useQuery({ queryKey: ['clients'], queryFn: () => api.getClients().then(r => r.data) })
-  const create = useMutation({ mutationFn: () => api.createClient(form), onSuccess: () => { qc.invalidateQueries({ queryKey: ['clients'] }); setOpen(false) } })
+
+  const closeForm = () => {
+    setEditingId(null)
+    setForm(emptyForm)
+  }
+
+  const save = useMutation({
+    mutationFn: () => {
+      const { remove_google_chat_webhook: removeWebhook, ...values } = form
+      const payload = { ...values }
+
+      if (editingId && !payload.google_chat_webhook) delete payload.google_chat_webhook
+      if (editingId && removeWebhook) payload.google_chat_webhook = null
+
+      return editingId === 'new' ? api.createClient(payload) : api.updateClient(editingId, payload)
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['clients'] })
+      closeForm()
+    },
+  })
+
+  const openCreate = () => {
+    setEditingId('new')
+    setForm(emptyForm)
+  }
+
+  const openEdit = client => {
+    setEditingId(client.id)
+    setForm({
+      name: client.name,
+      timezone: client.timezone,
+      currency: client.currency,
+      objective: client.objective,
+      chat_visibility: client.chat_visibility,
+      google_chat_webhook: '',
+      remove_google_chat_webhook: false,
+      active: client.active,
+    })
+  }
+
+  const isCreating = editingId === 'new'
+  const canManage = ['admin', 'marketer'].includes(user?.role)
+
   return <Page title="Clients" subtitle="Reporting boundaries, goals, access and Google Chat delivery.">
-    <div className="ops-toolbar">{user?.role === 'admin' && <button className="ops-primary" onClick={() => setOpen(v => !v)}><Plus size={15}/> New client</button>}</div>
-    {open && <form className="ops-form" onSubmit={e => { e.preventDefault(); create.mutate() }}>
-      <Field label="Client name"><input required value={form.name} onChange={e => setForm({...form,name:e.target.value})}/></Field>
-      <Field label="Timezone"><input required value={form.timezone} onChange={e => setForm({...form,timezone:e.target.value})}/></Field>
-      <Field label="Currency"><input required maxLength={3} value={form.currency} onChange={e => setForm({...form,currency:e.target.value.toUpperCase()})}/></Field>
-      <Field label="Objective"><select value={form.objective} onChange={e => setForm({...form,objective:e.target.value})}><option value="lead_gen">Lead generation</option><option value="ecommerce">Ecommerce</option><option value="both">Both</option></select></Field>
-      <Field label="Chat visibility"><select value={form.chat_visibility} onChange={e => setForm({...form,chat_visibility:e.target.value})}><option value="internal">Internal</option><option value="client">Client visible</option></select></Field>
-      <Field label="Google Chat webhook"><input type="url" value={form.google_chat_webhook} onChange={e => setForm({...form,google_chat_webhook:e.target.value})} placeholder="https://chat.googleapis.com/..."/></Field>
-      <button className="ops-primary" disabled={create.isPending}>Create client</button>
+    <div className="ops-toolbar">
+      {user?.role === 'admin' && !editingId && <button className="ops-primary" onClick={openCreate}><Plus size={15}/> New client</button>}
+    </div>
+
+    {editingId && <form className="ops-form" onSubmit={event => { event.preventDefault(); save.mutate() }}>
+      <Field label="Client name"><input required value={form.name} onChange={event => setForm({ ...form, name: event.target.value })}/></Field>
+      <Field label="Timezone"><input required value={form.timezone} onChange={event => setForm({ ...form, timezone: event.target.value })}/></Field>
+      <Field label="Currency"><input required maxLength={3} value={form.currency} onChange={event => setForm({ ...form, currency: event.target.value.toUpperCase() })}/></Field>
+      <Field label="Objective"><select value={form.objective} onChange={event => setForm({ ...form, objective: event.target.value })}><option value="lead_gen">Lead generation</option><option value="ecommerce">Ecommerce</option><option value="both">Both</option></select></Field>
+      <Field label="Chat visibility"><select value={form.chat_visibility} onChange={event => setForm({ ...form, chat_visibility: event.target.value })}><option value="internal">Internal</option><option value="client">Client visible</option></select></Field>
+      <Field label="Google Chat webhook">
+        <input
+          type="url"
+          value={form.google_chat_webhook}
+          disabled={form.remove_google_chat_webhook}
+          onChange={event => setForm({ ...form, google_chat_webhook: event.target.value })}
+          placeholder={isCreating ? 'https://chat.googleapis.com/...' : 'Leave blank to keep current webhook'}
+        />
+      </Field>
+      {!isCreating && <label className="ops-check"><input type="checkbox" checked={form.remove_google_chat_webhook} onChange={event => setForm({ ...form, remove_google_chat_webhook: event.target.checked, google_chat_webhook: '' })}/><span>Remove saved webhook</span></label>}
+      {!isCreating && <label className="ops-check"><input type="checkbox" checked={form.active} onChange={event => setForm({ ...form, active: event.target.checked })}/><span>Client is active</span></label>}
+      <div className="ops-form-actions">
+        <button type="button" onClick={closeForm}><X size={14}/> Cancel</button>
+        <button className="ops-primary" disabled={save.isPending}>{save.isPending ? 'Saving…' : isCreating ? 'Create client' : 'Save changes'}</button>
+      </div>
+      {save.isError && <p className="ops-form-error">{save.error?.response?.data?.message || 'Could not save the client.'}</p>}
     </form>}
-    <div className="ops-list">{(clients.data || []).map(client => <div className="ops-list-row" key={client.id}><Building2 size={17}/><div><strong>{client.name}</strong><small>{client.timezone} · {client.currency} · {client.objective.replace('_',' ')}</small></div><span>{client.ad_accounts_count} accounts</span><span className={client.incidents_count ? 'ops-danger' : 'ops-ok'}>{client.incidents_count} open alerts</span>{client.google_chat_webhook_configured && <button title="Test Google Chat" onClick={() => api.testClientChat(client.id)}><Send size={14}/></button>}</div>)}</div>
+
+    <div className="ops-list">{(clients.data || []).map(client => <div className="ops-list-row" key={client.id}>
+      <Building2 size={17}/>
+      <div><strong>{client.name}</strong><small>{client.timezone} · {client.currency} · {client.objective.replace('_', ' ')} · {client.active ? 'active' : 'paused'}</small></div>
+      <span>{client.ad_accounts_count} accounts</span>
+      <span className={client.incidents_count ? 'ops-danger' : 'ops-ok'}>{client.incidents_count} open alerts</span>
+      {client.google_chat_webhook_configured && <button title="Test Google Chat" onClick={() => api.testClientChat(client.id)}><Send size={14}/></button>}
+      {canManage && <button title={`Edit ${client.name}`} onClick={() => openEdit(client)}><Pencil size={14}/></button>}
+    </div>)}</div>
   </Page>
 }
 

@@ -52,6 +52,70 @@ The first verified user from the configured Workspace domain becomes Admin. Late
 - Scheduled report dispatcher: `php artisan reports:dispatch-due`
 - Inspect registered schedules: `php artisan schedule:list`
 
+## Meta Ad Library research
+
+The optional Ad Library feature keeps authorization, saved searches, run history,
+and results in Laravel while an isolated Python/Playwright container performs the
+public Ad Library read. It is disabled by default.
+
+1. Set a strong shared `AD_LIBRARY_SCRAPER_TOKEN` in the shell used by Docker and
+   in `backend/.env`.
+2. Start the private scraper service:
+
+   ```bash
+   docker compose -f compose.ad-library.yml up --build -d
+   curl http://127.0.0.1:8090/health/ready
+   ```
+
+3. Run migrations, set `AD_LIBRARY_ENABLED=true`, and run a dedicated worker:
+
+   ```bash
+   cd backend
+   php artisan migrate
+   php artisan queue:work --queue=ad-library --timeout=900 --tries=2
+   ```
+
+The service permits one scrape at a time. Live scraping is not exercised in CI;
+complete a reviewed canary and compliance review before enabling production use.
+Upstream provenance and the update procedure are documented in
+`services/meta-ad-library-scraper/UPSTREAM.md`.
+
+### Stepwise content audits
+
+The optional content-audit workflow snapshots up to 50 grouped creatives from a
+completed Ad Library run. Enable it only after the base Ad Library feature is
+configured:
+
+Ad Library research and content audits are company-scoped, not client-scoped.
+Each saved search identifies the company or brand and its relationship to the
+business (client, competitor, lead, partner, or other), so research does not
+require a client record or client assignment.
+
+```dotenv
+AD_LIBRARY_AUDITS_ENABLED=true
+GEMINI_API_KEY=...
+# OPENAI_API_KEY=...
+# ANTHROPIC_API_KEY=...
+```
+
+Admins manage enabled models, capabilities, pricing, and the default selection in
+**AI Model Settings**. Provider API keys remain in the backend environment. Models
+are filtered by media capability; full-media audits require audio support.
+Run the analysis queue independently so long AI work cannot block searches:
+
+```bash
+php artisan queue:work --queue=ad-library-analysis --timeout=900 --tries=3
+```
+
+Install `ffmpeg` on the analysis-worker host so visual audits can extract bounded
+video-frame samples. Missing or unavailable media falls back to text and metadata
+analysis and does not alter the stored source URLs.
+
+The workflow crawls the homepage plus at most five relevant public, same-origin
+HTML pages without running JavaScript, requires review of context and personas,
+preserves individual row failures, and generates insights only after the creative grid is confirmed.
+Treat its output as content analysis rather than evidence of ad performance.
+
 Collection refreshes today plus the preceding 14 local account days. Deployments must keep both the queue worker and scheduler running. Google Chat webhooks are configured per client; client-visible spaces receive sanitized wording without internal notes.
 
 ## Verification

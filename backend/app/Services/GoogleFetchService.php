@@ -97,16 +97,16 @@ class GoogleFetchService
 
         $in = $this->forInspector;
         if ($in) {
-            $capCampaignDaily = ' LIMIT 12000';
-            $capKeywords = ' LIMIT 6000';
+            $capCampaignDaily = ' LIMIT 4000';
+            $capKeywords = ' LIMIT 3000';
             $capRsa = ' LIMIT 400';
             $capSearchTerms = 600;
-            $capCampaignCriterion = ' LIMIT 4000';
-            $capAssetGroupAssets = ' LIMIT 2500';
-            $capCampaignSharedSets = ' LIMIT 3000';
-            $capCampaignAssets = '';
-            $capAssetGroups = '';
-            $capSharedSets = '';
+            $capCampaignCriterion = ' LIMIT 2000';
+            $capAssetGroupAssets = ' LIMIT 1500';
+            $capCampaignSharedSets = ' LIMIT 1500';
+            $capCampaignAssets = ' LIMIT 2000';
+            $capAssetGroups = ' LIMIT 500';
+            $capSharedSets = ' LIMIT 500';
             $capConversionActions = ' LIMIT 2000';
             $dailySampleCap = 200;
         } else {
@@ -580,34 +580,41 @@ class GoogleFetchService
         $svc = $this->client->getGoogleAdsServiceClient();
         $request = SearchGoogleAdsStreamRequest::build($this->customerId, $query);
         $out = [];
-        foreach ($svc->searchStream($request)->readAll() as $chunk) {
-            $queue = [$chunk];
-            while ($queue !== []) {
-                $node = array_shift($queue);
-                if (! is_object($node)) {
-                    continue;
-                }
-                // Batched stream responses must be expanded first (never pass these to row decoding).
-                if ($this->isSearchGoogleAdsStreamResponse($node)) {
-                    foreach ($node->getResults() as $child) {
-                        $queue[] = $child;
+        preg_match('/\bFROM\s+([a-z_]+)/i', $query, $resourceMatch);
+        $resource = $resourceMatch[1] ?? 'unknown resource';
+
+        try {
+            foreach ($svc->searchStream($request)->readAll() as $chunk) {
+                $queue = [$chunk];
+                while ($queue !== []) {
+                    $node = array_shift($queue);
+                    if (! is_object($node)) {
+                        continue;
+                    }
+                    // Batched stream responses must be expanded first (never pass these to row decoding).
+                    if ($this->isSearchGoogleAdsStreamResponse($node)) {
+                        foreach ($node->getResults() as $child) {
+                            $queue[] = $child;
+                        }
+
+                        continue;
+                    }
+                    if ($this->isGoogleAdsRowObject($node)) {
+                        $out[] = $this->googleAdsRowToDecodedArray($node);
+                        if ($maxRows !== null && count($out) >= $maxRows) {
+                            break 2;
+                        }
+
+                        continue;
                     }
 
-                    continue;
+                    throw new \RuntimeException(
+                        'Unexpected Google Ads searchStream node: '.(is_object($node) ? $node::class : gettype($node))
+                    );
                 }
-                if ($this->isGoogleAdsRowObject($node)) {
-                    $out[] = $this->googleAdsRowToDecodedArray($node);
-                    if ($maxRows !== null && count($out) >= $maxRows) {
-                        break 2;
-                    }
-
-                    continue;
-                }
-
-                throw new \RuntimeException(
-                    'Unexpected Google Ads searchStream node: '.(is_object($node) ? $node::class : gettype($node))
-                );
             }
+        } catch (\Throwable $e) {
+            throw new \RuntimeException("Google Ads {$resource} query failed: ".$e->getMessage(), previous: $e);
         }
 
         return $out;
