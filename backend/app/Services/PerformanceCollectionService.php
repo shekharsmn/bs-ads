@@ -18,39 +18,57 @@ class PerformanceCollectionService
         $account->loadMissing(['connection', 'client']);
         $rows = $account->platform === Platform::Google ? $this->google($account) : $this->meta($account);
         DB::transaction(function () use ($account, $rows) {
+            $now = now();
+            $campaignRows = collect($rows)->map(fn ($row) => [
+                'ad_account_id' => $account->id, 'external_id' => (string) $row['campaign_external_id'],
+                'name' => $row['campaign_name'], 'status' => $row['campaign_status'], 'type' => $row['campaign_type'],
+                'daily_budget' => $row['daily_budget'], 'created_at' => $now, 'updated_at' => $now,
+            ])->keyBy('external_id')->values();
+            foreach ($campaignRows->chunk(500) as $chunk) {
+                Campaign::upsert($chunk->all(), ['ad_account_id', 'external_id'], ['name', 'status', 'type', 'daily_budget', 'updated_at']);
+            }
+            $campaignIds = Campaign::query()->where('ad_account_id', $account->id)
+                ->whereIn('external_id', $campaignRows->pluck('external_id'))->pluck('id', 'external_id');
+
             $accountByDate = [];
+            $metricRows = [];
             foreach ($rows as $row) {
-                $campaign = Campaign::updateOrCreate(
-                    ['ad_account_id' => $account->id, 'external_id' => (string) $row['campaign_external_id']],
-                    ['name' => $row['campaign_name'], 'status' => $row['campaign_status'], 'type' => $row['campaign_type'], 'daily_budget' => $row['daily_budget']]
-                );
+                $campaignId = $campaignIds[(string) $row['campaign_external_id']];
                 $payload = array_merge($row['metrics'], [
                     'ad_account_id' => $account->id,
-                    'campaign_id' => $campaign->id,
+                    'campaign_id' => $campaignId,
                     'scope' => 'campaign',
-                    'scope_key' => 'campaign:'.$campaign->id,
+                    'scope_key' => 'campaign:'.$campaignId,
                     'metric_date' => $row['date'],
                     'currency' => $account->currency,
                     'mapping_version' => $row['mapping_version'],
-                    'collected_at' => now(),
+                    'collected_at' => $now,
+                    'created_at' => $now,
+                    'updated_at' => $now,
                 ]);
-                MetricSnapshot::updateOrCreate(
-                    ['ad_account_id' => $account->id, 'scope_key' => $payload['scope_key'], 'metric_date' => $row['date']],
-                    $payload
-                );
-                foreach ($row['metrics'] as $key => $value) $accountByDate[$row['date']][$key] = ($accountByDate[$row['date']][$key] ?? 0) + $value;
+                $metricRows[] = $payload;
+                foreach ($row['metrics'] as $key => $value) {
+                    $accountByDate[$row['date']][$key] = ($accountByDate[$row['date']][$key] ?? 0) + $value;
+                }
                 $accountByDate[$row['date']]['mapping_version'] = max($accountByDate[$row['date']]['mapping_version'] ?? 1, $row['mapping_version']);
             }
             foreach ($accountByDate as $date => $metrics) {
                 $mappingVersion = $metrics['mapping_version'];
                 unset($metrics['mapping_version']);
-                MetricSnapshot::updateOrCreate(
-                    ['ad_account_id' => $account->id, 'scope_key' => 'account:'.$account->id, 'metric_date' => $date],
-                    array_merge($metrics, ['campaign_id' => null, 'scope' => 'account', 'currency' => $account->currency, 'mapping_version' => $mappingVersion, 'collected_at' => now()])
-                );
+                $metricRows[] = array_merge($metrics, [
+                    'ad_account_id' => $account->id, 'campaign_id' => null, 'scope' => 'account',
+                    'scope_key' => 'account:'.$account->id, 'metric_date' => $date, 'currency' => $account->currency,
+                    'mapping_version' => $mappingVersion, 'collected_at' => $now, 'created_at' => $now, 'updated_at' => $now,
+                ]);
             }
-            $account->update(['last_collected_at' => now(), 'last_error' => null]);
-            $account->connection->update(['status' => 'healthy', 'last_synced_at' => now(), 'last_healthy_at' => now(), 'last_error' => null]);
+            foreach (array_chunk($metricRows, 500) as $chunk) {
+                MetricSnapshot::upsert($chunk, ['ad_account_id', 'scope_key', 'metric_date'], [
+                    'campaign_id', 'scope', 'currency', 'spend', 'impressions', 'reach', 'clicks', 'conversions',
+                    'leads', 'purchases', 'conversion_value', 'mapping_version', 'collected_at', 'updated_at',
+                ]);
+            }
+            $account->update(['last_collected_at' => $now, 'last_error' => null]);
+            $account->connection->update(['status' => 'healthy', 'last_synced_at' => $now, 'last_healthy_at' => $now, 'last_error' => null]);
         });
     }
 
@@ -64,6 +82,7 @@ class PerformanceCollectionService
         $service = $client->getGoogleAdsServiceClient();
         $stream = $service->searchStream(SearchGoogleAdsStreamRequest::build($account->external_id, $query));
         $mappings = ConversionMapping::query()->where('client_id', $account->client_id)->where('platform', 'google')->where('active', true)->get()->keyBy('external_action');
+        $version = $this->mappingVersion($account);
         $mapped = [];
         if ($mappings->isNotEmpty()) {
             $conversionQuery = "SELECT campaign.id, segments.date, segments.conversion_action_name, metrics.conversions, metrics.conversions_value FROM campaign WHERE segments.date BETWEEN '$start' AND '$end' AND metrics.conversions > 0";
@@ -73,13 +92,19 @@ class PerformanceCollectionService
                     $metricSlice = json_decode($conversionRow->getMetrics()->serializeToJsonString(), true) ?: [];
                     $segmentSlice = json_decode($conversionRow->getSegments()->serializeToJsonString(), true) ?: [];
                     $mapping = $mappings->get($segmentSlice['conversionActionName'] ?? '');
-                    if (! $mapping) continue;
+                    if (! $mapping) {
+                        continue;
+                    }
                     $key = ($campaignSlice['id'] ?? '').'|'.($segmentSlice['date'] ?? '');
                     $mapped[$key] ??= ['conversions' => 0.0, 'leads' => 0.0, 'purchases' => 0.0, 'conversion_value' => 0.0];
                     $quantity = ((float) ($metricSlice['conversions'] ?? 0)) * (float) $mapping->weight;
                     $target = $mapping->canonical_metric->value;
-                    if ($target !== 'conversion_value') $mapped[$key][$target] += $quantity;
-                    if (in_array($target, ['conversions', 'leads', 'purchases'], true)) $mapped[$key]['conversions'] += $target === 'conversions' ? 0 : $quantity;
+                    if ($target !== 'conversion_value') {
+                        $mapped[$key][$target] += $quantity;
+                    }
+                    if (in_array($target, ['conversions', 'leads', 'purchases'], true)) {
+                        $mapped[$key]['conversions'] += $target === 'conversions' ? 0 : $quantity;
+                    }
                     $mapped[$key]['conversion_value'] += ((float) ($metricSlice['conversionsValue'] ?? 0)) * (float) $mapping->weight;
                 }
             }
@@ -102,7 +127,7 @@ class PerformanceCollectionService
                     'campaign_type' => (string) ($campaign['advertisingChannelType'] ?? null),
                     'daily_budget' => isset($budget['amountMicros']) ? ((float) $budget['amountMicros']) / 1_000_000 : null,
                     'date' => $segments['date'],
-                    'mapping_version' => $this->mappingVersion($account),
+                    'mapping_version' => $version,
                     'metrics' => [
                         'spend' => ((float) ($metrics['costMicros'] ?? 0)) / 1_000_000,
                         'impressions' => (int) ($metrics['impressions'] ?? 0), 'reach' => 0,
@@ -112,6 +137,7 @@ class PerformanceCollectionService
                 ];
             }
         }
+
         return $rows;
     }
 
@@ -136,6 +162,7 @@ class PerformanceCollectionService
         }
         $mappings = ConversionMapping::query()->where('client_id', $account->client_id)->where('platform', 'meta')->where('active', true)->get()->keyBy('external_action');
         $version = $this->mappingVersion($account);
+
         return array_map(function ($row) use ($mappings, $version) {
             $canonical = ['conversions' => 0.0, 'leads' => 0.0, 'purchases' => 0.0, 'conversion_value' => 0.0];
             foreach ($row['actions'] ?? [] as $action) {
@@ -143,21 +170,30 @@ class PerformanceCollectionService
                 if ($mapping && $mapping->canonical_metric->value !== 'conversion_value') {
                     $quantity = ((float) ($action['value'] ?? 0)) * (float) $mapping->weight;
                     $canonical[$mapping->canonical_metric->value] += $quantity;
-                    if (in_array($mapping->canonical_metric->value, ['leads', 'purchases'], true)) $canonical['conversions'] += $quantity;
+                    if (in_array($mapping->canonical_metric->value, ['leads', 'purchases'], true)) {
+                        $canonical['conversions'] += $quantity;
+                    }
                 }
             }
             foreach ($row['action_values'] ?? [] as $action) {
                 $mapping = $mappings->get($action['action_type'] ?? '');
-                if ($mapping) $canonical['conversion_value'] += ((float) ($action['value'] ?? 0)) * (float) $mapping->weight;
+                if ($mapping) {
+                    $canonical['conversion_value'] += ((float) ($action['value'] ?? 0)) * (float) $mapping->weight;
+                }
             }
             if ($mappings->isEmpty()) {
                 foreach ($row['actions'] ?? [] as $action) {
                     $type = (string) ($action['action_type'] ?? '');
-                    if (str_contains($type, 'lead')) $canonical['leads'] += (float) ($action['value'] ?? 0);
-                    if (str_contains($type, 'purchase')) $canonical['purchases'] += (float) ($action['value'] ?? 0);
+                    if (str_contains($type, 'lead')) {
+                        $canonical['leads'] += (float) ($action['value'] ?? 0);
+                    }
+                    if (str_contains($type, 'purchase')) {
+                        $canonical['purchases'] += (float) ($action['value'] ?? 0);
+                    }
                 }
                 $canonical['conversions'] = $canonical['leads'] + $canonical['purchases'];
             }
+
             return [
                 'campaign_external_id' => (string) $row['campaign_id'], 'campaign_name' => $row['campaign_name'] ?? 'Untitled campaign',
                 'campaign_status' => 'ACTIVE', 'campaign_type' => $row['objective'] ?? null, 'daily_budget' => null,

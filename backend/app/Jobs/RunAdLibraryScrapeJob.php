@@ -5,10 +5,13 @@ namespace App\Jobs;
 use App\Models\AdLibraryRun;
 use App\Services\AdLibrary\AdLibraryProvider;
 use App\Services\AdLibrary\TransientAdLibraryException;
+use App\Services\WorkflowActivityService;
+use App\Services\WorkflowCoordinator;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Str;
 use Throwable;
 
 class RunAdLibraryScrapeJob implements ShouldQueue
@@ -23,11 +26,16 @@ class RunAdLibraryScrapeJob implements ShouldQueue
 
     public function __construct(public readonly int $runId)
     {
-        $this->onQueue('ad-library');
+        $this->onQueue(config('workloads.queues.ad_library', 'ad-library'));
+        $this->timeout = config('workloads.policies.ad_library.timeout', 900);
+        $this->tries = config('workloads.policies.ad_library.tries', 2);
+        $this->backoff = config('workloads.policies.ad_library.backoff', 60);
     }
 
-    public function handle(AdLibraryProvider $provider): void
+    public function handle(AdLibraryProvider $provider, ?WorkflowActivityService $activities = null, ?WorkflowCoordinator $workflows = null): void
     {
+        $activities ??= app(WorkflowActivityService::class);
+        $workflows ??= app(WorkflowCoordinator::class);
         $run = AdLibraryRun::with('search')->findOrFail($this->runId);
         if (in_array($run->status, ['complete', 'partial', 'empty', 'blocked'], true)) {
             return;
@@ -35,6 +43,7 @@ class RunAdLibraryScrapeJob implements ShouldQueue
 
         $started = microtime(true);
         $run->update(['status' => 'running', 'started_at' => now(), 'completed_at' => null, 'error_message' => null]);
+        $attempt = $workflows->start($activities->sync($run), 'scraping', 'ad-library-run:'.$run->id.':'.($this->job?->uuid() ?? Str::uuid()));
 
         try {
             $response = $provider->scrape($run);
@@ -65,14 +74,17 @@ class RunAdLibraryScrapeJob implements ShouldQueue
                     'completed_at' => now(),
                 ]);
             });
+            $workflows->complete($attempt, $status);
 
             Log::info('Ad Library scrape finished', ['run_id' => $run->id, 'company_name' => $run->search?->company_name, 'status' => $status, 'result_count' => $run->fresh()->result_count, 'stop_reason' => $response['stop_reason'] ?? null, 'duration_ms' => (int) ((microtime(true) - $started) * 1000)]);
         } catch (TransientAdLibraryException $e) {
             Log::warning('Ad Library scrape will retry', ['run_id' => $run->id, 'company_name' => $run->search?->company_name, 'duration_ms' => (int) ((microtime(true) - $started) * 1000)]);
+            $workflows->fail($attempt, $e, 'scrape_retry', projectToActivity: false);
             throw $e;
         } catch (Throwable $e) {
             $run->update(['status' => 'failed', 'error_message' => $this->safeError($e), 'completed_at' => now()]);
             Log::error('Ad Library scrape failed', ['run_id' => $run->id, 'company_name' => $run->search?->company_name, 'duration_ms' => (int) ((microtime(true) - $started) * 1000)]);
+            $workflows->fail($attempt, $e, 'scrape_failed');
         }
     }
 

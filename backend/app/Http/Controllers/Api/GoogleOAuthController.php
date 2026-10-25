@@ -10,8 +10,10 @@ use Google\Ads\GoogleAds\V23\Services\ListAccessibleCustomersRequest;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
+use Throwable;
 
 class GoogleOAuthController extends Controller
 {
@@ -48,9 +50,9 @@ class GoogleOAuthController extends Controller
         $completionUrl = $this->completionUrl($pendingState);
 
         if ($request->query('error')) {
-            return redirect()->away(
-                $completionUrl.'?error='.urlencode((string) $request->query('error'))
-            );
+            return $this->oauthFailure($completionUrl, 'Google authorization was cancelled or denied.', [
+                'provider_error' => mb_substr((string) $request->query('error'), 0, 100),
+            ]);
         }
 
         $code = (string) $request->query('code', '');
@@ -74,18 +76,24 @@ class GoogleOAuthController extends Controller
             );
         }
 
-        $tokenResponse = Http::asForm()->post('https://oauth2.googleapis.com/token', [
-            'code' => $code,
-            'client_id' => config('google_ads.client_id'),
-            'client_secret' => config('google_ads.client_secret'),
-            'redirect_uri' => config('google_ads.oauth_redirect_uri'),
-            'grant_type' => 'authorization_code',
-        ]);
+        try {
+            $tokenResponse = Http::asForm()->connectTimeout(5)->timeout(20)->post('https://oauth2.googleapis.com/token', [
+                'code' => $code,
+                'client_id' => config('google_ads.client_id'),
+                'client_secret' => config('google_ads.client_secret'),
+                'redirect_uri' => config('google_ads.oauth_redirect_uri'),
+                'grant_type' => 'authorization_code',
+            ]);
+        } catch (Throwable $error) {
+            return $this->oauthFailure($completionUrl, 'Google authorization could not be completed.', [
+                'exception' => $error::class,
+            ]);
+        }
 
         if (! $tokenResponse->successful()) {
-            return redirect()->away(
-                $completionUrl.'?error='.urlencode('Token exchange failed: '.$tokenResponse->body())
-            );
+            return $this->oauthFailure($completionUrl, 'Google authorization could not be completed.', [
+                'status' => $tokenResponse->status(),
+            ]);
         }
 
         $body = $tokenResponse->json();
@@ -120,9 +128,9 @@ class GoogleOAuthController extends Controller
             $resp = $customerService->listAccessibleCustomers(new ListAccessibleCustomersRequest);
             $resourceNames = iterator_to_array($resp->getResourceNames());
         } catch (\Throwable $e) {
-            return redirect()->away(
-                config('google_ads.frontend_oauth_complete_url').'?error='.urlencode('Google Ads API error: '.$e->getMessage())
-            );
+            return $this->oauthFailure(config('google_ads.frontend_oauth_complete_url'), 'Google Ads account access could not be verified.', [
+                'exception' => $e::class,
+            ]);
         }
 
         $customerIds = array_values(array_filter(array_map(function (string $name) {
@@ -139,6 +147,14 @@ class GoogleOAuthController extends Controller
         ], now()->addMinutes(15));
 
         return redirect()->away(config('google_ads.frontend_oauth_complete_url'));
+    }
+
+    private function oauthFailure(string $completionUrl, string $message, array $context = [])
+    {
+        $reference = strtolower(Str::random(12));
+        Log::warning('Google Ads OAuth failed.', ['reference' => $reference, ...$context]);
+
+        return redirect()->away($completionUrl.'?error='.urlencode($message.' Reference: '.$reference));
     }
 
     private function startOAuth(int $userId, array $context = [])

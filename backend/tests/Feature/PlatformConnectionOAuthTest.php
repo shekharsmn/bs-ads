@@ -42,4 +42,23 @@ class PlatformConnectionOAuthTest extends TestCase
 
         $this->actingAs($viewer)->get('/api/connections/google/redirect?scope=agency')->assertForbidden();
     }
+
+    public function test_google_oauth_failure_redirect_does_not_expose_provider_response_content(): void
+    {
+        config()->set('google_ads.developer_token', 'developer-token');
+        config()->set('google_ads.client_id', 'client-id');
+        config()->set('google_ads.client_secret', 'client-secret');
+        config()->set('google_ads.oauth_redirect_uri', 'http://frontend.test/api/oauth/google/callback');
+        config()->set('services.google_workspace.frontend_url', 'http://frontend.test');
+        Http::fake(['https://oauth2.googleapis.com/token' => Http::response('provider-secret-detail', 500)]);
+        $admin = User::factory()->create(['role' => 'admin']);
+        $redirect = $this->actingAs($admin)->get('/api/connections/google/redirect?scope=agency')->assertRedirect();
+        parse_str((string) parse_url($redirect->headers->get('Location'), PHP_URL_QUERY), $query);
+
+        $response = $this->get('/api/oauth/google/callback?state='.$query['state'].'&code=oauth-code')->assertRedirect();
+        $location = (string) $response->headers->get('Location');
+
+        $this->assertStringContainsString('Reference%3A', $location);
+        $this->assertStringNotContainsString('provider-secret-detail', $location);
+    }
 }

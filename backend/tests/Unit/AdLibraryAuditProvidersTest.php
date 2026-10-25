@@ -50,6 +50,33 @@ class AdLibraryAuditProvidersTest extends TestCase
         $this->assertSame(5, $result->outputTokens);
     }
 
+    public function test_gemini_url_context_retrieves_the_supplied_website(): void
+    {
+        config(['ad_library_audit.providers.gemini.api_key' => 'secret', 'ad_library_audit.providers.gemini.base_url' => 'https://gemini.test/v1beta']);
+        Http::fake(['gemini.test/*' => Http::response([
+            'candidates' => [[
+                'content' => ['parts' => [['text' => '{"value":"ok"}']]],
+                'urlContextMetadata' => ['urlMetadata' => [[
+                    'retrievedUrl' => 'https://brand.test/',
+                    'urlRetrievalStatus' => 'URL_RETRIEVAL_STATUS_SUCCESS',
+                ]]],
+            ]],
+            'usageMetadata' => ['promptTokenCount' => 20, 'candidatesTokenCount' => 4],
+        ])]);
+
+        $result = app(GeminiAuditProvider::class)->generateJsonFromUrl(
+            'model',
+            'system',
+            'Extract brand context.',
+            'https://brand.test/',
+            ['type' => 'object', 'properties' => ['value' => ['type' => 'string']], 'required' => ['value']],
+        );
+
+        $this->assertSame('ok', $result->data['value']);
+        Http::assertSent(fn ($request) => array_key_exists('url_context', data_get($request->data(), 'tools.0', []))
+            && str_contains(data_get($request->data(), 'contents.0.parts.0.text', ''), 'https://brand.test/'));
+    }
+
     public function test_anthropic_normalizes_tool_output(): void
     {
         config(['ad_library_audit.providers.anthropic.api_key' => 'secret', 'ad_library_audit.providers.anthropic.base_url' => 'https://anthropic.test/v1']);

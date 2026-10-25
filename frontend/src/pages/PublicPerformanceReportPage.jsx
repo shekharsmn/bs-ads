@@ -36,6 +36,13 @@ function formatDate(value, options = {}) {
   return Number.isNaN(date.getTime()) ? value : date.toLocaleDateString(undefined, options)
 }
 
+function metricDelta(current, previous) {
+  const now = Number(current); const before = Number(previous)
+  if (!Number.isFinite(now) || !Number.isFinite(before) || before === 0) return null
+  const value = ((now - before) / Math.abs(before)) * 100
+  return `${value >= 0 ? '+' : ''}${formatNumber(value, 1)}% vs prior`
+}
+
 function SpendTrend({ series, currency }) {
   const values = series.map(item => Number(item.metrics?.spend || 0))
   const max = Math.max(...values, 1)
@@ -93,25 +100,28 @@ export default function PublicPerformanceReportPage() {
   const trendSeries = snapshot.trends?.series || []
   const campaigns = snapshot.campaigns?.campaigns || []
   const alerts = snapshot.alerts || []
+  const branding = snapshot.template || {}
+  const brandName = branding.brand_name || 'Brandshark Pulse'
   const openAlerts = alerts.filter(alert => !['resolved', 'closed'].includes(`${alert.status}`.toLowerCase()))
 
-  return <div className="public-report-page">
+  return <div className="public-report-page" style={{ '--report-accent': branding.brand_color || '#2563eb' }}>
     <header className="public-report-hero"><div className="public-report-hero-inner">
-      <div className="public-report-brand"><span><Activity size={17} /></span><div><strong>Brandshark Pulse</strong><small>Performance intelligence</small></div></div>
+      <div className="public-report-brand"><span>{branding.logo_url ? <img src={branding.logo_url} alt=""/> : <Activity size={17} />}</span><div><strong>{brandName}</strong><small>Performance intelligence</small></div></div>
       <div className="public-report-badge"><ShieldCheck size={14} /> Client report</div>
       <div className="public-report-intro"><p>{report.frequency} performance report</p><h1>{snapshot.client?.name || 'Performance report'}</h1><div><span><CalendarDays size={14} /> {formatDate(report.period_start, { month: 'short', day: 'numeric', year: 'numeric' })} — {formatDate(report.period_end, { month: 'short', day: 'numeric', year: 'numeric' })}</span><span><Clock3 size={14} /> Generated {formatDate(report.generated_at, { month: 'short', day: 'numeric', year: 'numeric' })}</span></div></div>
     </div></header>
 
     <main className="public-report-content">
-      <section className="public-report-summary-row"><div><p className="public-report-kicker">Executive snapshot</p><h2>Performance at a glance</h2><p>Results are presented separately by currency to keep every total accurate.</p></div><button type="button" onClick={() => window.print()}><Printer size={15} /> Print report</button></section>
+      <section className="public-report-summary-row"><div><p className="public-report-kicker">Executive snapshot</p><h2>Performance at a glance</h2><p>Results are presented separately by currency to keep every total accurate.</p></div><button type="button" onClick={() => window.print()}><Printer size={15} /> Print / save PDF</button></section>
       {!currencies.length && <div className="public-report-empty large">No performance data was available for this reporting period.</div>}
 
       {currencies.map((block, currencyIndex) => {
         const currency = block.currency || snapshot.client?.currency || 'USD'
         const series = trendSeries.filter(row => row.currency === currency)
+        const previous = snapshot.comparison?.summary?.currencies?.find(item => item.currency === currency)?.metrics || {}
         return <section className="public-report-currency" key={currency}>
           <div className="public-report-section-heading"><div><span>{String(currencyIndex + 1).padStart(2, '0')}</span><div><p>{currency} portfolio</p><h2>Performance overview</h2></div></div><p>Data through {formatDate(snapshot.summary?.freshness_timestamp, { month: 'short', day: 'numeric', year: 'numeric' })}</p></div>
-          <div className="public-report-kpis">{METRICS.map(([key, label]) => <div key={key} className="public-report-kpi"><span>{label}</span><strong>{formatMetric(key, block.metrics?.[key], currency)}</strong></div>)}</div>
+          <div className="public-report-kpis">{METRICS.map(([key, label]) => <div key={key} className="public-report-kpi"><span>{label}</span><strong>{formatMetric(key, block.metrics?.[key], currency)}</strong>{metricDelta(block.metrics?.[key], previous[key]) && <small>{metricDelta(block.metrics?.[key], previous[key])}</small>}</div>)}</div>
           <div className="public-report-section-block"><div className="public-report-block-title"><div><p>Daily movement</p><h3>Spend trend</h3></div><span>{series.length} reporting days</span></div><SpendTrend series={series} currency={currency} /></div>
           <div className="public-report-section-block campaigns"><div className="public-report-block-title"><div><p>Campaign performance</p><h3>Where results came from</h3></div><span>{campaigns.filter(row => row.currency === currency).length} campaigns</span></div><CampaignTable campaigns={campaigns} currency={currency} /></div>
         </section>
@@ -125,7 +135,7 @@ export default function PublicPerformanceReportPage() {
         })}</div>}
       </section>
 
-      <footer className="public-report-footer"><div className="public-report-brand dark"><span><Activity size={16} /></span><div><strong>Brandshark Pulse</strong><small>Prepared for {snapshot.client?.name}</small></div></div><p>This immutable snapshot excludes internal notes and operational diagnostics. Conversion results may change as advertising platforms complete attribution. Link expires {formatDate(report.expires_at, { month: 'short', day: 'numeric', year: 'numeric' })}.</p></footer>
+      <footer className="public-report-footer"><div className="public-report-brand dark"><span>{branding.logo_url ? <img src={branding.logo_url} alt=""/> : <Activity size={16} />}</span><div><strong>{brandName}</strong><small>Prepared for {snapshot.client?.name}</small></div></div><p>This immutable snapshot excludes internal notes and operational diagnostics. Conversion results may change as advertising platforms complete attribution. Link expires {formatDate(report.expires_at, { month: 'short', day: 'numeric', year: 'numeric' })}.</p></footer>
     </main>
   </div>
 }

@@ -122,4 +122,46 @@ class OperationsApiTest extends TestCase
             ->assertJsonCount(1, '0.ad_accounts')
             ->assertJsonPath('0.ad_accounts.0.name', 'Visible');
     }
+
+    public function test_admin_can_remove_a_connection_and_its_assigned_accounts(): void
+    {
+        $admin = User::factory()->create(['role' => 'admin']);
+        $viewer = User::factory()->create(['role' => 'viewer']);
+        $client = Client::create(['name' => 'Acme', 'slug' => 'acme']);
+        $connection = PlatformConnection::create(['platform' => 'google', 'name' => 'Old MCC', 'scope' => 'agency', 'credentials' => ['refresh_token' => 'secret']]);
+        $account = AdAccount::create(['client_id' => $client->id, 'platform_connection_id' => $connection->id, 'platform' => 'google', 'external_id' => '1234567890', 'name' => 'Acme Ads', 'currency' => 'INR', 'timezone' => 'Asia/Kolkata']);
+
+        $this->actingAs($viewer)->deleteJson('/api/connections/'.$connection->id)->assertForbidden();
+        $this->actingAs($admin)->deleteJson('/api/connections/'.$connection->id)->assertNoContent();
+
+        $this->assertDatabaseMissing('platform_connections', ['id' => $connection->id]);
+        $this->assertDatabaseMissing('ad_accounts', ['id' => $account->id]);
+    }
+
+    public function test_client_specific_connection_cannot_assign_an_account_to_another_client(): void
+    {
+        $admin = User::factory()->create(['role' => 'admin']);
+        $selectedClient = Client::create(['name' => 'Selected', 'slug' => 'selected']);
+        $otherClient = Client::create(['name' => 'Other', 'slug' => 'other']);
+        $connection = PlatformConnection::create([
+            'client_id' => $selectedClient->id,
+            'platform' => 'google',
+            'name' => 'Selected client only',
+            'scope' => 'client',
+            'credentials' => ['refresh_token' => 'secret'],
+        ]);
+
+        $this->actingAs($admin)->postJson('/api/connections/'.$connection->id.'/accounts/bulk', [
+            'accounts' => [[
+                'client_id' => $otherClient->id,
+                'external_id' => '1234567890',
+                'manager_external_id' => null,
+                'name' => 'Wrong client',
+                'currency' => 'INR',
+                'timezone' => 'Asia/Kolkata',
+            ]],
+        ])->assertUnprocessable()->assertJsonPath('message', 'A client-specific connection can only assign accounts to its selected client.');
+
+        $this->assertDatabaseCount('ad_accounts', 0);
+    }
 }

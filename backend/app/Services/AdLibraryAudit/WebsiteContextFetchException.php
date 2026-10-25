@@ -4,4 +4,4 @@ namespace App\Services\AdLibraryAudit;
 
 use RuntimeException;
 
-class RetryableContextException extends RuntimeException {}
+class WebsiteContextFetchException extends RuntimeException {}

@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Link, Navigate } from 'react-router-dom'
-import { Check as CheckIcon, Clock3, Copy, ExternalLink, LibraryBig, LoaderCircle, Play, PlayCircle, Plus, RefreshCw, Search, Trash2, X } from 'lucide-react'
+import { Check as CheckIcon, Clock3, Copy, ExternalLink, LibraryBig, LoaderCircle, Play, PlayCircle, Plus, RefreshCw, Search, Star, Trash2, X } from 'lucide-react'
 import { api } from '../api/client'
 import AdCreativeModal from '../components/AdCreativeModal'
 import { useAuth } from '../context/AuthContext'
 import { copyText } from '../utils/clipboard'
+import ConfirmDialog from '../components/ui/ConfirmDialog'
+import { useToast } from '../context/ToastContext'
 
 const terminalStatuses = new Set(['complete', 'partial', 'empty', 'blocked', 'failed'])
 function SparklesIcon() { return <span aria-hidden="true">✦</span> }
@@ -12,9 +14,14 @@ const initialForm = { company_name: '', company_type: 'competitor', website_url:
 
 export default function AdLibraryPage() {
   const { permissions, features } = useAuth()
+  const toast = useToast()
   const canManage = Boolean(permissions?.manage_ad_library)
   const [form, setForm] = useState(initialForm)
   const [searches, setSearches] = useState([])
+  const [tags, setTags] = useState([])
+  const [tagFilter, setTagFilter] = useState('')
+  const [newTag, setNewTag] = useState('')
+  const [tagTarget, setTagTarget] = useState('')
   const [runs, setRuns] = useState([])
   const [selectedRun, setSelectedRun] = useState(null)
   const [results, setResults] = useState({ data: [], current_page: 1, last_page: 1, total: 0, raw_total: 0, duplicate_count: 0 })
@@ -22,32 +29,35 @@ export default function AdLibraryPage() {
   const [error, setError] = useState('')
   const [selectedCreative, setSelectedCreative] = useState(null)
   const [mediaFilter, setMediaFilter] = useState('all')
+  const [favoritesOnly, setFavoritesOnly] = useState(false)
   const [runJsonCopyState, setRunJsonCopyState] = useState('idle')
   const [searchModalOpen, setSearchModalOpen] = useState(false)
+  const [pendingDelete, setPendingDelete] = useState(null)
 
   const loadWorkspace = useCallback(async () => {
     if (!features?.ad_library) return
     try {
       const [searchResponse, runResponse] = await Promise.all([
-        api.getAdLibrarySearches(),
+        api.getAdLibrarySearches(tagFilter ? { tag_id: tagFilter } : undefined),
         api.getAdLibraryRuns(),
       ])
       setSearches(searchResponse.data.searches || [])
+      setTags(searchResponse.data.tags || [])
       setRuns(runResponse.data.data || [])
       setError('')
     } catch (requestError) {
       setError(requestError.response?.data?.message || 'Unable to load Ad Library research.')
     }
-  }, [features?.ad_library])
+  }, [features?.ad_library, tagFilter])
 
   const loadResults = useCallback(async (run, page = 1) => {
     if (!run || !terminalStatuses.has(run.status) || run.result_count === 0) {
       setResults({ data: [], current_page: 1, last_page: 1, total: 0, raw_total: 0, duplicate_count: 0 })
       return
     }
-    const response = await api.getAdLibraryResults(run.id, { page, per_page: 24, media_type: mediaFilter })
+    const response = await api.getAdLibraryResults(run.id, { page, per_page: 24, media_type: mediaFilter, favorites: favoritesOnly ? 1 : undefined })
     setResults(response.data)
-  }, [mediaFilter])
+  }, [favoritesOnly, mediaFilter])
 
   useEffect(() => { loadWorkspace() }, [loadWorkspace])
   useEffect(() => { loadResults(selectedRun).catch(() => setError('Unable to load saved ads.')) }, [selectedRun, loadResults])
@@ -101,16 +111,17 @@ export default function AdLibraryPage() {
   }
 
   const removeSearch = async (id) => {
-    if (!window.confirm('Remove this saved search? Existing run history will remain.')) return
-    await api.deleteAdLibrarySearch(id)
-    await loadWorkspace()
+    setLoading(true)
+    try { await api.deleteAdLibrarySearch(id); await loadWorkspace(); setPendingDelete(null); toast.success('Saved search removed.') }
+    catch (requestError) { setError(requestError.response?.data?.message || 'Unable to remove the search.') }
+    finally { setLoading(false) }
   }
 
   const removeRun = async (id) => {
-    if (!window.confirm('Delete this run and all of its saved results?')) return
-    await api.deleteAdLibraryRun(id)
-    if (selectedRun?.id === id) setSelectedRun(null)
-    await loadWorkspace()
+    setLoading(true)
+    try { await api.deleteAdLibraryRun(id); if (selectedRun?.id === id) setSelectedRun(null); await loadWorkspace(); setPendingDelete(null); toast.success('Run and saved results deleted.') }
+    catch (requestError) { setError(requestError.response?.data?.message || 'Unable to delete the run.') }
+    finally { setLoading(false) }
   }
 
   const copyRunJson = async () => {
@@ -125,6 +136,23 @@ export default function AdLibraryPage() {
       setRunJsonCopyState('idle')
       setError(requestError.response?.data?.message || 'Unable to copy the run JSON response.')
     }
+  }
+
+  const attachTag = async event => {
+    event.preventDefault()
+    if (!newTag.trim() || !tagTarget) return
+    try {
+      const created = await api.createAdLibraryTag(newTag.trim())
+      const search = searches.find(item => String(item.id) === String(tagTarget))
+      await api.syncAdLibrarySearchTags(tagTarget, [...new Set([...(search?.tags || []).map(tag => tag.id), created.data.id])])
+      setNewTag(''); await loadWorkspace()
+    } catch (requestError) { setError(requestError.response?.data?.message || 'Unable to add the tag.') }
+  }
+
+  const toggleFavorite = async ad => {
+    const favorite = !ad.favorite
+    setResults(current => ({ ...current, data: current.data.map(item => item.id === ad.id ? { ...item, favorite } : item) }))
+    try { await api.favoriteAdLibraryResult(ad.id, favorite) } catch { setResults(current => ({ ...current, data: current.data.map(item => item.id === ad.id ? { ...item, favorite: !favorite } : item) })); setError('Unable to update the favorite.') }
   }
 
   return (
@@ -142,11 +170,13 @@ export default function AdLibraryPage() {
       <div className="ad-library-workspace" style={{ display: 'grid', gridTemplateColumns: 'minmax(280px, 0.8fr) minmax(560px, 2fr)', gap: 18 }}>
         <aside className="ad-library-sidebar" style={panel}>
           <SectionTitle title="Saved searches" count={searches.length} />
+          {tags.length > 0 && <div className="ad-library-tags"><button className={!tagFilter ? 'active' : ''} onClick={() => setTagFilter('')}>All</button>{tags.map(tag => <button className={String(tag.id) === tagFilter ? 'active' : ''} key={tag.id} onClick={() => setTagFilter(String(tag.id))}>{tag.name}</button>)}</div>}
           {searches.length === 0 && <Empty text="No company research saved yet." />}
           {searches.map(search => <div key={search.id} style={listRow}>
-            <div style={{ minWidth: 0 }}><strong style={{ fontSize: 13 }}>{search.name}</strong><div style={small}>{search.company_name} · {relationshipLabel(search.company_type)} · {search.search_mode === 'keyword' ? search.query : `Page ${search.advertiser_page_id}`} · {search.region} · {search.runs_count} runs</div></div>
-            {canManage && <div style={{ display: 'flex', gap: 5 }}><IconButton title="Run again" onClick={() => rerun(search.id)}><Play size={13} /></IconButton><IconButton title="Delete search" onClick={() => removeSearch(search.id)}><Trash2 size={13} /></IconButton></div>}
+            <div style={{ minWidth: 0 }}><strong style={{ fontSize: 13 }}>{search.name}</strong><div style={small}>{search.company_name} · {relationshipLabel(search.company_type)} · {search.search_mode === 'keyword' ? search.query : `Page ${search.advertiser_page_id}`} · {search.region} · {search.runs_count} runs</div>{search.tags?.length > 0 && <div className="ad-library-row-tags">{search.tags.map(tag => <span key={tag.id}>{tag.name}</span>)}</div>}</div>
+            {canManage && <div style={{ display: 'flex', gap: 5 }}><IconButton title="Run again" onClick={() => rerun(search.id)}><Play size={13} /></IconButton><IconButton title="Delete search" onClick={() => setPendingDelete({ type: 'search', id: search.id, title: search.name })}><Trash2 size={13} /></IconButton></div>}
           </div>)}
+          {canManage && searches.length > 0 && <form className="ad-library-tag-form" onSubmit={attachTag}><select value={tagTarget} onChange={event => setTagTarget(event.target.value)} required><option value="">Tag a search…</option>{searches.map(search => <option value={search.id} key={search.id}>{search.name}</option>)}</select><input value={newTag} onChange={event => setNewTag(event.target.value)} placeholder="Tag name"/><button>Add</button></form>}
 
           <div style={{ marginTop: 24 }}><SectionTitle title="Run history" count={runs.length} /></div>
           {runs.length === 0 && <Empty text="No runs yet." />}
@@ -167,7 +197,7 @@ export default function AdLibraryPage() {
                 </button>}
                 {features?.ad_library_audits && canManage && ['complete', 'partial'].includes(selectedRun.status) && selectedRun.result_count > 0 && <Link to={`/ad-library/audits?run=${selectedRun.id}`} style={{ ...jsonButton, textDecoration: 'none' }}>Create content audit</Link>}
                 <IconButton title="Refresh" onClick={async () => { const response = await api.getAdLibraryRun(selectedRun.id); setSelectedRun(response.data); await loadResults(response.data) }}><RefreshCw size={14} /></IconButton>
-                {canManage && terminalStatuses.has(selectedRun.status) && <IconButton title="Delete run" onClick={() => removeRun(selectedRun.id)}><Trash2 size={14} /></IconButton>}
+                {canManage && terminalStatuses.has(selectedRun.status) && <IconButton title="Delete run" onClick={() => setPendingDelete({ type: 'run', id: selectedRun.id, title: `Run #${selectedRun.id}` })}><Trash2 size={14} /></IconButton>}
               </div>
             </div>
             {!terminalStatuses.has(selectedRun.status) && <div style={waiting}><LoaderCircle className="spin" size={18} /> The isolated scraper is working. This page refreshes automatically.</div>}
@@ -176,10 +206,11 @@ export default function AdLibraryPage() {
               <div className="ad-library-filter-tabs" role="group" aria-label="Creative type">
                 {['all', 'static', 'video'].map(type => <button key={type} type="button" className={mediaFilter === type ? 'active' : ''} onClick={() => setMediaFilter(type)}>{type === 'all' ? 'All creatives' : type === 'static' ? 'Static' : 'Video'}</button>)}
               </div>
+              <button className={`ad-library-favorite-filter ${favoritesOnly ? 'active' : ''}`} onClick={() => setFavoritesOnly(value => !value)}><Star size={12} fill={favoritesOnly ? 'currentColor' : 'none'}/> Favorites</button>
               <span>{results.total} creative{results.total === 1 ? '' : 's'}{results.duplicate_count > 0 ? ` · ${results.duplicate_count} repeat${results.duplicate_count === 1 ? '' : 's'} grouped` : ''}</span>
             </div>}
             {terminalStatuses.has(selectedRun.status) && results.data.length === 0 && <Empty text={selectedRun.status === 'empty' ? 'Meta returned no matching ads.' : mediaFilter === 'all' ? 'This run has no saved ads.' : `No ${mediaFilter} creatives in this run.`} />}
-            <div className="ad-library-card-grid" style={cardGrid}>{results.data.map(ad => <AdCard key={ad.creative_key || ad.id} ad={ad} onViewDetails={() => setSelectedCreative(ad)} />)}</div>
+            <div className="ad-library-card-grid" style={cardGrid}>{results.data.map(ad => <AdCard key={ad.creative_key || ad.id} ad={ad} onFavorite={() => toggleFavorite(ad)} onViewDetails={() => setSelectedCreative(ad)} />)}</div>
             {results.last_page > 1 && <div style={{ display: 'flex', justifyContent: 'center', gap: 8, marginTop: 18 }}><button style={secondaryButton} disabled={results.current_page <= 1} onClick={() => loadResults(selectedRun, results.current_page - 1)}>Previous</button><span style={{ ...small, padding: '9px' }}>{results.current_page} / {results.last_page}</span><button style={secondaryButton} disabled={results.current_page >= results.last_page} onClick={() => loadResults(selectedRun, results.current_page + 1)}>Next</button></div>}
           </>}
         </section>
@@ -199,6 +230,7 @@ export default function AdLibraryPage() {
         onClose={() => setSelectedCreative(null)}
         creative={selectedCreative}
       />
+      <ConfirmDialog open={Boolean(pendingDelete)} title={`Delete ${pendingDelete?.title || 'item'}?`} description={pendingDelete?.type === 'search' ? 'The saved search will be removed. Existing run history remains available.' : 'This permanently removes the run and all saved results from it.'} confirmLabel="Delete" busy={loading} onClose={() => setPendingDelete(null)} onConfirm={() => pendingDelete?.type === 'search' ? removeSearch(pendingDelete.id) : removeRun(pendingDelete.id)}/>
     </div>
   )
 }
@@ -253,11 +285,12 @@ function SearchModal({ open, form, loading, error, updateForm, onSubmit, onClose
   </div>
 }
 
-function AdCard({ ad, onViewDetails }) {
+function AdCard({ ad, onViewDetails, onFavorite }) {
   const [imageFailed, setImageFailed] = useState(false)
   const image = ad.image_urls?.[0]
   const runDuration = formatRunDuration(ad)
   return <article className="ad-library-card" style={adCard}>
+    <button className={`ad-library-favorite ${ad.favorite ? 'active' : ''}`} aria-label={ad.favorite ? 'Remove favorite' : 'Add favorite'} onClick={onFavorite}><Star size={15} fill={ad.favorite ? 'currentColor' : 'none'}/></button>
     <button type="button" aria-label={`View ${ad.advertiser_name || 'ad'} creative details`} className="ad-library-media" style={mediaBox} onClick={onViewDetails}>
       {image && !imageFailed ? <img src={image} alt="" onError={() => setImageFailed(true)} /> : ad.media_type === 'video' ? <PlayCircle size={32} color="#94a3b8" /> : <LibraryBig size={28} color="#94a3b8" />}
       <span className={`ad-library-media-tag ${ad.media_type}`}>{ad.media_type === 'video' ? <PlayCircle size={11} /> : null}{ad.media_type === 'video' ? 'Video' : 'Static'}</span>

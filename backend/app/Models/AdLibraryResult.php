@@ -23,4 +23,9 @@ class AdLibraryResult extends Model
     {
         return $this->belongsTo(AdLibraryRun::class, 'ad_library_run_id');
     }
+
+    public function favoritedBy()
+    {
+        return $this->belongsToMany(User::class, 'ad_library_favorites')->withTimestamps();
+    }
 }

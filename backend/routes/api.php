@@ -1,24 +1,34 @@
 <?php
 
+use App\Http\Controllers\Api\AccessManagementController;
+use App\Http\Controllers\Api\AdLibraryAuditController;
+use App\Http\Controllers\Api\AdLibraryController;
+use App\Http\Controllers\Api\AiGovernanceController;
 use App\Http\Controllers\Api\AiLogsController;
 use App\Http\Controllers\Api\AiModelController;
-use App\Http\Controllers\Api\AdLibraryController;
-use App\Http\Controllers\Api\AdLibraryAuditController;
-use App\Http\Controllers\Api\AuthController;
 use App\Http\Controllers\Api\AlertController;
 use App\Http\Controllers\Api\AlertRuleController;
+use App\Http\Controllers\Api\AuditEventController;
+use App\Http\Controllers\Api\AuthController;
 use App\Http\Controllers\Api\ClientController;
 use App\Http\Controllers\Api\ConnectionController;
 use App\Http\Controllers\Api\ConversionMappingController;
+use App\Http\Controllers\Api\DataQualityController;
 use App\Http\Controllers\Api\GoogleAccountController;
 use App\Http\Controllers\Api\GoogleOAuthController;
 use App\Http\Controllers\Api\InspectorController;
 use App\Http\Controllers\Api\MetaAccountController;
+use App\Http\Controllers\Api\MethodologyController;
 use App\Http\Controllers\Api\MetricsController;
+use App\Http\Controllers\Api\NotificationDestinationController;
+use App\Http\Controllers\Api\OnboardingController;
+use App\Http\Controllers\Api\OperationsReadinessController;
 use App\Http\Controllers\Api\PublicPerformanceReportController;
 use App\Http\Controllers\Api\PublicReportController;
 use App\Http\Controllers\Api\ReportController;
 use App\Http\Controllers\Api\ReportScheduleController;
+use App\Http\Controllers\Api\ReportTemplateController;
+use App\Http\Controllers\Api\WorkflowActivityController;
 use App\Http\Controllers\Api\WorkspaceAuthController;
 use Illuminate\Support\Facades\Route;
 
@@ -30,13 +40,19 @@ Route::get('/auth/google/callback', [WorkspaceAuthController::class, 'callback']
 Route::get('/oauth/google/callback', [GoogleOAuthController::class, 'callback']);
 
 // Public read-only shared report (token is unguessable)
-Route::get('/public/reports/{token}', [PublicReportController::class, 'show']);
-Route::get('/public/performance-reports/{token}', [PublicPerformanceReportController::class, 'show']);
+Route::get('/public/reports/{token}', [PublicReportController::class, 'show'])->middleware('throttle:public-reports');
+Route::get('/public/performance-reports/{token}', [PublicPerformanceReportController::class, 'show'])->middleware('throttle:public-reports');
 
 // Authenticated routes
-Route::middleware('auth:sanctum')->group(function () {
+Route::middleware(['auth:sanctum', 'active', 'audit.mutations'])->group(function () {
     Route::post('/logout', [AuthController::class, 'logout']);
     Route::get('/me', [AuthController::class, 'me']);
+    Route::get('/onboarding', OnboardingController::class)->middleware('role:admin');
+    Route::get('/operations/readiness', OperationsReadinessController::class)->middleware('role:admin');
+    Route::get('/activities', [WorkflowActivityController::class, 'index']);
+    Route::get('/activities/{activity}', [WorkflowActivityController::class, 'show']);
+    Route::get('/activities/{activity}/attempts', [WorkflowActivityController::class, 'attempts']);
+    Route::post('/activities/{activity}/actions', [WorkflowActivityController::class, 'action'])->middleware('role:admin,marketer');
 
     Route::get('/clients', [ClientController::class, 'index']);
     Route::get('/clients/{client}', [ClientController::class, 'show']);
@@ -49,10 +65,28 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::delete('/clients/{client}/conversion-mappings/{mapping}', [ConversionMappingController::class, 'destroy'])->middleware('role:admin,marketer');
     Route::get('/users', [ClientController::class, 'users'])->middleware('role:admin');
     Route::put('/users/{user}', [ClientController::class, 'updateUser'])->middleware('role:admin');
+    Route::get('/governance/users', [AccessManagementController::class, 'index'])->middleware('role:admin');
+    Route::put('/governance/users/{user}', [AccessManagementController::class, 'update'])->middleware('role:admin');
+    Route::get('/governance/users/{user}/history', [AccessManagementController::class, 'history'])->middleware('role:admin');
+    Route::get('/audit-events', [AuditEventController::class, 'index'])->middleware('role:admin');
+    Route::get('/audit-events/export.csv', [AuditEventController::class, 'export'])->middleware('role:admin');
+    Route::get('/ai-governance/summary', [AiGovernanceController::class, 'summary'])->middleware('role:admin');
+    Route::get('/ai-governance/budgets', [AiGovernanceController::class, 'budgets'])->middleware('role:admin');
+    Route::put('/ai-governance/budgets', [AiGovernanceController::class, 'saveBudget'])->middleware('role:admin');
+    Route::get('/data-quality/issues', [DataQualityController::class, 'index']);
+    Route::get('/methodologies', [MethodologyController::class, 'index']);
+    Route::get('/methodologies/{key}', [MethodologyController::class, 'show']);
+    Route::get('/methodologies/{key}/compare', [MethodologyController::class, 'compare']);
+    Route::get('/notification-destinations', [NotificationDestinationController::class, 'index']);
+    Route::post('/notification-destinations', [NotificationDestinationController::class, 'store'])->middleware('role:admin,marketer');
+    Route::put('/notification-destinations/{destination}', [NotificationDestinationController::class, 'update'])->middleware('role:admin,marketer');
+    Route::delete('/notification-destinations/{destination}', [NotificationDestinationController::class, 'destroy'])->middleware('role:admin,marketer');
+    Route::post('/notification-destinations/{destination}/test', [NotificationDestinationController::class, 'test'])->middleware('role:admin,marketer');
 
     Route::get('/connections', [ConnectionController::class, 'index']);
     Route::post('/connections', [ConnectionController::class, 'store'])->middleware('role:admin');
     Route::put('/connections/{connection}', [ConnectionController::class, 'update'])->middleware('role:admin');
+    Route::delete('/connections/{connection}', [ConnectionController::class, 'destroy'])->middleware('role:admin');
     Route::post('/connections/{connection}/discover', [ConnectionController::class, 'discover'])->middleware('role:admin');
     Route::post('/connections/{connection}/accounts', [ConnectionController::class, 'assignAccount'])->middleware('role:admin');
     Route::post('/connections/{connection}/accounts/bulk', [ConnectionController::class, 'assignAccounts'])->middleware('role:admin');
@@ -70,9 +104,13 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::delete('/alert-rules/{alertRule}', [AlertRuleController::class, 'destroy'])->middleware('role:admin,marketer');
     Route::get('/alerts', [AlertController::class, 'index']);
     Route::get('/alerts/{alert}', [AlertController::class, 'show']);
+    Route::post('/alerts/bulk-actions', [AlertController::class, 'bulkAction'])->middleware('role:admin,marketer');
     Route::post('/alerts/{alert}/{action}', [AlertController::class, 'action'])->middleware('role:admin,marketer');
 
     Route::get('/report-schedules', [ReportScheduleController::class, 'index']);
+    Route::get('/report-templates', [ReportTemplateController::class, 'index']);
+    Route::post('/report-templates', [ReportTemplateController::class, 'store'])->middleware('role:admin,marketer');
+    Route::put('/report-templates/{reportTemplate}', [ReportTemplateController::class, 'update'])->middleware('role:admin,marketer');
     Route::post('/report-schedules', [ReportScheduleController::class, 'store'])->middleware('role:admin,marketer');
     Route::put('/report-schedules/{reportSchedule}', [ReportScheduleController::class, 'update'])->middleware('role:admin,marketer');
     Route::post('/clients/{client}/report-runs', [ReportScheduleController::class, 'generate'])->middleware('role:admin,marketer');
@@ -95,7 +133,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/inspect', [InspectorController::class, 'fetch']);
 
     // AI logs
-    Route::get('/ai-logs', [AiLogsController::class, 'index']);
+    Route::get('/ai-logs', [AiLogsController::class, 'index'])->middleware('role:admin');
 
     // Admin settings
     Route::get('/settings/ai-models', [AiModelController::class, 'index'])->middleware('role:admin');
@@ -113,6 +151,9 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/ad-library/runs/{run}/json', [AdLibraryController::class, 'runJson']);
     Route::get('/ad-library/runs/{run}/ads', [AdLibraryController::class, 'results']);
     Route::delete('/ad-library/runs/{run}', [AdLibraryController::class, 'destroyRun']);
+    Route::post('/ad-library/tags', [AdLibraryController::class, 'storeTag']);
+    Route::put('/ad-library/searches/{search}/tags', [AdLibraryController::class, 'syncTags']);
+    Route::put('/ad-library/results/{result}/favorite', [AdLibraryController::class, 'favorite']);
 
     Route::get('/ad-library/audit-models', [AdLibraryAuditController::class, 'models']);
     Route::get('/ad-library/audits', [AdLibraryAuditController::class, 'index']);
@@ -129,12 +170,17 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::put('/ad-library/audits/{audit}/personas-order', [AdLibraryAuditController::class, 'reorderPersonas']);
     Route::post('/ad-library/audits/{audit}/personas/confirm', [AdLibraryAuditController::class, 'confirmPersonas']);
     Route::post('/ad-library/audits/{audit}/analyze', [AdLibraryAuditController::class, 'analyze']);
+    Route::post('/ad-library/audits/{audit}/pause', [AdLibraryAuditController::class, 'pause']);
+    Route::post('/ad-library/audits/{audit}/resume', [AdLibraryAuditController::class, 'resume']);
     Route::post('/ad-library/audits/{audit}/retry-failed', [AdLibraryAuditController::class, 'retryFailed']);
     Route::get('/ad-library/audits/{audit}/creatives', [AdLibraryAuditController::class, 'creatives']);
+    Route::post('/ad-library/audits/{audit}/creatives/review-all', [AdLibraryAuditController::class, 'markAllCreativesReviewed']);
     Route::put('/ad-library/audits/{audit}/creatives/{creative}', [AdLibraryAuditController::class, 'updateCreative']);
     Route::post('/ad-library/audits/{audit}/grid/confirm', [AdLibraryAuditController::class, 'confirmGrid']);
     Route::post('/ad-library/audits/{audit}/insights', [AdLibraryAuditController::class, 'generateInsights']);
     Route::get('/ad-library/audits/{audit}/export.csv', [AdLibraryAuditController::class, 'exportCsv']);
+    Route::get('/ad-library/audits/{audit}/export.xlsx', [AdLibraryAuditController::class, 'exportXlsx']);
+    Route::get('/ad-library/audits/{audit}/export.sheets', [AdLibraryAuditController::class, 'exportSheets']);
     Route::get('/ad-library/audits/{audit}/export.json', [AdLibraryAuditController::class, 'exportJson']);
 
     // Reports

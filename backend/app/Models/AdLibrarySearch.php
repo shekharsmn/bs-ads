@@ -25,4 +25,9 @@ class AdLibrarySearch extends Model
     {
         return $this->hasMany(AdLibraryRun::class);
     }
+
+    public function tags()
+    {
+        return $this->belongsToMany(AdLibraryTag::class, 'ad_library_search_tag');
+    }
 }

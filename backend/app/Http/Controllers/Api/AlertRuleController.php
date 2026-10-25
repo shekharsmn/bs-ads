@@ -6,17 +6,17 @@ use App\Enums\AlertOperator;
 use App\Enums\CanonicalMetric;
 use App\Enums\Severity;
 use App\Http\Controllers\Controller;
-use App\Models\AdAccount;
 use App\Models\AlertRule;
 use App\Models\AlertTemplate;
-use App\Models\Campaign;
-use App\Models\Client;
 use App\Services\ClientAccess;
+use App\Services\ClientScopeResolver;
 use Illuminate\Http\Request;
 use Illuminate\Validation\Rules\Enum;
 
 class AlertRuleController extends Controller
 {
+    public function __construct(private readonly ClientScopeResolver $scopes) {}
+
     public function templates(Request $request)
     {
         return AlertTemplate::query()->orderBy('name')->get();
@@ -25,6 +25,7 @@ class AlertRuleController extends Controller
     public function storeTemplate(Request $request)
     {
         abort_unless($request->user()->isAdmin(), 403);
+
         return response()->json(AlertTemplate::create($this->validateRule($request, true)), 201);
     }
 
@@ -32,6 +33,7 @@ class AlertRuleController extends Controller
     {
         $data = $request->validate(['client_id' => 'nullable|exists:clients,id']);
         $clientIds = ClientAccess::clientsFor($request->user())->pluck('id');
+
         return AlertRule::query()->where(function ($q) use ($clientIds) {
             $q->whereNull('client_id')->orWhereIn('client_id', $clientIds);
         })->when($data['client_id'] ?? null, fn ($q, $id) => $q->where(fn ($sq) => $sq->whereNull('client_id')->orWhere('client_id', $id)))
@@ -42,6 +44,7 @@ class AlertRuleController extends Controller
     {
         $data = $this->validateRule($request);
         $this->authorizeScope($request, $data);
+
         return response()->json(AlertRule::create($data), 201);
     }
 
@@ -49,7 +52,9 @@ class AlertRuleController extends Controller
     {
         $this->authorizeExisting($request, $alertRule);
         $data = $this->validateRule($request, false, true);
+        $this->authorizeScope($request, array_merge($alertRule->only(['client_id', 'ad_account_id', 'campaign_id']), $data));
         $alertRule->update($data);
+
         return $alertRule->fresh();
     }
 
@@ -57,6 +62,7 @@ class AlertRuleController extends Controller
     {
         $this->authorizeExisting($request, $alertRule);
         $alertRule->delete();
+
         return response()->noContent();
     }
 
@@ -68,7 +74,10 @@ class AlertRuleController extends Controller
             'operator' => [$partial ? 'sometimes' : 'required', new Enum(AlertOperator::class)], 'threshold' => 'nullable|numeric',
             'severity' => [$partial ? 'sometimes' : 'required', new Enum(Severity::class)], 'config' => 'nullable|array',
         ];
-        if ($template) return $request->validate($base + ['key' => 'required|string|max:100|unique:alert_templates,key', 'description' => 'nullable|string', 'active' => 'sometimes|boolean']);
+        if ($template) {
+            return $request->validate($base + ['key' => 'required|string|max:100|unique:alert_templates,key', 'description' => 'nullable|string', 'active' => 'sometimes|boolean']);
+        }
+
         return $request->validate($base + [
             'alert_template_id' => 'nullable|exists:alert_templates,id', 'client_id' => 'nullable|exists:clients,id',
             'ad_account_id' => 'nullable|exists:ad_accounts,id', 'campaign_id' => 'nullable|exists:campaigns,id',
@@ -79,16 +88,15 @@ class AlertRuleController extends Controller
 
     private function authorizeScope(Request $request, array $data): void
     {
-        if (! ($data['client_id'] ?? null) && ! ($data['ad_account_id'] ?? null) && ! ($data['campaign_id'] ?? null)) abort_unless($request->user()->isAdmin(), 403);
-        $clientId = $data['client_id'] ?? null;
-        if ($data['ad_account_id'] ?? null) $clientId = AdAccount::findOrFail($data['ad_account_id'])->client_id;
-        if ($data['campaign_id'] ?? null) $clientId = Campaign::findOrFail($data['campaign_id'])->adAccount->client_id;
-        if ($clientId) ClientAccess::authorize($request->user(), Client::findOrFail($clientId), true);
+        $this->scopes->resolve($request->user(), $data, manage: true, allowGlobal: true);
     }
 
     private function authorizeExisting(Request $request, AlertRule $rule): void
     {
-        if (! $rule->client_id && ! $rule->ad_account_id && ! $rule->campaign_id) abort_unless($request->user()->isAdmin(), 403);
-        else $this->authorizeScope($request, $rule->toArray());
+        if (! $rule->client_id && ! $rule->ad_account_id && ! $rule->campaign_id) {
+            abort_unless($request->user()->isAdmin(), 403);
+        } else {
+            $this->authorizeScope($request, $rule->toArray());
+        }
     }
 }

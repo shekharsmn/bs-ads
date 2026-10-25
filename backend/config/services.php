@@ -53,6 +53,7 @@ return [
         'client_secret' => env('GOOGLE_WORKSPACE_CLIENT_SECRET', env('GOOGLE_OAUTH_CLIENT_SECRET')),
         'redirect_uri' => env('GOOGLE_WORKSPACE_REDIRECT_URI', 'http://localhost:5173/api/auth/google/callback'),
         'frontend_url' => env('FRONTEND_URL', 'http://localhost:5173'),
+        'bootstrap_admin_email' => strtolower(trim((string) env('GOOGLE_WORKSPACE_BOOTSTRAP_ADMIN_EMAIL', ''))),
         'allowed_domains' => array_values(array_filter(array_map(
             static fn (string $domain): string => strtolower(trim($domain)),
             explode(',', env('GOOGLE_WORKSPACE_DOMAINS', env('GOOGLE_WORKSPACE_DOMAIN', 'brandshark.com')))

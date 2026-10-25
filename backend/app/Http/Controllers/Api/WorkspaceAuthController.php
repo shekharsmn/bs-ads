@@ -8,7 +8,9 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
+use Throwable;
 
 class WorkspaceAuthController extends Controller
 {
@@ -35,17 +37,25 @@ class WorkspaceAuthController extends Controller
     {
         $frontend = rtrim(config('services.google_workspace.frontend_url'), '/');
         if ($request->query('error')) {
-            return redirect()->away($frontend.'/login?error='.urlencode((string) $request->query('error')));
+            return $this->oauthFailure($frontend, 'Google sign-in was cancelled or denied.', [
+                'provider_error' => mb_substr((string) $request->query('error'), 0, 100),
+            ]);
         }
         abort_unless(Cache::pull('workspace_sso:'.(string) $request->query('state')), 419, 'SSO state expired.');
-        $token = Http::asForm()->post('https://oauth2.googleapis.com/token', [
-            'code' => $request->query('code'), 'client_id' => config('services.google_workspace.client_id'),
-            'client_secret' => config('services.google_workspace.client_secret'), 'redirect_uri' => config('services.google_workspace.redirect_uri'),
-            'grant_type' => 'authorization_code',
-        ]);
-        $token->throw();
-        $profile = Http::withToken($token->json('access_token'))->get('https://openidconnect.googleapis.com/v1/userinfo');
-        $profile->throw();
+        try {
+            $token = Http::asForm()->connectTimeout(5)->timeout(20)->post('https://oauth2.googleapis.com/token', [
+                'code' => $request->query('code'), 'client_id' => config('services.google_workspace.client_id'),
+                'client_secret' => config('services.google_workspace.client_secret'), 'redirect_uri' => config('services.google_workspace.redirect_uri'),
+                'grant_type' => 'authorization_code',
+            ]);
+            $token->throw();
+            $profile = Http::withToken($token->json('access_token'))->connectTimeout(5)->timeout(20)->retry(2, 250, null, false)->get('https://openidconnect.googleapis.com/v1/userinfo');
+            $profile->throw();
+        } catch (Throwable $error) {
+            return $this->oauthFailure($frontend, 'Google sign-in could not be completed.', [
+                'exception' => $error::class,
+            ]);
+        }
         $email = strtolower((string) $profile->json('email'));
         $allowedDomains = $this->allowedDomains();
         $hostedDomain = strtolower((string) $profile->json('hd'));
@@ -54,17 +64,29 @@ class WorkspaceAuthController extends Controller
             403,
             'Only verified accounts from an allowed Google Workspace domain may sign in.'
         );
-        $isFirst = User::query()->count() === 0;
+        $bootstrapEmail = strtolower(trim((string) config('services.google_workspace.bootstrap_admin_email', '')));
+        $shouldBootstrap = $bootstrapEmail !== ''
+            && hash_equals($bootstrapEmail, $email)
+            && User::query()->where('role', 'admin')->whereNull('disabled_at')->doesntExist();
         $user = User::updateOrCreate(['email' => $email], [
             'name' => $profile->json('name') ?: Str::before($email, '@'),
             'google_subject' => $profile->json('sub'), 'avatar_url' => $profile->json('picture'),
             'email_verified_at' => now(), 'last_login_at' => now(),
-            ...($isFirst ? ['role' => 'admin'] : []),
+            ...($shouldBootstrap ? ['role' => 'admin'] : []),
         ]);
+        abort_if($user->disabled_at, 403, 'This account has been disabled.');
         Auth::login($user, true);
         $request->session()->regenerate();
 
         return redirect()->away($frontend);
+    }
+
+    private function oauthFailure(string $frontend, string $message, array $context = [])
+    {
+        $reference = strtolower(Str::random(12));
+        Log::warning('Google Workspace OAuth failed.', ['reference' => $reference, ...$context]);
+
+        return redirect()->away($frontend.'/login?error='.urlencode($message.' Reference: '.$reference));
     }
 
     /** @return list<string> */

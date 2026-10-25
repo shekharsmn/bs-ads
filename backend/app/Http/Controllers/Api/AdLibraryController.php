@@ -7,8 +7,10 @@ use App\Jobs\RunAdLibraryScrapeJob;
 use App\Models\AdLibraryResult;
 use App\Models\AdLibraryRun;
 use App\Models\AdLibrarySearch;
+use App\Models\AdLibraryTag;
 use Illuminate\Http\Request;
 use Illuminate\Pagination\LengthAwarePaginator;
+use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
 
 class AdLibraryController extends Controller
@@ -16,11 +18,12 @@ class AdLibraryController extends Controller
     public function searches(Request $request)
     {
         $this->enabled();
-        $data = $request->validate(['company_type' => ['nullable', Rule::in($this->companyTypes())]]);
+        $data = $request->validate(['company_type' => ['nullable', Rule::in($this->companyTypes())], 'tag_id' => 'nullable|integer|exists:ad_library_tags,id']);
 
         return ['searches' => AdLibrarySearch::query()
             ->when($data['company_type'] ?? null, fn ($query, $type) => $query->where('company_type', $type))
-            ->withCount('runs')->latest()->get()];
+            ->when($data['tag_id'] ?? null, fn ($query, $id) => $query->whereHas('tags', fn ($tags) => $tags->whereKey($id)))
+            ->with('tags:id,name,slug')->withCount('runs')->latest()->get(), 'tags' => AdLibraryTag::query()->orderBy('name')->get(['id', 'name', 'slug'])];
     }
 
     public function store(Request $request)
@@ -92,9 +95,13 @@ class AdLibraryController extends Controller
             'per_page' => 'nullable|integer|min:1|max:100',
             'q' => 'nullable|string|max:100',
             'media_type' => ['nullable', Rule::in(['all', 'static', 'video'])],
+            'favorites' => 'nullable|boolean',
         ]);
 
+        $favoriteIds = $request->user()->belongsToMany(AdLibraryResult::class, 'ad_library_favorites')->pluck('ad_library_results.id');
+
         $rows = $run->results()
+            ->when($data['favorites'] ?? false, fn ($query) => $query->whereIn('id', $favoriteIds))
             ->when($data['q'] ?? null, fn ($q, $term) => $q->where(fn ($nested) => $nested
                 ->where('advertiser_name', 'like', "%{$term}%")
                 ->orWhere('body', 'like', "%{$term}%")
@@ -111,13 +118,14 @@ class AdLibraryController extends Controller
 
         $rawTotal = $rows->count();
         $creatives = $rows->groupBy(fn (AdLibraryResult $result) => $this->creativeFingerprint($result))
-            ->map(function ($variants, $fingerprint) {
+            ->map(function ($variants, $fingerprint) use ($favoriteIds) {
                 /** @var AdLibraryResult $primary */
                 $primary = $variants->first();
                 $payload = $primary->toArray();
                 $payload['creative_key'] = $fingerprint;
                 $payload['media_type'] = $this->mediaType($primary);
                 $payload['variant_count'] = $variants->count();
+                $payload['favorite'] = $variants->pluck('id')->intersect($favoriteIds)->isNotEmpty();
                 $payload['variants'] = $variants->map(fn (AdLibraryResult $variant) => [
                     'library_ad_id' => $variant->library_ad_id,
                     'product_url' => $variant->product_url,
@@ -243,6 +251,38 @@ class AdLibraryController extends Controller
         $run->delete();
 
         return response()->noContent();
+    }
+
+    public function storeTag(Request $request)
+    {
+        $this->enabled();
+        $this->manage($request);
+        $data = $request->validate(['name' => 'required|string|max:60']);
+        $name = trim($data['name']);
+
+        return response()->json(AdLibraryTag::firstOrCreate(['slug' => Str::slug($name)], ['name' => $name, 'created_by' => $request->user()->id]), 201);
+    }
+
+    public function syncTags(Request $request, AdLibrarySearch $search)
+    {
+        $this->enabled();
+        $this->manage($request);
+        $data = $request->validate(['tag_ids' => 'required|array|max:20', 'tag_ids.*' => 'integer|distinct|exists:ad_library_tags,id']);
+        $search->tags()->sync($data['tag_ids']);
+
+        return $search->load('tags:id,name,slug');
+    }
+
+    public function favorite(Request $request, AdLibraryResult $result)
+    {
+        $this->enabled();
+        $data = $request->validate(['favorite' => 'required|boolean']);
+        $request->user()->belongsToMany(AdLibraryResult::class, 'ad_library_favorites')->syncWithoutDetaching($data['favorite'] ? [$result->id] : []);
+        if (! $data['favorite']) {
+            $request->user()->belongsToMany(AdLibraryResult::class, 'ad_library_favorites')->detach($result->id);
+        }
+
+        return ['favorite' => $data['favorite']];
     }
 
     private function validateSearch(Request $request, bool $partial = false): array

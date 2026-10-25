@@ -3,8 +3,8 @@
 namespace Tests\Unit;
 
 use App\Services\AdLibraryAudit\SafePublicUrl;
-use App\Services\AdLibraryAudit\RetryableContextException;
 use App\Services\AdLibraryAudit\WebsiteContextCrawler;
+use App\Services\AdLibraryAudit\WebsiteContextFetchException;
 use Illuminate\Support\Facades\Http;
 use InvalidArgumentException;
 use Tests\TestCase;
@@ -30,10 +30,14 @@ class WebsiteContextCrawlerTest extends TestCase
     public function test_revalidates_redirect_host(): void
     {
         Http::fake(['https://brand.test/' => Http::response('', 302, ['Location' => 'https://outside.test/about'])]);
-        $crawler = new WebsiteContextCrawler(new class extends SafePublicUrl {
+        $crawler = new WebsiteContextCrawler(new class extends SafePublicUrl
+        {
             public function assert(string $url, ?string $requiredHost = null): string
             {
-                if ($requiredHost && parse_url($url, PHP_URL_HOST) !== $requiredHost) throw new InvalidArgumentException('cross origin');
+                if ($requiredHost && parse_url($url, PHP_URL_HOST) !== $requiredHost) {
+                    throw new InvalidArgumentException('cross origin');
+                }
+
                 return $url;
             }
         });
@@ -45,15 +49,15 @@ class WebsiteContextCrawlerTest extends TestCase
     {
         config(['ad_library_audit.crawl.max_bytes' => 20]);
         Http::fake(['https://brand.test/' => Http::response(str_repeat('x', 21), 200, ['Content-Type' => 'text/html'])]);
-        $this->expectException(InvalidArgumentException::class);
+        $this->expectException(WebsiteContextFetchException::class);
         (new WebsiteContextCrawler($this->permissiveValidator()))->crawl('https://brand.test/');
     }
 
-    public function test_treats_rate_limiting_as_retryable(): void
+    public function test_reports_rate_limiting_as_a_fetch_failure(): void
     {
         Http::fake(['https://brand.test/' => Http::response('Slow down', 429, ['Retry-After' => '60'])]);
 
-        $this->expectException(RetryableContextException::class);
+        $this->expectException(WebsiteContextFetchException::class);
         $this->expectExceptionCode(429);
 
         (new WebsiteContextCrawler($this->permissiveValidator()))->crawl('https://brand.test/');
@@ -61,8 +65,12 @@ class WebsiteContextCrawlerTest extends TestCase
 
     private function permissiveValidator(): SafePublicUrl
     {
-        return new class extends SafePublicUrl {
-            public function assert(string $url, ?string $requiredHost = null): string { return $url; }
+        return new class extends SafePublicUrl
+        {
+            public function assert(string $url, ?string $requiredHost = null): string
+            {
+                return $url;
+            }
         };
     }
 }

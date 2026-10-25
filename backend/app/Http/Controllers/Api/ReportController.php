@@ -5,13 +5,14 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Jobs\RunGoogleAuditJob;
 use App\Jobs\RunMetaAuditJob;
-use App\Models\Report;
-use App\Models\MetaAccount;
-use App\Models\GoogleAccount;
 use App\Models\AdAccount;
-use App\Services\ClientAccess;
+use App\Models\GoogleAccount;
+use App\Models\MetaAccount;
+use App\Models\Report;
 use App\Services\Audit\GoogleCheckMethodology;
 use App\Services\Audit\MetaCheckMethodology;
+use App\Services\ClientAccess;
+use App\Services\MethodologyRegistry;
 use Illuminate\Http\Request;
 use Illuminate\Support\Str;
 use Symfony\Component\HttpFoundation\StreamedResponse;
@@ -20,19 +21,24 @@ class ReportController extends Controller
 {
     public function index(Request $request)
     {
+        $data = $request->validate(['per_page' => 'nullable|integer|min:10|max:100']);
         $clientIds = ClientAccess::clientsFor($request->user())->pluck('id');
-        $reports = Report::query()->where(fn ($q) => $q->where('user_id', $request->user()->id)->orWhereIn('client_id', $clientIds))
+        $reports = Report::query()->where(fn ($q) => $q
+            ->whereIn('client_id', $clientIds)
+            ->orWhere(fn ($legacy) => $legacy->whereNull('client_id')->where('user_id', $request->user()->id)))
             ->with([
                 'metaAccount:id,label,account_name',
                 'googleAccount:id,label,customer_id,account_name',
                 'adAccount:id,name,external_id,platform',
             ])
             ->orderByDesc('created_at')
-            ->get(['id', 'client_id', 'ad_account_id', 'platform', 'meta_account_id', 'google_account_id', 'status', 'health_score', 'grade', 'period', 'error_message', 'started_at', 'completed_at', 'created_at']);
+            ->orderByDesc('id')
+            ->paginate($data['per_page'] ?? 25, ['id', 'client_id', 'ad_account_id', 'platform', 'meta_account_id', 'google_account_id', 'status', 'health_score', 'grade', 'period', 'error_message', 'started_at', 'completed_at', 'created_at']);
+
         return response()->json($reports);
     }
 
-    public function store(Request $request)
+    public function store(Request $request, MethodologyRegistry $methodologies)
     {
         if (! $request->has('platform') && $request->has('meta_account_id')) {
             $request->merge(['platform' => 'meta']);
@@ -54,6 +60,7 @@ class ReportController extends Controller
                 'user_id' => $request->user()->id, 'client_id' => $account->client_id, 'ad_account_id' => $account->id,
                 'platform' => $data['platform'], 'meta_account_id' => null, 'google_account_id' => null,
                 'status' => 'pending', 'period' => $data['period'] ?? 'last_30d',
+                ...$methodologies->columns('account-audit'),
             ]);
             $data['platform'] === 'meta' ? RunMetaAuditJob::dispatch($report->id) : RunGoogleAuditJob::dispatch($report->id);
         } elseif ($data['platform'] === 'meta') {
@@ -69,6 +76,7 @@ class ReportController extends Controller
                 'google_account_id' => null,
                 'status' => 'pending',
                 'period' => $data['period'] ?? 'last_30d',
+                ...$methodologies->columns('account-audit'),
             ]);
             RunMetaAuditJob::dispatch($report->id);
         } else {
@@ -84,6 +92,7 @@ class ReportController extends Controller
                 'google_account_id' => $account->id,
                 'status' => 'pending',
                 'period' => $data['period'] ?? 'last_30d',
+                ...$methodologies->columns('account-audit'),
             ]);
             RunGoogleAuditJob::dispatch($report->id);
         }
@@ -334,11 +343,16 @@ class ReportController extends Controller
     {
         $this->authorizeReport($request, $report);
         $report->delete();
+
         return response()->json(['message' => 'Report deleted']);
     }
+
     private function authorizeReport(Request $request, Report $report): void
     {
-        if ($report->user_id === $request->user()->id) return;
-        abort_unless($report->client_id && $request->user()->canAccessClient($report->client_id), 403);
+        $allowed = $report->client_id
+            ? $request->user()->canAccessClient($report->client_id)
+            : $report->user_id === $request->user()->id;
+
+        abort_unless($allowed, 403);
     }
 }

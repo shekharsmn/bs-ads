@@ -15,7 +15,9 @@ class GoogleChatNotifier
         $incident->loadMissing(['client', 'adAccount', 'campaign', 'assignee']);
         $client = $incident->client;
         $webhook = $client->google_chat_webhook;
-        if (! $webhook) return;
+        if (! $webhook) {
+            return;
+        }
 
         $internal = $client->chat_visibility === 'internal';
         $status = $event === 'recovered' ? 'Recovered' : 'Alert triggered';
@@ -46,12 +48,16 @@ class GoogleChatNotifier
         $this->post($client->google_chat_webhook, 'test-'.$client->id, ['text' => "Brandshark reporting is connected for {$client->name}."]);
     }
 
-    public function sendReport(ReportRun $run): void
+    public function sendReport(ReportRun $run): bool
     {
         $run->loadMissing('client');
-        if (! $run->client->google_chat_webhook) return;
+        if (! $run->client->google_chat_webhook) {
+            return false;
+        }
         $url = rtrim(config('app.frontend_url', config('app.url')), '/').'/shared/reports/'.$run->public_token;
         $this->post($run->client->google_chat_webhook, 'report-'.$run->id, ['text' => ucfirst($run->frequency)." performance report for {$run->client->name}: {$url}"]);
+
+        return true;
     }
 
     private function post(string $webhook, string $threadKey, array $payload): void

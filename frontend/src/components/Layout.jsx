@@ -1,168 +1,89 @@
+import { useState } from 'react'
 import { NavLink, Outlet, useNavigate } from 'react-router-dom'
-import { useAuth } from '../context/AuthContext'
+import { useQuery } from '@tanstack/react-query'
 import {
-  LayoutDashboard, PlayCircle, LogOut,
-  BarChart3, ChevronRight, User, Search, Cpu, Building2, BellRing, SlidersHorizontal, CalendarClock, Cable, LibraryBig, Settings,
+  BarChart3, BellRing, Building2, Cable, CalendarClock, ChevronDown, ChevronRight,
+  Activity, ClipboardCheck, Cpu, LibraryBig, LogOut, Menu, PlayCircle, Search, Settings,
+  ShieldCheck, SlidersHorizontal, User, X,
 } from 'lucide-react'
+import { api } from '../api/client'
+import { useAuth } from '../context/AuthContext'
+import { ToastProvider } from '../context/ToastContext'
+import { WorkspaceProvider, useWorkspace } from '../context/WorkspaceContext'
+import ActivityCenter from './ActivityCenter'
+import OnboardingChecklist from './OnboardingChecklist'
 
-const navItems = [
-  { to: '/', icon: LayoutDashboard, label: 'Command Center', exact: true },
-  { to: '/alerts', icon: BellRing, label: 'Alert Inbox' },
-  { to: '/alert-rules', icon: SlidersHorizontal, label: 'Alert Policies' },
-  { to: '/clients', icon: Building2, label: 'Clients' },
-  { to: '/connections', icon: Cable, label: 'Ad Platforms' },
-  { to: '/scheduled-reports', icon: CalendarClock, label: 'Reports' },
-  { to: '/reports/new', icon: PlayCircle, label: 'Run Audit' },
-  { to: '/inspector', icon: Search, label: 'Data Inspector' },
-  { to: '/ai-logs', icon: Cpu, label: 'AI Request Log' },
-  { to: '/ad-library', icon: LibraryBig, label: 'Ad Library', feature: 'ad_library' },
-  { to: '/settings/ai-models', icon: Settings, label: 'Settings', adminOnly: true },
+const navGroups = [
+  { label: 'Operate', items: [
+    { to: '/', icon: BarChart3, label: 'Command Center', exact: true },
+    { to: '/alerts', icon: BellRing, label: 'Alert Inbox' },
+    { to: '/alert-rules', icon: SlidersHorizontal, label: 'Alert Policies' },
+  ] },
+  { label: 'Research', items: [
+    { to: '/ad-library', icon: LibraryBig, label: 'Ad Library', feature: 'ad_library' },
+    { to: '/ad-library/audits', icon: ClipboardCheck, label: 'Content Audits', feature: 'ad_library' },
+    { to: '/reports/new', icon: PlayCircle, label: 'Account Audits' },
+    { to: '/inspector', icon: Search, label: 'Data Inspector' },
+  ] },
+  { label: 'Deliver', items: [
+    { to: '/scheduled-reports', icon: CalendarClock, label: 'Reports' },
+  ] },
+  { label: 'Configure', items: [
+    { to: '/clients', icon: Building2, label: 'Clients' },
+    { to: '/connections', icon: Cable, label: 'Connections' },
+    { to: '/data-health', icon: Activity, label: 'Data Health' },
+    { to: '/ai-logs', icon: Cpu, label: 'AI Usage', adminOnly: true },
+    { to: '/ai-governance', icon: Cpu, label: 'AI Governance', adminOnly: true },
+    { to: '/governance', icon: ShieldCheck, label: 'Governance', adminOnly: true },
+    { to: '/settings/ai-models', icon: Settings, label: 'Settings', adminOnly: true },
+  ] },
 ]
 
 export default function Layout() {
+  return <ToastProvider><WorkspaceProvider><AppShell /></WorkspaceProvider></ToastProvider>
+}
+
+function AppShell() {
   const { user, features, logout } = useAuth()
+  const { clients, clientId, range, startDate, endDate, isResearch, updateContext } = useWorkspace()
   const navigate = useNavigate()
+  const [mobileOpen, setMobileOpen] = useState(false)
+  const [activitiesOpen, setActivitiesOpen] = useState(false)
+  const onboarding = useQuery({ queryKey: ['onboarding'], queryFn: () => api.getOnboarding().then(r => r.data), enabled: user?.role === 'admin', staleTime: 60_000 })
 
-  const handleLogout = async () => {
-    await logout()
-    navigate('/login')
-  }
+  const handleLogout = async () => { await logout(); navigate('/login') }
+  const filteredGroups = navGroups.map(group => ({ ...group, items: group.items.filter(item => (!item.feature || features?.[item.feature]) && (!item.adminOnly || user?.role === 'admin')) })).filter(group => group.items.length)
 
-  return (
-    <div style={{ display: 'flex', height: '100vh', overflow: 'hidden' }}>
-      {/* Sidebar */}
-      <aside style={{
-        width: '220px',
-        minWidth: '220px',
-        background: '#0a0f1e',
-        display: 'flex',
-        flexDirection: 'column',
-        borderRight: '1px solid rgba(255,255,255,0.06)',
-        position: 'relative',
-        overflow: 'hidden',
-      }}>
-        {/* Background texture */}
-        <div style={{
-          position: 'absolute', inset: 0, opacity: 0.03,
-          backgroundImage: `repeating-linear-gradient(45deg, #fff 0, #fff 1px, transparent 0, transparent 50%)`,
-          backgroundSize: '8px 8px',
-          pointerEvents: 'none',
-        }} />
+  return <div className="app-shell">
+    <button className="mobile-menu-button" onClick={() => setMobileOpen(true)} aria-label="Open navigation"><Menu size={19}/></button>
+    {mobileOpen && <button className="sidebar-scrim" aria-label="Close navigation" onClick={() => setMobileOpen(false)}/>}
+    <aside className={`app-sidebar ${mobileOpen ? 'open' : ''}`}>
+      <div className="brand-lockup"><span><BarChart3 size={17}/></span><div><strong>Pulse</strong><small>Ad intelligence</small></div><button onClick={() => setMobileOpen(false)} aria-label="Close navigation"><X size={17}/></button></div>
+      <nav className="grouped-nav" aria-label="Primary navigation">
+        {filteredGroups.map(group => <section key={group.label}><p>{group.label}</p>{group.items.map(item => {
+          const Icon = item.icon
+          return <NavLink key={item.to} to={item.to} end={item.exact} onClick={() => setMobileOpen(false)}><Icon size={15}/><span>{item.label}</span><ChevronRight size={12}/></NavLink>
+        })}</section>)}
+      </nav>
+      <div className="sidebar-user"><span><User size={14}/></span><div><strong>{user?.name}</strong><small>{user?.role}</small></div><button onClick={handleLogout} aria-label="Sign out"><LogOut size={14}/></button></div>
+    </aside>
 
-        {/* Logo */}
-        <div style={{
-          padding: '24px 20px 20px',
-          borderBottom: '1px solid rgba(255,255,255,0.06)',
-        }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-            <div style={{
-              width: 32, height: 32,
-              background: 'linear-gradient(135deg, #3b82f6, #1d4ed8)',
-              borderRadius: 8,
-              display: 'flex', alignItems: 'center', justifyContent: 'center',
-              boxShadow: '0 0 16px rgba(59,130,246,0.4)',
-            }}>
-              <BarChart3 size={16} color="white" strokeWidth={2.5} />
-            </div>
-            <span style={{
-              fontFamily: 'Syne, sans-serif',
-              fontSize: '18px',
-              fontWeight: 700,
-              color: 'white',
-              letterSpacing: '-0.02em',
-            }}>
-              Pulse
-            </span>
-          </div>
+    <main className="app-main">
+      <header className="workspace-bar">
+        <div className="workspace-context">
+          {isResearch ? <div className="context-scope"><LibraryBig size={15}/><span><small>Scope</small><strong>Company research</strong></span></div> : <label><span>Client</span><select value={clientId} onChange={event => updateContext({ client_id: event.target.value })}>{clients.map(client => <option key={client.id} value={client.id}>{client.name}</option>)}</select><ChevronDown size={13}/></label>}
+          {!isResearch && <label><span>Period</span><select value={range} onChange={event => {
+            const value = event.target.value
+            const end = new Date(); const start = new Date(); start.setDate(end.getDate() - (value === '7d' ? 6 : value === '90d' ? 89 : 29))
+            updateContext({ range: value, start_date: start.toISOString().slice(0, 10), end_date: end.toISOString().slice(0, 10) })
+          }}><option value="7d">Last 7 days</option><option value="30d">Last 30 days</option><option value="90d">Last 90 days</option><option value="custom">Custom</option></select><ChevronDown size={13}/></label>}
+          {!isResearch && range === 'custom' && <div className="context-dates"><input type="date" value={startDate} onChange={event => updateContext({ start_date: event.target.value })}/><span>to</span><input type="date" value={endDate} onChange={event => updateContext({ end_date: event.target.value })}/></div>}
         </div>
-
-        {/* Nav */}
-        <nav style={{ flex: 1, padding: '16px 12px', display: 'flex', flexDirection: 'column', gap: '4px' }}>
-          <p style={{
-            fontSize: '10px', fontWeight: 600, color: 'rgba(255,255,255,0.3)',
-            letterSpacing: '0.1em', textTransform: 'uppercase',
-            padding: '0 8px', marginBottom: '8px', marginTop: 0,
-          }}>Operations</p>
-
-          {navItems.filter(item => (!item.feature || features?.[item.feature]) && (!item.adminOnly || user?.role === 'admin')).map((item) => {
-            const NavIcon = item.icon
-            return <NavLink
-              key={item.to}
-              to={item.to}
-              end={item.exact}
-              style={({ isActive }) => ({
-                display: 'flex',
-                alignItems: 'center',
-                gap: '10px',
-                padding: '9px 12px',
-                borderRadius: '8px',
-                textDecoration: 'none',
-                fontSize: '13.5px',
-                fontWeight: 500,
-                transition: 'all 0.15s ease',
-                borderLeft: isActive ? '2px solid #3b82f6' : '2px solid transparent',
-                background: isActive
-                  ? 'linear-gradient(135deg, rgba(59,130,246,0.15), rgba(59,130,246,0.05))'
-                  : 'transparent',
-                color: isActive ? '#93c5fd' : 'rgba(255,255,255,0.5)',
-                paddingLeft: isActive ? '10px' : '12px',
-              })}
-            >
-              <NavIcon size={15} strokeWidth={2} />
-              <span>{item.label}</span>
-              <ChevronRight size={12} style={{ marginLeft: 'auto', opacity: 0.35 }} />
-            </NavLink>
-          })}
-        </nav>
-
-        {/* User section */}
-        <div style={{
-          padding: '16px 12px',
-          borderTop: '1px solid rgba(255,255,255,0.06)',
-        }}>
-          <div style={{
-            display: 'flex', alignItems: 'center', gap: '10px',
-            padding: '8px 10px', borderRadius: 8,
-          }}>
-            <div style={{
-              width: 28, height: 28, borderRadius: '50%',
-              background: 'linear-gradient(135deg, #1e3a5f, #1d4ed8)',
-              display: 'flex', alignItems: 'center', justifyContent: 'center',
-              flexShrink: 0,
-            }}>
-              <User size={13} color="rgba(255,255,255,0.8)" />
-            </div>
-            <div style={{ minWidth: 0 }}>
-              <p style={{ margin: 0, fontSize: '12px', fontWeight: 600, color: 'rgba(255,255,255,0.8)', truncate: true }}>
-                {user?.name?.split(' ')[0]}
-              </p>
-              <p style={{ margin: 0, fontSize: '10px', color: 'rgba(255,255,255,0.3)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                {user?.email}
-              </p>
-            </div>
-          </div>
-          <button
-            onClick={handleLogout}
-            style={{
-              display: 'flex', alignItems: 'center', gap: '8px',
-              width: '100%', padding: '8px 10px', marginTop: '4px',
-              background: 'transparent', border: 'none', cursor: 'pointer',
-              borderRadius: 8, color: 'rgba(255,255,255,0.3)', fontSize: '12px',
-              fontFamily: 'inherit', transition: 'all 0.15s',
-            }}
-            onMouseEnter={e => { e.currentTarget.style.background = 'rgba(244,63,94,0.1)'; e.currentTarget.style.color = '#fb7185' }}
-            onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = 'rgba(255,255,255,0.3)' }}
-          >
-            <LogOut size={13} />
-            Sign out
-          </button>
-        </div>
-      </aside>
-
-      {/* Main content */}
-      <main style={{ flex: 1, overflow: 'auto', background: '#f8fafc' }}>
-        <Outlet />
-      </main>
-    </div>
-  )
+        <button className="activity-trigger" onClick={() => setActivitiesOpen(true)}><span><BellRing size={15}/>{user?.role === 'admin' && onboarding.data && onboarding.data.completed < onboarding.data.total ? <i/> : null}</span>Activity</button>
+      </header>
+      {user?.role === 'admin' && onboarding.data?.completed < onboarding.data?.total && <OnboardingChecklist data={onboarding.data}/>}
+      <div className="app-content"><Outlet /></div>
+    </main>
+    <ActivityCenter open={activitiesOpen} onClose={() => setActivitiesOpen(false)}/>
+  </div>
 }

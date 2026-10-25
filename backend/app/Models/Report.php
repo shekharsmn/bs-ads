@@ -12,6 +12,7 @@ class Report extends Model
         'cancel_requested_at', 'cancelled_at',
         'gemini_input_tokens', 'gemini_output_tokens', 'google_snapshot',
         'public_token', 'meta_snapshot',
+        'methodology_key', 'methodology_version', 'methodology_snapshot',
     ];
 
     protected $casts = [
@@ -21,6 +22,7 @@ class Report extends Model
         'cancelled_at' => 'datetime',
         'google_snapshot' => 'array',
         'meta_snapshot' => 'array',
+        'methodology_snapshot' => 'array',
     ];
 
     public function user()

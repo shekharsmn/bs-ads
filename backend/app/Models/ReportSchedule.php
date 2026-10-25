@@ -6,7 +6,15 @@ use Illuminate\Database\Eloquent\Model;
 
 class ReportSchedule extends Model
 {
-    protected $fillable = ['client_id', 'frequency', 'weekday', 'day_of_month', 'local_time', 'enabled'];
-    protected function casts(): array { return ['enabled' => 'boolean']; }
-    public function client() { return $this->belongsTo(Client::class); }
+    protected $fillable = ['client_id', 'report_template_id', 'frequency', 'weekday', 'day_of_month', 'local_time', 'enabled'];
+
+    protected function casts(): array
+    {
+        return ['enabled' => 'boolean'];
+    }
+
+    public function client()
+    {
+        return $this->belongsTo(Client::class);
+    }
 }

@@ -16,6 +16,7 @@ class AdLibraryAudit extends Model
             'progress_total' => 'integer', 'progress_completed' => 'integer', 'progress_failed' => 'integer',
             'input_tokens' => 'integer', 'output_tokens' => 'integer', 'estimated_cost' => 'decimal:6',
             'personas_confirmed_at' => 'datetime', 'grid_confirmed_at' => 'datetime', 'completed_at' => 'datetime',
+            'methodology_snapshot' => 'array',
         ];
     }
 

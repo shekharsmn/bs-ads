@@ -26,6 +26,8 @@ class User extends Authenticatable
         'role',
         'avatar_url',
         'last_login_at',
+        'disabled_at',
+        'disabled_by',
     ];
 
     /**
@@ -50,6 +52,7 @@ class User extends Authenticatable
             'password' => 'hashed',
             'role' => UserRole::class,
             'last_login_at' => 'datetime',
+            'disabled_at' => 'datetime',
         ];
     }
 
@@ -75,12 +78,12 @@ class User extends Authenticatable
 
     public function isAdmin(): bool
     {
-        return $this->role === UserRole::Admin;
+        return $this->role === UserRole::Admin && ! $this->disabled_at;
     }
 
     public function canManage(): bool
     {
-        return $this->role?->canManage() ?? false;
+        return ! $this->disabled_at && ($this->role?->canManage() ?? false);
     }
 
     public function canAccessClient(int $clientId): bool

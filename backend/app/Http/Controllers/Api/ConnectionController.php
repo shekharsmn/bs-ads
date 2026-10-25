@@ -68,10 +68,11 @@ class ConnectionController extends Controller
             }, $accounts);
             $connection->update(['status' => 'healthy', 'last_synced_at' => now(), 'last_healthy_at' => now(), 'last_error' => null]);
 
-            return ['accounts' => $accounts];
+            return ['accounts' => $accounts, 'warnings' => $connection->platform->value === 'google' ? $googleDiscovery->warnings() : []];
         } catch (\Throwable $e) {
             $connection->update(['status' => 'error', 'last_synced_at' => now(), 'last_error' => $e->getMessage()]);
-            throw $e;
+
+            return response()->json(['message' => $e->getMessage()], 422);
         }
     }
 
@@ -79,6 +80,7 @@ class ConnectionController extends Controller
     {
         abort_unless($request->user()->isAdmin(), 403);
         $data = $request->validate(['client_id' => 'required|exists:clients,id', 'external_id' => 'required|string', 'manager_external_id' => 'nullable|string', 'name' => 'required|string', 'currency' => 'required|string|size:3', 'timezone' => 'required|timezone:all_with_bc', 'monthly_budget' => 'nullable|numeric|min:0']);
+        $this->ensureClientAssignment($connection, (int) $data['client_id']);
         $account = AdAccount::updateOrCreate(['platform_connection_id' => $connection->id, 'external_id' => $data['external_id']], $data + ['platform' => $connection->platform->value, 'status' => 'active']);
 
         return response()->json($account, 201);
@@ -97,6 +99,9 @@ class ConnectionController extends Controller
             'accounts.*.timezone' => 'required|timezone:all_with_bc',
             'accounts.*.monthly_budget' => 'nullable|numeric|min:0',
         ]);
+        foreach ($data['accounts'] as $account) {
+            $this->ensureClientAssignment($connection, (int) $account['client_id']);
+        }
 
         $accounts = DB::transaction(function () use ($connection, $data) {
             return collect($data['accounts'])->map(function (array $account) use ($connection) {
@@ -108,6 +113,21 @@ class ConnectionController extends Controller
         });
 
         return response()->json(['accounts' => $accounts], 201);
+    }
+
+    public function destroy(Request $request, PlatformConnection $connection)
+    {
+        abort_unless($request->user()->isAdmin(), 403);
+        $connection->delete();
+
+        return response()->noContent();
+    }
+
+    private function ensureClientAssignment(PlatformConnection $connection, int $clientId): void
+    {
+        if ($connection->scope === 'client' && (int) $connection->client_id !== $clientId) {
+            abort(422, 'A client-specific connection can only assign accounts to its selected client.');
+        }
     }
 
     private function discoverMeta(PlatformConnection $connection): array

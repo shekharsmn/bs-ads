@@ -2,9 +2,10 @@
 
 namespace App\Services;
 
-use App\Models\MetricSnapshot;
+use App\Models\Campaign;
 use Carbon\CarbonImmutable;
-use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Database\Query\Builder;
+use Illuminate\Support\Facades\DB;
 
 class MetricsQueryService
 {
@@ -12,57 +13,74 @@ class MetricsQueryService
 
     public function summary(array $filters): array
     {
-        $rows = $this->baseQuery($filters)->get();
-        $currencies = $rows->groupBy('currency')->map(function ($currencyRows, $currency) {
-            $totals = [];
-            foreach (self::SUM_COLUMNS as $column) {
-                $totals[$column] = (float) $currencyRows->sum($column);
-            }
-            return ['currency' => $currency, 'metrics' => MetricCalculator::derived($totals)];
-        })->values();
+        $rows = $this->aggregateQuery($filters, ['metric_snapshots.currency'])->get();
+        $currencies = $rows->map(fn ($row) => ['currency' => $row->currency, 'metrics' => MetricCalculator::derived($this->totals($row))])->values();
 
-        return $this->envelope($filters, $rows->max('collected_at'), ['currencies' => $currencies]);
+        return $this->envelope($filters, $rows->max('freshness'), ['currencies' => $currencies]);
     }
 
     public function trends(array $filters): array
     {
-        $rows = $this->baseQuery($filters)->get();
-        $series = $rows->groupBy(fn ($row) => $row->currency.'|'.$row->metric_date->toDateString())
-            ->map(function ($dateRows, $key) {
-                [$currency, $date] = explode('|', $key, 2);
-                $totals = [];
-                foreach (self::SUM_COLUMNS as $column) $totals[$column] = (float) $dateRows->sum($column);
-                return ['date' => $date, 'currency' => $currency, 'metrics' => MetricCalculator::derived($totals)];
-            })->sortBy('date')->values();
+        $rows = $this->aggregateQuery($filters, ['metric_snapshots.currency', 'metric_snapshots.metric_date'])
+            ->orderBy('metric_snapshots.metric_date')->get();
+        $series = $rows->map(fn ($row) => [
+            'date' => CarbonImmutable::parse($row->metric_date)->toDateString(),
+            'currency' => $row->currency,
+            'metrics' => MetricCalculator::derived($this->totals($row)),
+        ])->values();
 
-        return $this->envelope($filters, $rows->max('collected_at'), ['series' => $series]);
+        return $this->envelope($filters, $rows->max('freshness'), ['series' => $series]);
     }
 
     public function campaigns(array $filters): array
     {
         $filters['scope'] = 'campaign';
-        $rows = $this->baseQuery($filters)->with('campaign:id,name,external_id,status,type')->get();
-        $items = $rows->groupBy('campaign_id')->map(function ($campaignRows) {
-            $first = $campaignRows->first();
-            $totals = [];
-            foreach (self::SUM_COLUMNS as $column) $totals[$column] = (float) $campaignRows->sum($column);
-            return ['campaign' => $first->campaign, 'currency' => $first->currency, 'metrics' => MetricCalculator::derived($totals)];
-        })->values();
-        return $this->envelope($filters, $rows->max('collected_at'), ['campaigns' => $items]);
+        $rows = $this->aggregateQuery($filters, ['metric_snapshots.campaign_id', 'metric_snapshots.currency'])->get();
+        $campaigns = Campaign::query()->whereIn('id', $rows->pluck('campaign_id')->filter()->unique())
+            ->get(['id', 'name', 'external_id', 'status', 'type'])->keyBy('id');
+        $items = $rows->map(fn ($row) => [
+            'campaign' => $campaigns->get($row->campaign_id),
+            'currency' => $row->currency,
+            'metrics' => MetricCalculator::derived($this->totals($row)),
+        ])->values();
+
+        return $this->envelope($filters, $rows->max('freshness'), ['campaigns' => $items]);
+    }
+
+    private function aggregateQuery(array $filters, array $groups): Builder
+    {
+        $query = $this->baseQuery($filters)->select($groups)->selectRaw('MAX(metric_snapshots.collected_at) as freshness');
+        foreach (self::SUM_COLUMNS as $column) {
+            $query->selectRaw("SUM(metric_snapshots.{$column}) as {$column}");
+        }
+
+        return $query->groupBy($groups);
     }
 
     private function baseQuery(array $filters): Builder
     {
-        return MetricSnapshot::query()
-            ->whereHas('adAccount', fn (Builder $q) => $q->where('client_id', $filters['client_id']))
-            ->where('scope', $filters['scope'] ?? 'account')
-            ->when($filters['ad_account_id'] ?? null, fn (Builder $q, $id) => $q->where('ad_account_id', $id))
-            ->whereBetween('metric_date', [$filters['start_date'], $filters['end_date']]);
+        return DB::table('metric_snapshots')
+            ->join('ad_accounts', 'ad_accounts.id', '=', 'metric_snapshots.ad_account_id')
+            ->where('ad_accounts.client_id', $filters['client_id'])
+            ->where('metric_snapshots.scope', $filters['scope'] ?? 'account')
+            ->when($filters['ad_account_id'] ?? null, fn (Builder $query, $id) => $query->where('metric_snapshots.ad_account_id', $id))
+            ->whereBetween('metric_snapshots.metric_date', [$filters['start_date'], $filters['end_date']]);
+    }
+
+    private function totals(object $row): array
+    {
+        $totals = [];
+        foreach (self::SUM_COLUMNS as $column) {
+            $totals[$column] = (float) $row->{$column};
+        }
+
+        return $totals;
     }
 
     private function envelope(array $filters, mixed $freshness, array $payload): array
     {
         $client = $filters['client'];
+
         return array_merge([
             'scope' => ['client_id' => $client->id, 'ad_account_id' => $filters['ad_account_id'] ?? null, 'level' => $filters['scope'] ?? 'account'],
             'reporting_dates' => ['start' => $filters['start_date'], 'end' => $filters['end_date']],

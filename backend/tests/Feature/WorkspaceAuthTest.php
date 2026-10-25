@@ -15,6 +15,7 @@ class WorkspaceAuthTest extends TestCase
     public function test_first_verified_workspace_user_becomes_admin(): void
     {
         config()->set('services.google_workspace.allowed_domains', ['brandshark.com']);
+        config()->set('services.google_workspace.bootstrap_admin_email', 'owner@brandshark.com');
         config()->set('services.google_workspace.frontend_url', 'http://frontend.test');
         Cache::put('workspace_sso:valid', true);
         Http::fake([
@@ -25,6 +26,52 @@ class WorkspaceAuthTest extends TestCase
         $this->get('/api/auth/google/callback?state=valid&code=code')->assertRedirect('http://frontend.test');
         $this->assertAuthenticated();
         $this->assertSame('admin', User::first()->role->value);
+    }
+
+    public function test_first_user_stays_viewer_when_they_are_not_the_configured_bootstrap_admin(): void
+    {
+        config()->set('services.google_workspace.allowed_domains', ['brandshark.com']);
+        config()->set('services.google_workspace.bootstrap_admin_email', 'admin@brandshark.com');
+        config()->set('services.google_workspace.frontend_url', 'http://frontend.test');
+        Cache::put('workspace_sso:valid', true);
+        Http::fake([
+            'https://oauth2.googleapis.com/token' => Http::response(['access_token' => 'token']),
+            'https://openidconnect.googleapis.com/v1/userinfo' => Http::response(['sub' => 'google-viewer', 'email' => 'viewer@brandshark.com', 'email_verified' => true, 'hd' => 'brandshark.com', 'name' => 'Viewer']),
+        ]);
+
+        $this->get('/api/auth/google/callback?state=valid&code=code')->assertRedirect('http://frontend.test');
+
+        $this->assertSame('viewer', User::first()->role->value);
+    }
+
+    public function test_workspace_oauth_failure_does_not_expose_provider_response_content(): void
+    {
+        config()->set('services.google_workspace.frontend_url', 'http://frontend.test');
+        Cache::put('workspace_sso:valid', true);
+        Http::fake(['https://oauth2.googleapis.com/token' => Http::response('provider-secret-detail', 500)]);
+
+        $response = $this->get('/api/auth/google/callback?state=valid&code=code')->assertRedirect();
+        $location = (string) $response->headers->get('Location');
+
+        $this->assertStringContainsString('Reference%3A', $location);
+        $this->assertStringNotContainsString('provider-secret-detail', $location);
+    }
+
+    public function test_bootstrap_email_does_not_override_roles_after_an_admin_exists(): void
+    {
+        User::factory()->create(['role' => 'admin']);
+        config()->set('services.google_workspace.allowed_domains', ['brandshark.com']);
+        config()->set('services.google_workspace.bootstrap_admin_email', 'bootstrap@brandshark.com');
+        config()->set('services.google_workspace.frontend_url', 'http://frontend.test');
+        Cache::put('workspace_sso:valid', true);
+        Http::fake([
+            'https://oauth2.googleapis.com/token' => Http::response(['access_token' => 'token']),
+            'https://openidconnect.googleapis.com/v1/userinfo' => Http::response(['sub' => 'google-bootstrap', 'email' => 'bootstrap@brandshark.com', 'email_verified' => true, 'hd' => 'brandshark.com', 'name' => 'Bootstrap']),
+        ]);
+
+        $this->get('/api/auth/google/callback?state=valid&code=code')->assertRedirect('http://frontend.test');
+
+        $this->assertSame('viewer', User::where('email', 'bootstrap@brandshark.com')->firstOrFail()->role->value);
     }
 
     public function test_non_workspace_domain_is_rejected(): void

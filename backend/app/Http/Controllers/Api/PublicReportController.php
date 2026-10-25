@@ -35,6 +35,9 @@ class PublicReportController extends Controller
             ? GoogleCheckMethodology::all()
             : MetaCheckMethodology::all();
 
-        return response()->json($payload);
+        return response()->json($payload)->withHeaders([
+            'Cache-Control' => 'private, no-store, max-age=0',
+            'Pragma' => 'no-cache',
+        ]);
     }
 }

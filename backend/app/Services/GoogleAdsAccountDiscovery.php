@@ -8,11 +8,15 @@ use Google\Ads\GoogleAds\V23\Services\SearchGoogleAdsStreamRequest;
 
 class GoogleAdsAccountDiscovery
 {
+    /** @var list<string> */
+    private array $warnings = [];
+
     /**
      * @return list<array<string, mixed>>
      */
     public function discover(PlatformConnection $connection): array
     {
+        $this->warnings = [];
         $refreshToken = $connection->credentials['refresh_token'] ?? null;
         if (! $refreshToken) {
             throw new \RuntimeException('Google Ads connection has no refresh token. Reconnect it with Google.');
@@ -27,22 +31,31 @@ class GoogleAdsAccountDiscovery
 
         $accounts = [];
         foreach ($rootIds as $rootId) {
-            $rootClient = GoogleAdsClientFactory::fromRefreshToken($refreshToken, $rootId);
-            $root = $this->customer($rootClient, $rootId);
-            $this->keepPreferred($accounts, $root + [
-                'level' => 0,
-                'manager_external_id' => null,
-            ]);
-
-            if (! $root['is_manager']) {
-                continue;
-            }
-
-            foreach ($this->hierarchy($rootClient, $rootId) as $account) {
-                $this->keepPreferred($accounts, $account + [
-                    'manager_external_id' => $account['external_id'] === $rootId ? null : $rootId,
+            try {
+                $rootClient = GoogleAdsClientFactory::fromRefreshToken($refreshToken, $rootId);
+                $root = $this->customer($rootClient, $rootId);
+                $this->keepPreferred($accounts, $root + [
+                    'level' => 0,
+                    'manager_external_id' => null,
                 ]);
+
+                if (! $root['is_manager']) {
+                    continue;
+                }
+
+                foreach ($this->hierarchy($rootClient, $rootId) as $account) {
+                    $this->keepPreferred($accounts, $account + [
+                        'manager_external_id' => $account['external_id'] === $rootId ? null : $rootId,
+                    ]);
+                }
+            } catch (\Throwable $error) {
+                $this->warnings[] = $this->rootWarning($rootId, $error);
             }
+        }
+
+        if ($accounts === []) {
+            $details = $this->warnings !== [] ? ' '.implode(' ', $this->warnings) : '';
+            throw new \RuntimeException('Google Ads did not return any enabled accounts for this login.'.$details);
         }
 
         $accounts = array_values($accounts);
@@ -54,6 +67,12 @@ class GoogleAdsAccountDiscovery
         });
 
         return $accounts;
+    }
+
+    /** @return list<string> */
+    public function warnings(): array
+    {
+        return $this->warnings;
     }
 
     /** @return array<string, mixed> */
@@ -117,5 +136,18 @@ class GoogleAdsAccountDiscovery
         if (! $current || (($current['manager_external_id'] ?? null) !== null && ($candidate['manager_external_id'] ?? null) === null)) {
             $accounts[$id] = $candidate;
         }
+    }
+
+    private function rootWarning(string $customerId, \Throwable $error): string
+    {
+        $message = $error->getMessage();
+        if (str_contains($message, 'CUSTOMER_NOT_ENABLED')) {
+            return "Customer {$customerId} is not enabled or has been deactivated in Google Ads, so it was skipped.";
+        }
+        if (str_contains($message, 'USER_PERMISSION_DENIED')) {
+            return "Customer {$customerId} could not be opened through the selected Google Ads login. Check the manager-account access path.";
+        }
+
+        return "Customer {$customerId} could not be inspected: ".mb_substr($message, 0, 500);
     }
 }

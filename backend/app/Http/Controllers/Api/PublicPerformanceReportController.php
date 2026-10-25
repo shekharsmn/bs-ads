@@ -11,6 +11,9 @@ class PublicPerformanceReportController extends Controller
     {
         $run = ReportRun::where('public_token', $token)->where('status', 'complete')->firstOrFail();
         abort_if(! $run->expires_at || $run->expires_at->isPast(), 410, 'This report link has expired.');
-        return ['frequency' => $run->frequency, 'period_start' => $run->period_start, 'period_end' => $run->period_end, 'generated_at' => $run->generated_at, 'expires_at' => $run->expires_at, 'snapshot' => $run->snapshot];
+        return response()->json(['frequency' => $run->frequency, 'period_start' => $run->period_start, 'period_end' => $run->period_end, 'generated_at' => $run->generated_at, 'expires_at' => $run->expires_at, 'snapshot' => $run->snapshot])->withHeaders([
+            'Cache-Control' => 'private, no-store, max-age=0',
+            'Pragma' => 'no-cache',
+        ]);
     }
 }
