@@ -5,6 +5,7 @@ import { AuthProvider, useAuth } from './context/AuthContext'
 import Layout from './components/Layout'
 
 const LoginPage = lazy(() => import('./pages/LoginPage'))
+const PrivacyPolicyPage = lazy(() => import('./pages/PrivacyPolicyPage'))
 const Dashboard = lazy(() => import('./pages/Dashboard'))
 const RunAuditPage = lazy(() => import('./pages/RunAuditPage'))
 const ReportPage = lazy(() => import('./pages/ReportPage'))
@@ -70,6 +71,7 @@ export default function App() {
       <BrowserRouter><Suspense fallback={<RouteFallback/>}>
         <AuthProvider>
           <Routes>
+            <Route path="/privacy-policy" element={<PrivacyPolicyPage />} />
             <Route path="/share/reports/:token" element={<PublicReportPage />} />
             <Route path="/shared/reports/:token" element={<PublicPerformanceReportPage />} />
             <Route path="/login" element={<GuestRoute><LoginPage /></GuestRoute>} />

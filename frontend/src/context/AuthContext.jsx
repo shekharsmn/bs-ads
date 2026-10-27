@@ -4,7 +4,7 @@ import { api } from '../api/client'
 const AuthContext = createContext(null)
 
 export function AuthProvider({ children }) {
-  const isPublicShare = window.location.pathname.startsWith('/share/') || window.location.pathname.startsWith('/shared/')
+  const isPublicShare = window.location.pathname === '/privacy-policy' || window.location.pathname.startsWith('/share/') || window.location.pathname.startsWith('/shared/')
   const [user, setUser] = useState(null)
   const [permissions, setPermissions] = useState({})
   const [features, setFeatures] = useState({})
