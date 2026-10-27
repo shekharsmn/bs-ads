@@ -64,7 +64,14 @@ describe('Ad Library audit workflow', () => {
     renderPage('/ad-library/audits/12?stage=context')
     expect(await screen.findByText('Approve brand context')).toBeInTheDocument()
     expect(screen.getByText('Approved public summary')).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: /^Final report$/ })).toHaveAttribute('href', '/ad-library/audits/12/report')
     expect(within(screen.getByRole('navigation', { name: 'Audit stages' })).getByRole('button', { name: /Context/ })).toHaveAttribute('aria-current', 'step')
+  })
+
+  it('renders context when source evidence is null', async () => {
+    api.getAdLibraryAudit.mockResolvedValue({ data: { ...baseAudit, status: 'context_review', context_sources: null } })
+    renderPage('/ad-library/audits/12?stage=context')
+    expect(await screen.findByText('No source links captured')).toBeInTheDocument()
   })
 
   it('protects unsaved context when moving to another available stage', async () => {
@@ -76,17 +83,19 @@ describe('Ad Library audit workflow', () => {
   })
 
   it('starts a new audit from a focused two-step dialog', async () => {
-    api.getAdLibraryRuns.mockResolvedValue({ data: { data: [{ id: 4, status: 'complete', result_count: 1, search: { company_name: 'Acme', company_type: 'competitor', website_url: 'https://acme.test' } }] } })
+    api.getAdLibraryRuns.mockResolvedValue({ data: { data: [{ id: 4, status: 'complete', result_count: 1, search: { name: 'Acme Ad Library audit', company_name: 'Acme', company_type: 'competitor', website_url: 'https://acme.test' } }] } })
     renderHome()
     fireEvent.click(await screen.findByRole('button', { name: /New content audit/ }))
     expect(screen.getByRole('dialog', { name: /Choose the source and analysis depth/ })).toBeInTheDocument()
+    expect(screen.getByRole('option', { name: /Acme Ad Library audit/ })).toBeInTheDocument()
+    expect(screen.queryByRole('option', { name: /Unknown company/ })).not.toBeInTheDocument()
     fireEvent.change(screen.getByLabelText('Completed source run'), { target: { value: '4' } })
     expect(await screen.findByDisplayValue('Acme content audit')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /Review 1 creatives/ })).toBeEnabled()
   })
 
   it('marks all completed creatives reviewed and exposes spreadsheet exports', async () => {
-    const completedCreative = { ...creative, processing_status: 'complete', review_status: 'pending', confidence: 0.9, personas: [] }
+    const completedCreative = { ...creative, position: 0, processing_status: 'complete', review_status: 'pending', confidence: 0.9, personas: [] }
     api.getAdLibraryAudit.mockResolvedValue({ data: { ...baseAudit, status: 'creative_review', creative_summary: { complete: 1, pending_review: 1, reviewed: 0 } } })
     api.getAdLibraryAuditCreatives.mockResolvedValue({ data: { data: [completedCreative] } })
     const open = vi.spyOn(window, 'open').mockImplementation(() => null)
@@ -94,6 +103,8 @@ describe('Ad Library audit workflow', () => {
 
     fireEvent.click(await screen.findByRole('button', { name: /Mark all reviewed \(1\)/ }))
     await waitFor(() => expect(api.markAllAdLibraryAuditCreativesReviewed).toHaveBeenCalledWith(12))
+    expect(within(screen.getByRole('table')).getByRole('columnheader', { name: '#' })).toBeInTheDocument()
+    expect(within(screen.getByRole('table')).getByRole('cell', { name: '1' })).toBeInTheDocument()
 
     fireEvent.click(screen.getByText('Export'))
     expect(screen.getByRole('link', { name: /Comma-separated file/ })).toHaveAttribute('href', '#csv')
@@ -102,5 +113,41 @@ describe('Ad Library audit workflow', () => {
     await waitFor(() => expect(copyText).toHaveBeenCalledWith('Creative\tProduct\nCreative A\tProduct A'))
     expect(open).toHaveBeenCalledWith('https://sheets.new', '_blank', 'noopener,noreferrer')
     open.mockRestore()
+  })
+
+  it('shows the evidence-first analysis stage with creative candidates and the captured script', async () => {
+    const evidenceCreative = {
+      ...creative,
+      position: 0,
+      processing_status: 'complete',
+      source_snapshot: { title: 'Spoken demo', media_type: 'video' },
+      persona_candidates: [
+        { name: 'Reassurance seeker', description: 'Needs confidence', evidence: ['Spoken promise'], confidence: 0.9 },
+        { name: 'Time-conscious buyer', description: 'Needs speed', evidence: ['Quick result'], confidence: 0.8 },
+      ],
+      video_script_status: 'captured',
+      video_script: 'Take your reading now.',
+      personas: [{ id: 9, name: 'Reassurance seeker', pivot: { role: 'primary', rationale: 'Matches the spoken promise.', confidence: 0.92 } }],
+    }
+    api.getAdLibraryAudit.mockResolvedValue({ data: {
+      ...baseAudit,
+      workflow_version: 2,
+      status: 'persona_review',
+      personas: [{ id: 9, name: 'Reassurance seeker', description: 'Needs confidence' }],
+      creative_summary: { selected: 1, complete: 1, failed: 0, skipped: 0 },
+    } })
+    api.getAdLibraryAuditCreatives.mockResolvedValue({ data: { data: [evidenceCreative] } })
+
+    renderPage('/ad-library/audits/12?stage=analysis')
+
+    expect(await screen.findByText('Analyze selected creatives')).toBeInTheDocument()
+    expect(screen.getByRole('progressbar', { name: 'Creative analysis progress' })).toHaveAttribute('aria-valuenow', '1')
+    expect(screen.getByText('100%')).toBeInTheDocument()
+    expect(await screen.findByText('2 persona candidates · Script captured')).toBeInTheDocument()
+    expect(within(screen.getByRole('navigation', { name: 'Audit stages' })).getByRole('button', { name: /Creative analysis/ })).toHaveAttribute('aria-current', 'step')
+    fireEvent.click(screen.getByRole('button', { name: 'Preview creative evidence' }))
+    expect(await screen.findByText('Video script')).toBeInTheDocument()
+    expect(screen.getByText('Take your reading now.')).toBeInTheDocument()
+    expect(screen.getByText('Matches the spoken promise.')).toBeInTheDocument()
   })
 })

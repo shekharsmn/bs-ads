@@ -10,7 +10,7 @@ import { useToast } from '../context/ToastContext'
 
 const terminalStatuses = new Set(['complete', 'partial', 'empty', 'blocked', 'failed'])
 function SparklesIcon() { return <span aria-hidden="true">✦</span> }
-const initialForm = { company_name: '', company_type: 'competitor', website_url: '', name: '', search_mode: 'keyword', query: '', advertiser_page_id: '', region: 'ALL', active_status: 'active', ad_type: 'all', exact_phrase: false, details: false, max_results: 100 }
+const initialForm = { company_name: '', company_type: 'competitor', related_client_id: '', website_url: '', name: '', search_mode: 'keyword', query: '', advertiser_page_id: '', region: 'ALL', active_status: 'active', ad_type: 'all', exact_phrase: false, details: false, max_results: 100 }
 
 export default function AdLibraryPage() {
   const { permissions, features } = useAuth()
@@ -18,6 +18,7 @@ export default function AdLibraryPage() {
   const canManage = Boolean(permissions?.manage_ad_library)
   const [form, setForm] = useState(initialForm)
   const [searches, setSearches] = useState([])
+  const [clients, setClients] = useState([])
   const [tags, setTags] = useState([])
   const [tagFilter, setTagFilter] = useState('')
   const [newTag, setNewTag] = useState('')
@@ -30,6 +31,8 @@ export default function AdLibraryPage() {
   const [selectedCreative, setSelectedCreative] = useState(null)
   const [mediaFilter, setMediaFilter] = useState('all')
   const [favoritesOnly, setFavoritesOnly] = useState(false)
+  const [creativeSort, setCreativeSort] = useState('relevance')
+  const [minimumAge, setMinimumAge] = useState('')
   const [runJsonCopyState, setRunJsonCopyState] = useState('idle')
   const [searchModalOpen, setSearchModalOpen] = useState(false)
   const [pendingDelete, setPendingDelete] = useState(null)
@@ -37,27 +40,29 @@ export default function AdLibraryPage() {
   const loadWorkspace = useCallback(async () => {
     if (!features?.ad_library) return
     try {
-      const [searchResponse, runResponse] = await Promise.all([
+      const [searchResponse, runResponse, clientResponse] = await Promise.all([
         api.getAdLibrarySearches(tagFilter ? { tag_id: tagFilter } : undefined),
         api.getAdLibraryRuns(),
+        canManage ? api.getClients().catch(() => ({ data: [] })) : Promise.resolve({ data: [] }),
       ])
       setSearches(searchResponse.data.searches || [])
       setTags(searchResponse.data.tags || [])
       setRuns(runResponse.data.data || [])
+      setClients(clientResponse.data || [])
       setError('')
     } catch (requestError) {
       setError(requestError.response?.data?.message || 'Unable to load Ad Library research.')
     }
-  }, [features?.ad_library, tagFilter])
+  }, [canManage, features?.ad_library, tagFilter])
 
   const loadResults = useCallback(async (run, page = 1) => {
     if (!run || !terminalStatuses.has(run.status) || run.result_count === 0) {
       setResults({ data: [], current_page: 1, last_page: 1, total: 0, raw_total: 0, duplicate_count: 0 })
       return
     }
-    const response = await api.getAdLibraryResults(run.id, { page, per_page: 24, media_type: mediaFilter, favorites: favoritesOnly ? 1 : undefined })
+    const response = await api.getAdLibraryResults(run.id, { page, per_page: 24, media_type: mediaFilter, favorites: favoritesOnly ? 1 : undefined, sort: creativeSort, min_age_days: minimumAge || undefined })
     setResults(response.data)
-  }, [favoritesOnly, mediaFilter])
+  }, [creativeSort, favoritesOnly, mediaFilter, minimumAge])
 
   useEffect(() => { loadWorkspace() }, [loadWorkspace])
   useEffect(() => { loadResults(selectedRun).catch(() => setError('Unable to load saved ads.')) }, [selectedRun, loadResults])
@@ -87,7 +92,7 @@ export default function AdLibraryPage() {
     event.preventDefault()
     setLoading(true); setError('')
     try {
-      const payload = { ...form, website_url: form.website_url || null, max_results: Number(form.max_results), name: form.name.trim() || (form.search_mode === 'keyword' ? form.query : `Advertiser ${form.advertiser_page_id}`) }
+      const payload = { ...form, related_client_id: form.related_client_id ? Number(form.related_client_id) : null, website_url: form.website_url || null, max_results: Number(form.max_results), name: form.name.trim() || (form.search_mode === 'keyword' ? form.query : `Advertiser ${form.advertiser_page_id}`) }
       const created = await api.createAdLibrarySearch(payload)
       const run = await api.runAdLibrarySearch(created.data.id)
       setForm(initialForm)
@@ -173,7 +178,7 @@ export default function AdLibraryPage() {
           {tags.length > 0 && <div className="ad-library-tags"><button className={!tagFilter ? 'active' : ''} onClick={() => setTagFilter('')}>All</button>{tags.map(tag => <button className={String(tag.id) === tagFilter ? 'active' : ''} key={tag.id} onClick={() => setTagFilter(String(tag.id))}>{tag.name}</button>)}</div>}
           {searches.length === 0 && <Empty text="No company research saved yet." />}
           {searches.map(search => <div key={search.id} style={listRow}>
-            <div style={{ minWidth: 0 }}><strong style={{ fontSize: 13 }}>{search.name}</strong><div style={small}>{search.company_name} · {relationshipLabel(search.company_type)} · {search.search_mode === 'keyword' ? search.query : `Page ${search.advertiser_page_id}`} · {search.region} · {search.runs_count} runs</div>{search.tags?.length > 0 && <div className="ad-library-row-tags">{search.tags.map(tag => <span key={tag.id}>{tag.name}</span>)}</div>}</div>
+            <div style={{ minWidth: 0 }}><strong style={{ fontSize: 13 }}>{search.name}</strong><div style={small}>{search.company_name} · {relationshipLabel(search.company_type)}{search.related_client ? ` to ${search.related_client.name}` : ''} · {search.search_mode === 'keyword' ? search.query : `Page ${search.advertiser_page_id}`} · {search.region} · {search.runs_count} runs</div>{search.tags?.length > 0 && <div className="ad-library-row-tags">{search.tags.map(tag => <span key={tag.id}>{tag.name}</span>)}</div>}</div>
             {canManage && <div style={{ display: 'flex', gap: 5 }}><IconButton title="Run again" onClick={() => rerun(search.id)}><Play size={13} /></IconButton><IconButton title="Delete search" onClick={() => setPendingDelete({ type: 'search', id: search.id, title: search.name })}><Trash2 size={13} /></IconButton></div>}
           </div>)}
           {canManage && searches.length > 0 && <form className="ad-library-tag-form" onSubmit={attachTag}><select value={tagTarget} onChange={event => setTagTarget(event.target.value)} required><option value="">Tag a search…</option>{searches.map(search => <option value={search.id} key={search.id}>{search.name}</option>)}</select><input value={newTag} onChange={event => setNewTag(event.target.value)} placeholder="Tag name"/><button>Add</button></form>}
@@ -207,9 +212,11 @@ export default function AdLibraryPage() {
                 {['all', 'static', 'video'].map(type => <button key={type} type="button" className={mediaFilter === type ? 'active' : ''} onClick={() => setMediaFilter(type)}>{type === 'all' ? 'All creatives' : type === 'static' ? 'Static' : 'Video'}</button>)}
               </div>
               <button className={`ad-library-favorite-filter ${favoritesOnly ? 'active' : ''}`} onClick={() => setFavoritesOnly(value => !value)}><Star size={12} fill={favoritesOnly ? 'currentColor' : 'none'}/> Favorites</button>
+              <label className="ad-library-filter-select"><span>Age</span><select aria-label="Filter by creative age" value={minimumAge} onChange={event => setMinimumAge(event.target.value)}><option value="">Any age</option><option value="7">7+ days</option><option value="30">1+ month</option><option value="90">3+ months</option><option value="180">6+ months</option></select></label>
+              <label className="ad-library-filter-select"><span>Sort</span><select aria-label="Sort creatives" value={creativeSort} onChange={event => setCreativeSort(event.target.value)}><option value="relevance">Relevance</option><option value="oldest">Oldest first</option></select></label>
               <span>{results.total} creative{results.total === 1 ? '' : 's'}{results.duplicate_count > 0 ? ` · ${results.duplicate_count} repeat${results.duplicate_count === 1 ? '' : 's'} grouped` : ''}</span>
             </div>}
-            {terminalStatuses.has(selectedRun.status) && results.data.length === 0 && <Empty text={selectedRun.status === 'empty' ? 'Meta returned no matching ads.' : mediaFilter === 'all' ? 'This run has no saved ads.' : `No ${mediaFilter} creatives in this run.`} />}
+            {terminalStatuses.has(selectedRun.status) && results.data.length === 0 && <Empty text={selectedRun.status === 'empty' ? 'Meta returned no matching ads.' : favoritesOnly || minimumAge ? 'No creatives match the current filters.' : mediaFilter === 'all' ? 'This run has no saved ads.' : `No ${mediaFilter} creatives in this run.`} />}
             <div className="ad-library-card-grid" style={cardGrid}>{results.data.map(ad => <AdCard key={ad.creative_key || ad.id} ad={ad} onFavorite={() => toggleFavorite(ad)} onViewDetails={() => setSelectedCreative(ad)} />)}</div>
             {results.last_page > 1 && <div style={{ display: 'flex', justifyContent: 'center', gap: 8, marginTop: 18 }}><button style={secondaryButton} disabled={results.current_page <= 1} onClick={() => loadResults(selectedRun, results.current_page - 1)}>Previous</button><span style={{ ...small, padding: '9px' }}>{results.current_page} / {results.last_page}</span><button style={secondaryButton} disabled={results.current_page >= results.last_page} onClick={() => loadResults(selectedRun, results.current_page + 1)}>Next</button></div>}
           </>}
@@ -218,6 +225,7 @@ export default function AdLibraryPage() {
       <SearchModal
         open={searchModalOpen}
         form={form}
+        clients={clients}
         loading={loading}
         error={error}
         updateForm={updateForm}
@@ -235,7 +243,7 @@ export default function AdLibraryPage() {
   )
 }
 
-function SearchModal({ open, form, loading, error, updateForm, onSubmit, onClose }) {
+function SearchModal({ open, form, clients, loading, error, updateForm, onSubmit, onClose }) {
   useEffect(() => {
     if (!open) return undefined
     const previousOverflow = document.body.style.overflow
@@ -261,6 +269,7 @@ function SearchModal({ open, form, loading, error, updateForm, onSubmit, onClose
         <div className="ad-library-search-form-grid">
           <Field label="Company / brand"><input required autoFocus style={input} value={form.company_name} onChange={event => updateForm('company_name', event.target.value)} placeholder="Company being researched" /></Field>
           <Field label="Relationship"><select style={input} value={form.company_type} onChange={event => updateForm('company_type', event.target.value)}><option value="competitor">Competitor</option><option value="lead">Lead</option><option value="client">Client</option><option value="partner">Partner</option><option value="other">Other</option></select></Field>
+          <Field label={relatedClientLabel(form.company_type)}><select style={input} value={form.related_client_id} onChange={event => updateForm('related_client_id', event.target.value)}><option value="">No client linked</option>{clients.map(client => <option key={client.id} value={client.id}>{client.name}</option>)}</select></Field>
           <Field label="Website"><input type="url" style={input} value={form.website_url} onChange={event => updateForm('website_url', event.target.value)} placeholder="https://company.com" /></Field>
           <Field label="Name"><input style={input} value={form.name} onChange={event => updateForm('name', event.target.value)} placeholder="Optional label" /></Field>
           <Field label="Search by"><select style={input} value={form.search_mode} onChange={event => updateForm('search_mode', event.target.value)}><option value="keyword">Keyword</option><option value="advertiser">Advertiser Page ID</option></select></Field>
@@ -329,6 +338,9 @@ function Empty({ text }) { return <div style={{ padding: '28px 12px', textAlign:
 function IconButton({ children, ...props }) { return <button type="button" style={iconButton} {...props}>{children}</button> }
 function Status({ status }) { return <span style={{ ...statusChip, background: statusColor[status]?.bg || '#f1f5f9', color: statusColor[status]?.fg || '#475569' }}>{status}</span> }
 function relationshipLabel(value = 'other') { return value.replaceAll('_', ' ').replace(/\b\w/g, letter => letter.toUpperCase()) }
+function relatedClientLabel(value) {
+  return ({ competitor: 'Competitor of client', lead: 'Lead for client', client: 'Client record', partner: 'Partner of client', other: 'Related client' })[value] || 'Related client'
+}
 
 const statusColor = { complete: { bg: '#dcfce7', fg: '#166534' }, partial: { bg: '#fef3c7', fg: '#92400e' }, failed: { bg: '#fee2e2', fg: '#991b1b' }, blocked: { bg: '#fee2e2', fg: '#991b1b' }, empty: { bg: '#f1f5f9', fg: '#475569' }, pending: { bg: '#e0f2fe', fg: '#075985' }, running: { bg: '#dbeafe', fg: '#1d4ed8' } }
 const eyebrow = { margin: '0 0 5px', textTransform: 'uppercase', letterSpacing: '.11em', color: '#3b82f6', fontSize: 10, fontWeight: 700 }

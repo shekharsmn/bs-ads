@@ -30,7 +30,8 @@ class WorkflowCoordinator
                 return $existing;
             }
 
-            $attemptNumber = $locked->attempt_count + 1;
+            $persistedAttemptNumber = (int) $locked->attempts()->max('attempt_number');
+            $attemptNumber = max((int) $locked->attempt_count, $persistedAttemptNumber) + 1;
             $jobUuid = Str::afterLast($key, ':');
             $attempt = $locked->attempts()->create([
                 'attempt_number' => $attemptNumber,

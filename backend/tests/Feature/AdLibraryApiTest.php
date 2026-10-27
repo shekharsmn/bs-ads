@@ -5,6 +5,7 @@ namespace Tests\Feature;
 use App\Enums\UserRole;
 use App\Jobs\RunAdLibraryScrapeJob;
 use App\Models\AdLibrarySearch;
+use App\Models\Client;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Queue;
@@ -41,6 +42,33 @@ class AdLibraryApiTest extends TestCase
         $run = $this->postJson('/api/ad-library/searches/'.$search['id'].'/runs')->assertAccepted()->json();
         $this->assertSame('pending', $run['status']);
         Queue::assertPushed(RunAdLibraryScrapeJob::class, fn ($job) => $job->runId === $run['id']);
+    }
+
+    public function test_manager_can_link_company_research_to_an_accessible_client(): void
+    {
+        $manager = User::factory()->create(['role' => UserRole::Marketer]);
+        $client = Client::create(['name' => 'Northstar', 'slug' => 'northstar']);
+        $client->users()->attach($manager);
+
+        $search = $this->actingAs($manager)->postJson('/api/ad-library/searches', [
+            'company_name' => 'Northstar Rival', 'company_type' => 'competitor', 'related_client_id' => $client->id,
+            'name' => 'Northstar competitors', 'search_mode' => 'keyword', 'query' => 'running shoes',
+        ])->assertCreated()->json();
+
+        $this->assertSame($client->id, $search['related_client_id']);
+        $this->getJson('/api/ad-library/searches')->assertOk()
+            ->assertJsonPath('searches.0.related_client.name', 'Northstar');
+    }
+
+    public function test_manager_cannot_link_company_research_to_an_inaccessible_client(): void
+    {
+        $manager = User::factory()->create(['role' => UserRole::Marketer]);
+        $hiddenClient = Client::create(['name' => 'Hidden', 'slug' => 'hidden']);
+
+        $this->actingAs($manager)->postJson('/api/ad-library/searches', [
+            'company_name' => 'Hidden Rival', 'company_type' => 'competitor', 'related_client_id' => $hiddenClient->id,
+            'name' => 'Hidden competitors', 'search_mode' => 'keyword', 'query' => 'shoes',
+        ])->assertForbidden();
     }
 
     public function test_viewer_can_read_but_cannot_mutate(): void
@@ -134,6 +162,27 @@ class AdLibraryApiTest extends TestCase
             ->assertOk()->assertJsonPath('total', 1)->assertJsonPath('data.0.media_type', 'static');
         $this->getJson('/api/ad-library/runs/'.$run->id.'/ads?media_type=video')
             ->assertOk()->assertJsonPath('total', 1)->assertJsonPath('data.0.media_type', 'video');
+    }
+
+    public function test_results_can_filter_by_minimum_age_and_sort_oldest_first(): void
+    {
+        $viewer = User::factory()->create(['role' => UserRole::Viewer]);
+        $run = $this->search($viewer)->runs()->create([
+            'requested_by' => $viewer->id,
+            'status' => 'complete',
+            'result_count' => 3,
+        ]);
+        $run->results()->createMany([
+            ['library_ad_id' => 'recent', 'rank' => 1, 'body' => 'Recent creative', 'first_shown_at' => now()->subDays(6)->toDateString(), 'raw_payload' => ['ad_id' => 'recent']],
+            ['library_ad_id' => 'month-old', 'rank' => 2, 'body' => 'Month-old creative', 'first_shown_at' => now()->subDays(40)->toDateString(), 'raw_payload' => ['ad_id' => 'month-old']],
+            ['library_ad_id' => 'oldest', 'rank' => 3, 'body' => 'Oldest creative', 'first_shown_at' => now()->subDays(100)->toDateString(), 'raw_payload' => ['ad_id' => 'oldest']],
+        ]);
+
+        $this->actingAs($viewer)->getJson('/api/ad-library/runs/'.$run->id.'/ads?min_age_days=30&sort=oldest')
+            ->assertOk()
+            ->assertJsonPath('total', 2)
+            ->assertJsonPath('data.0.library_ad_id', 'oldest')
+            ->assertJsonPath('data.1.library_ad_id', 'month-old');
     }
 
     public function test_details_search_is_limited_to_fifty_results(): void

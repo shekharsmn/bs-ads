@@ -87,8 +87,16 @@ class AnalyzeAdLibraryCreativeJob implements ShouldQueue
     {
         $counts = $audit->creatives()->reorder()->where('processing_status', '!=', 'skipped')->selectRaw("SUM(CASE WHEN processing_status = 'complete' THEN 1 ELSE 0 END) completed, SUM(CASE WHEN processing_status = 'failed' THEN 1 ELSE 0 END) failed, COUNT(*) total")->first();
         $audit->update(['progress_total' => (int) $counts->total, 'progress_completed' => (int) $counts->completed, 'progress_failed' => (int) $counts->failed]);
-        if ($audit->fresh()->status === 'analyzing_creatives' && (int) $counts->total > 0 && (int) $counts->completed + (int) $counts->failed >= (int) $counts->total) {
-            $audit->update(['status' => 'creative_review']);
+        $fresh = $audit->fresh();
+        if ($fresh->status === 'analyzing_creatives' && (int) $counts->total > 0 && (int) $counts->completed + (int) $counts->failed >= (int) $counts->total) {
+            if ((int) $fresh->workflow_version < 2) {
+                $audit->update(['status' => 'creative_review']);
+            } elseif ((int) $counts->failed > 0) {
+                $audit->update(['status' => 'creative_attention']);
+            } else {
+                $claimed = AdLibraryAudit::whereKey($audit->id)->where('status', 'analyzing_creatives')->update(['status' => 'consolidating_personas']);
+                if ($claimed === 1) ConsolidateAdLibraryPersonasJob::dispatch($audit->id);
+            }
         }
     }
 }

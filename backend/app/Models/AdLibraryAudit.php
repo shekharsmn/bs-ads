@@ -12,11 +12,11 @@ class AdLibraryAudit extends Model
     {
         return [
             'context_sources' => 'array', 'website_context' => 'array', 'insights' => 'array',
-            'insights_stale' => 'boolean', 'prompt_version' => 'integer', 'schema_version' => 'integer',
+            'insights_stale' => 'boolean', 'prompt_version' => 'integer', 'schema_version' => 'integer', 'workflow_version' => 'integer',
             'progress_total' => 'integer', 'progress_completed' => 'integer', 'progress_failed' => 'integer',
             'input_tokens' => 'integer', 'output_tokens' => 'integer', 'estimated_cost' => 'decimal:6',
             'personas_confirmed_at' => 'datetime', 'grid_confirmed_at' => 'datetime', 'completed_at' => 'datetime',
-            'methodology_snapshot' => 'array',
+            'methodology_snapshot' => 'array', 'client_context' => 'array',
         ];
     }
 
@@ -28,6 +28,11 @@ class AdLibraryAudit extends Model
     public function creator()
     {
         return $this->belongsTo(User::class, 'created_by');
+    }
+
+    public function relatedClient()
+    {
+        return $this->belongsTo(Client::class, 'related_client_id');
     }
 
     public function personas()

@@ -163,16 +163,20 @@ Route::middleware(['auth:sanctum', 'active', 'audit.mutations'])->group(function
     Route::delete('/ad-library/audits/{audit}', [AdLibraryAuditController::class, 'destroy']);
     Route::post('/ad-library/audits/{audit}/context/collect', [AdLibraryAuditController::class, 'collectContext']);
     Route::put('/ad-library/audits/{audit}/context', [AdLibraryAuditController::class, 'updateContext']);
+    Route::post('/ad-library/audits/{audit}/context/confirm', [AdLibraryAuditController::class, 'confirmContext']);
     Route::post('/ad-library/audits/{audit}/personas/generate', [AdLibraryAuditController::class, 'generatePersonas']);
     Route::post('/ad-library/audits/{audit}/personas', [AdLibraryAuditController::class, 'storePersona']);
     Route::put('/ad-library/audits/{audit}/personas/{persona}', [AdLibraryAuditController::class, 'updatePersona']);
     Route::delete('/ad-library/audits/{audit}/personas/{persona}', [AdLibraryAuditController::class, 'destroyPersona']);
     Route::put('/ad-library/audits/{audit}/personas-order', [AdLibraryAuditController::class, 'reorderPersonas']);
+    Route::post('/ad-library/audits/{audit}/personas/{persona}/merge', [AdLibraryAuditController::class, 'mergePersona']);
     Route::post('/ad-library/audits/{audit}/personas/confirm', [AdLibraryAuditController::class, 'confirmPersonas']);
+    Route::post('/ad-library/audits/{audit}/personas/consolidate', [AdLibraryAuditController::class, 'consolidatePersonas']);
     Route::post('/ad-library/audits/{audit}/analyze', [AdLibraryAuditController::class, 'analyze']);
     Route::post('/ad-library/audits/{audit}/pause', [AdLibraryAuditController::class, 'pause']);
     Route::post('/ad-library/audits/{audit}/resume', [AdLibraryAuditController::class, 'resume']);
     Route::post('/ad-library/audits/{audit}/retry-failed', [AdLibraryAuditController::class, 'retryFailed']);
+    Route::post('/ad-library/audits/{audit}/creatives/{creative}/skip', [AdLibraryAuditController::class, 'skipCreative']);
     Route::get('/ad-library/audits/{audit}/creatives', [AdLibraryAuditController::class, 'creatives']);
     Route::post('/ad-library/audits/{audit}/creatives/review-all', [AdLibraryAuditController::class, 'markAllCreativesReviewed']);
     Route::put('/ad-library/audits/{audit}/creatives/{creative}', [AdLibraryAuditController::class, 'updateCreative']);
@@ -181,6 +185,8 @@ Route::middleware(['auth:sanctum', 'active', 'audit.mutations'])->group(function
     Route::get('/ad-library/audits/{audit}/export.csv', [AdLibraryAuditController::class, 'exportCsv']);
     Route::get('/ad-library/audits/{audit}/export.xlsx', [AdLibraryAuditController::class, 'exportXlsx']);
     Route::get('/ad-library/audits/{audit}/export.sheets', [AdLibraryAuditController::class, 'exportSheets']);
+    Route::get('/ad-library/audits/{audit}/report.xlsx', [AdLibraryAuditController::class, 'exportReportXlsx']);
+    Route::get('/ad-library/audits/{audit}/report.sheets', [AdLibraryAuditController::class, 'exportReportSheets']);
     Route::get('/ad-library/audits/{audit}/export.json', [AdLibraryAuditController::class, 'exportJson']);
 
     // Reports

@@ -33,6 +33,21 @@ class ArchitectureFoundationsTest extends TestCase
         $this->assertSame(2, $activity->fresh()->attempt_count);
     }
 
+    public function test_workflow_attempt_number_recovers_from_a_stale_activity_counter(): void
+    {
+        $activity = WorkflowActivity::create(['type' => 'content_audit', 'entity_type' => 'audit', 'entity_id' => '1', 'title' => 'Audit', 'status' => 'pending']);
+        $coordinator = app(WorkflowCoordinator::class);
+
+        $first = $coordinator->start($activity, 'context', 'audit:1:context');
+        $activity->update(['attempt_count' => 0]);
+
+        $second = $coordinator->start($activity->fresh(), 'personas', 'audit:1:personas');
+
+        $this->assertSame(1, $first->attempt_number);
+        $this->assertSame(2, $second->attempt_number);
+        $this->assertSame(2, $activity->fresh()->attempt_count);
+    }
+
     public function test_activity_attempt_history_honors_client_access(): void
     {
         $client = Client::create(['name' => 'Scoped', 'slug' => 'scoped', 'timezone' => 'UTC', 'currency' => 'USD']);

@@ -26,9 +26,21 @@ PID_API=$!
 echo -e "${GREEN}[API]     Laravel → http://localhost:8000  (pid $PID_API)${NC}"
 
 QUEUES="notifications,collection,audits,reports,ad-library,ad-library-analysis,default"
-DB_QUEUE_RETRY_AFTER="${DB_QUEUE_RETRY_AFTER:-1200}" php artisan queue:work --queue="$QUEUES" --timeout=1000 --sleep=3 --tries=3 &
+run_queue_worker() {
+    while true; do
+        if DB_QUEUE_RETRY_AFTER="${DB_QUEUE_RETRY_AFTER:-1200}" php artisan queue:work --queue="$QUEUES" --timeout=1000 --sleep=3 --tries=3; then
+            EXIT_CODE=0
+        else
+            EXIT_CODE=$?
+        fi
+        echo -e "${YELLOW}[QUEUE] Worker exited with code ${EXIT_CODE}; restarting in 3 seconds...${NC}"
+        sleep 3
+    done
+}
+
+run_queue_worker &
 PID_QUEUE=$!
-echo -e "${GREEN}[QUEUE]   Worker for all queues started      (pid $PID_QUEUE)${NC}"
+echo -e "${GREEN}[QUEUE]   Supervised worker for all queues started (pid $PID_QUEUE)${NC}"
 
 cd "$FRONTEND" && npm run dev &
 PID_VITE=$!
@@ -38,8 +50,15 @@ echo ""
 echo -e "${BLUE}All services running. Press Ctrl+C to stop all.${NC}"
 echo ""
 
-# Trap Ctrl+C and kill all children
-trap "echo ''; echo 'Stopping...'; kill $PID_API $PID_QUEUE $PID_VITE 2>/dev/null; exit 0" INT TERM
+cleanup() {
+    trap - INT TERM EXIT
+    echo ""
+    echo "Stopping..."
+    kill "$PID_API" "$PID_QUEUE" "$PID_VITE" 2>/dev/null || true
+    wait "$PID_API" "$PID_QUEUE" "$PID_VITE" 2>/dev/null || true
+}
+
+trap cleanup INT TERM EXIT
 
 # Wait for any process to exit
-wait
+wait -n

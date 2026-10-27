@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Jobs\AnalyzeAdLibraryCreativeJob;
 use App\Jobs\CollectAdLibraryAuditContextJob;
+use App\Jobs\ConsolidateAdLibraryPersonasJob;
 use App\Jobs\GenerateAdLibraryInsightsJob;
 use App\Jobs\GenerateAdLibraryPersonasJob;
 use App\Models\AdLibraryAudit;
@@ -15,6 +16,7 @@ use App\Models\AdLibraryRun;
 use App\Services\AdLibraryAudit\ModelCatalog;
 use App\Services\MethodologyRegistry;
 use App\Support\XlsxWriter;
+use App\Support\CreativeFormatTaxonomy;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Bus;
 use Illuminate\Support\Facades\DB;
@@ -61,7 +63,7 @@ class AdLibraryAuditController extends Controller
             'result_ids' => 'required|array|min:1|max:'.config('ad_library_audit.max_creatives', 50), 'result_ids.*' => 'integer|distinct',
         ]);
         $this->manage($request);
-        $run = AdLibraryRun::with('search')->findOrFail($data['run_id']);
+        $run = AdLibraryRun::with('search.relatedClient')->findOrFail($data['run_id']);
         abort_unless(in_array($run->status, ['complete', 'partial'], true), 422, 'Only completed runs with usable results can be audited.');
         $model = $catalog->get($data['model_key'], $data['media_depth']);
         $groups = $this->groupedResults($run);
@@ -75,6 +77,9 @@ class AdLibraryAuditController extends Controller
                 'name' => $data['name'], 'website_url' => $data['website_url'] ?? $run->search->website_url,
                 'provider' => $model['provider'], 'model' => $model['model'], 'model_key' => $model['key'],
                 'media_depth' => $data['media_depth'], 'status' => 'collecting_context', 'progress_total' => $selected->count(),
+                'workflow_version' => 2, 'prompt_version' => 2, 'schema_version' => 2,
+                'related_client_id' => $run->search->related_client_id,
+                'client_context' => $run->search->relatedClient ? $run->search->relatedClient->only(['name', 'objective', 'goals']) : null,
                 ...$methodologies->columns('content-audit'),
             ]);
             foreach ($selected as $position => $variants) {
@@ -139,16 +144,42 @@ class AdLibraryAuditController extends Controller
     public function updateContext(Request $request, AdLibraryAudit $audit)
     {
         $this->manage($request, $audit);
-        abort_unless(in_array($audit->status, ['context_review', 'persona_review'], true) || ($audit->status === 'failed' && $audit->failed_stage === 'context'), 409, 'Context can only be edited before creative analysis starts.');
+        $editable = (int) $audit->workflow_version >= 2
+            ? $audit->status === 'context_review' || ($audit->status === 'failed' && $audit->failed_stage === 'context')
+            : in_array($audit->status, ['context_review', 'persona_review'], true) || ($audit->status === 'failed' && $audit->failed_stage === 'context');
+        abort_unless($editable, 409, 'Context can only be edited before creative analysis starts.');
         $data = $request->validate(['website_context' => 'required|array', 'website_context.summary' => 'nullable|string|max:5000', 'website_context.facts' => 'array|max:100', 'website_context.products' => 'array|max:100', 'website_context.claims' => 'array|max:100', 'website_context.audience_signals' => 'array|max:100', 'website_context.positioning' => 'array|max:100', 'website_context.value_propositions' => 'array|max:100']);
         $audit->update(['website_context' => $data['website_context'], 'status' => 'context_review', 'error_message' => null]);
 
         return $this->payload($audit);
     }
 
+    public function confirmContext(Request $request, AdLibraryAudit $audit)
+    {
+        $this->manage($request, $audit);
+        abort_unless((int) $audit->workflow_version >= 2 && $audit->status === 'context_review', 409);
+        $ids = $audit->creatives()->pluck('id');
+        abort_if($ids->isEmpty(), 422, 'At least one selected creative is required.');
+        DB::transaction(function () use ($audit, $ids) {
+            $audit->creatives()->whereIn('id', $ids)->update([
+                'processing_status' => 'pending', 'review_status' => 'pending', 'error_message' => null,
+                'persona_candidates' => null, 'video_script' => null, 'video_script_status' => null,
+            ]);
+            $audit->update([
+                'status' => 'analyzing_creatives', 'failed_stage' => null, 'error_message' => null,
+                'progress_total' => $ids->count(), 'progress_completed' => 0, 'progress_failed' => 0,
+                'personas_confirmed_at' => null, 'grid_confirmed_at' => null, 'insights' => null, 'insights_stale' => false,
+            ]);
+        });
+        $this->dispatchCreativeJobs($audit, $ids, "Ad Library evidence-first audit {$audit->id}");
+
+        return response()->json($this->payload($audit), 202);
+    }
+
     public function generatePersonas(Request $request, AdLibraryAudit $audit)
     {
         $this->manage($request, $audit);
+        abort_if((int) $audit->workflow_version >= 2, 409, 'Evidence-first audits generate personas after creative analysis.');
         abort_unless(in_array($audit->status, ['context_review', 'persona_review', 'failed'], true), 409);
         $audit->update(['status' => 'generating_personas', 'failed_stage' => null, 'error_message' => null]);
         GenerateAdLibraryPersonasJob::dispatch($audit->id);
@@ -209,14 +240,53 @@ class AdLibraryAuditController extends Controller
         return $this->payload($audit);
     }
 
+    public function mergePersona(Request $request, AdLibraryAudit $audit, AdLibraryAuditPersona $persona)
+    {
+        $this->manage($request, $audit);
+        abort_unless((int) $audit->workflow_version >= 2 && $audit->status === 'persona_review', 409);
+        $this->ownsPersona($audit, $persona);
+        $data = $request->validate(['target_persona_id' => 'required|integer']);
+        abort_if((int) $data['target_persona_id'] === $persona->id, 422, 'Choose another persona to merge into.');
+        $target = $audit->personas()->whereKey($data['target_persona_id'])->firstOrFail();
+
+        DB::transaction(function () use ($audit, $persona, $target, $request) {
+            $rows = DB::table('ad_library_audit_creative_persona')->where('ad_library_audit_persona_id', $persona->id)->get();
+            foreach ($rows as $row) {
+                $existing = DB::table('ad_library_audit_creative_persona')
+                    ->where('ad_library_audit_creative_id', $row->ad_library_audit_creative_id)
+                    ->where('ad_library_audit_persona_id', $target->id)->first();
+                $role = ($row->role === 'primary' || ! $existing) ? $row->role : $existing->role;
+                if ($row->role === 'primary') {
+                    DB::table('ad_library_audit_creative_persona')->where('ad_library_audit_creative_id', $row->ad_library_audit_creative_id)->update(['role' => 'secondary']);
+                    $role = 'primary';
+                }
+                DB::table('ad_library_audit_creative_persona')->updateOrInsert(
+                    ['ad_library_audit_creative_id' => $row->ad_library_audit_creative_id, 'ad_library_audit_persona_id' => $target->id],
+                    ['role' => $role, 'rationale' => trim(collect([$existing?->rationale, $row->rationale])->filter()->implode(' ')), 'confidence' => max((float) ($existing?->confidence ?? 0), (float) ($row->confidence ?? 0)), 'updated_at' => now(), 'created_at' => $existing?->created_at ?? now()]
+                );
+            }
+            $target->update(['manually_edited' => true, 'edited_by' => $request->user()->id, 'edited_at' => now()]);
+            $persona->delete();
+            $this->invalidateAfterPersonaChange($audit);
+        });
+
+        return $this->payload($audit);
+    }
+
     public function confirmPersonas(Request $request, AdLibraryAudit $audit)
     {
         $this->manage($request, $audit);
         abort_unless($audit->status === 'persona_review', 409);
         $count = $audit->personas()->count();
         abort_unless($count >= 1 && $count <= 10, 422);
+        if ((int) $audit->workflow_version >= 2) {
+            $invalid = $audit->creatives()->where('processing_status', 'complete')
+                ->withCount(['personas as primary_personas_count' => fn ($query) => $query->where('ad_library_audit_creative_persona.role', 'primary')])
+                ->get()->where('primary_personas_count', '!=', 1)->count();
+            abort_if($invalid > 0, 422, "Assign exactly one primary persona to every completed creative before continuing. {$invalid} require attention.");
+        }
         $audit->personas()->update(['confirmed' => true]);
-        $audit->update(['personas_confirmed_at' => now(), 'status' => 'creative_selection', 'error_message' => null]);
+        $audit->update(['personas_confirmed_at' => now(), 'status' => (int) $audit->workflow_version >= 2 ? 'creative_review' : 'creative_selection', 'error_message' => null]);
 
         return $this->payload($audit);
     }
@@ -224,6 +294,7 @@ class AdLibraryAuditController extends Controller
     public function analyze(Request $request, AdLibraryAudit $audit)
     {
         $this->manage($request, $audit);
+        abort_if((int) $audit->workflow_version >= 2, 409, 'Confirm context to start an evidence-first audit.');
         abort_unless($audit->status === 'creative_selection', 409);
         abort_unless($audit->personas_confirmed_at, 422, 'Confirm personas before analyzing creatives.');
         $data = $request->validate([
@@ -268,12 +339,36 @@ class AdLibraryAuditController extends Controller
     public function retryFailed(Request $request, AdLibraryAudit $audit)
     {
         $this->manage($request, $audit);
-        abort_unless($audit->status === 'creative_review', 409);
+        abort_unless($audit->status === ((int) $audit->workflow_version >= 2 ? 'creative_attention' : 'creative_review'), 409);
         $ids = $audit->creatives()->where('processing_status', 'failed')->pluck('id');
         abort_if($ids->isEmpty(), 422, 'There are no failed creatives to retry.');
         $audit->creatives()->whereIn('id', $ids)->update(['processing_status' => 'pending', 'error_message' => null]);
         $audit->update(['status' => 'analyzing_creatives']);
         $this->dispatchCreativeJobs($audit, $ids, "Retry audit {$audit->id}");
+
+        return response()->json($this->payload($audit), 202);
+    }
+
+    public function skipCreative(Request $request, AdLibraryAudit $audit, AdLibraryAuditCreative $creative)
+    {
+        $this->manage($request, $audit);
+        abort_unless((int) $audit->workflow_version >= 2 && $audit->status === 'creative_attention', 409);
+        $this->ownsCreative($audit, $creative);
+        abort_unless($creative->processing_status === 'failed', 422, 'Only failed creatives can be skipped.');
+        $creative->update(['processing_status' => 'skipped']);
+        $this->refreshCreativeProgress($audit);
+
+        return response()->json($this->payload($audit), 202);
+    }
+
+    public function consolidatePersonas(Request $request, AdLibraryAudit $audit)
+    {
+        $this->manage($request, $audit);
+        abort_unless((int) $audit->workflow_version >= 2 && (($audit->status === 'failed' && $audit->failed_stage === 'personas') || $audit->status === 'persona_review'), 409);
+        abort_unless($audit->creatives()->where('processing_status', 'complete')->exists(), 422, 'At least one completed creative is required.');
+        abort_if($audit->creatives()->whereIn('processing_status', ['pending', 'running', 'failed'])->exists(), 422, 'Resolve failed or unfinished creatives before consolidating personas.');
+        $audit->update(['status' => 'consolidating_personas', 'failed_stage' => null, 'error_message' => null]);
+        ConsolidateAdLibraryPersonasJob::dispatch($audit->id);
 
         return response()->json($this->payload($audit), 202);
     }
@@ -301,9 +396,9 @@ class AdLibraryAuditController extends Controller
     public function updateCreative(Request $request, AdLibraryAudit $audit, AdLibraryAuditCreative $creative)
     {
         $this->manage($request, $audit);
-        abort_unless(in_array($audit->status, ['creative_review', 'complete'], true), 409);
+        abort_unless(in_array($audit->status, ['persona_review', 'creative_review', 'complete'], true), 409);
         $this->ownsCreative($audit, $creative);
-        $data = $request->validate(['angle' => 'sometimes|nullable|string|max:5000', 'product' => 'sometimes|nullable|string|max:255', 'what_it_solves' => 'sometimes|nullable|string|max:5000', 'format' => 'sometimes|nullable|string|max:255', 'type' => 'sometimes|nullable|string|max:255', 'remarks' => 'sometimes|nullable|string|max:5000', 'primary_persona_id' => 'sometimes|required|integer', 'secondary_persona_ids' => 'sometimes|array|max:9', 'secondary_persona_ids.*' => 'integer|distinct', 'reviewed' => 'sometimes|boolean']);
+        $data = $request->validate(['angle' => 'sometimes|nullable|string|max:5000', 'product' => 'sometimes|nullable|string|max:255', 'what_it_solves' => 'sometimes|nullable|string|max:5000', 'format' => ['sometimes', 'required', Rule::in(CreativeFormatTaxonomy::labels())], 'type' => 'sometimes|nullable|string|max:255', 'remarks' => 'sometimes|nullable|string|max:5000', 'primary_persona_id' => 'sometimes|required|integer', 'secondary_persona_ids' => 'sometimes|array|max:9', 'secondary_persona_ids.*' => 'integer|distinct', 'reviewed' => 'sometimes|boolean']);
         $fields = collect($data)->only(['angle', 'product', 'what_it_solves', 'format', 'type', 'remarks'])->all();
         $fields += ['manually_edited' => true, 'edited_by' => $request->user()->id, 'edited_at' => now()];
         if (array_key_exists('reviewed', $data)) {
@@ -313,14 +408,14 @@ class AdLibraryAuditController extends Controller
         if (isset($data['primary_persona_id'])) {
             $ids = array_unique(array_merge([$data['primary_persona_id']], $data['secondary_persona_ids'] ?? []));
             abort_unless($audit->personas()->whereIn('id', $ids)->count() === count($ids), 422);
-            $sync = [$data['primary_persona_id'] => ['role' => 'primary']];
+            $sync = [$data['primary_persona_id'] => ['role' => 'primary', 'rationale' => 'Assigned manually during review.', 'confidence' => null]];
             foreach ($data['secondary_persona_ids'] ?? [] as $id) {
                 if ($id !== $data['primary_persona_id']) {
-                    $sync[$id] = ['role' => 'secondary'];
+                    $sync[$id] = ['role' => 'secondary', 'rationale' => 'Assigned manually during review.', 'confidence' => null];
                 }
             } $creative->personas()->sync($sync);
         }
-        $audit->update(['grid_confirmed_at' => null, 'insights_stale' => $audit->insights !== null, 'status' => 'creative_review']);
+        $audit->update(['grid_confirmed_at' => null, 'insights_stale' => $audit->insights !== null, 'status' => $audit->status === 'persona_review' ? 'persona_review' : 'creative_review']);
 
         return $creative->fresh('personas');
     }
@@ -402,6 +497,37 @@ class AdLibraryAuditController extends Controller
         ]);
     }
 
+    public function exportReportXlsx(Request $request, AdLibraryAudit $audit)
+    {
+        $this->enabled();
+        $tabs = $this->reportSpreadsheetTabs($audit);
+        $path = XlsxWriter::createWorkbook(collect($tabs)->mapWithKeys(
+            fn (array $tab) => [$tab['name'] => [$tab['headers'], ...$tab['rows']]]
+        )->all());
+
+        return response()->download($path, 'ad-library-final-report-'.$audit->id.'.xlsx', [
+            'Content-Type' => 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        ])->deleteFileAfterSend(true);
+    }
+
+    public function exportReportSheets(Request $request, AdLibraryAudit $audit)
+    {
+        $this->enabled();
+        $tabs = collect($this->reportSpreadsheetTabs($audit))->map(function (array $tab) {
+            $rows = [$tab['headers'], ...$tab['rows']];
+            $tab['tsv'] = collect($rows)->map(function (array $row) {
+                return collect($row)->map(fn ($value) => str_replace(["\t", "\r", "\n"], ' ', $this->spreadsheetSafe($value)))->implode("\t");
+            })->implode("\n");
+
+            return $tab;
+        })->values();
+
+        return response()->json([
+            'workbook_name' => $audit->name.' - Final report',
+            'tabs' => $tabs,
+        ]);
+    }
+
     public function exportJson(Request $request, AdLibraryAudit $audit)
     {
         $this->enabled();
@@ -412,7 +538,7 @@ class AdLibraryAuditController extends Controller
     private function creativeExportTable(AdLibraryAudit $audit): array
     {
         $audit->load(['creatives' => fn ($query) => $query->where('processing_status', 'complete')->with('personas')]);
-        $headers = ['Creative', 'Link', 'Media', 'Primary persona', 'Secondary personas', 'Product', 'Angle', 'What it solves', 'Format', 'Type', 'Remarks', 'Confidence', 'Review status', 'Grouped ads'];
+        $headers = ['Creative', 'Link', 'Media', 'Video script', 'Primary persona', 'Secondary personas', 'Product', 'Angle', 'What it solves', 'Format', 'Type', 'Remarks', 'Confidence', 'Review status', 'Grouped ads'];
         $rows = $audit->creatives->map(function (AdLibraryAuditCreative $creative) {
             $primary = $creative->personas->firstWhere('pivot.role', 'primary');
             $secondary = $creative->personas->filter(fn ($persona) => $persona->pivot->role === 'secondary')->pluck('name')->implode('; ');
@@ -422,6 +548,7 @@ class AdLibraryAuditController extends Controller
                 $source['title'] ?? $source['link_title'] ?? 'Ad '.($creative->library_ad_ids[0] ?? $creative->id),
                 'https://www.facebook.com/ads/library/?id='.($creative->library_ad_ids[0] ?? ''),
                 $source['media_type'] ?? '',
+                $creative->video_script ?? $this->videoScriptLabel($creative),
                 $primary?->name ?? '',
                 $secondary,
                 $creative->product ?? '',
@@ -439,6 +566,113 @@ class AdLibraryAuditController extends Controller
         return [$headers, $rows];
     }
 
+    /** @return array<int, array{name: string, headers: array, rows: array}> */
+    private function reportSpreadsheetTabs(AdLibraryAudit $audit): array
+    {
+        $audit->load([
+            'personas',
+            'creatives' => fn ($query) => $query->where('processing_status', 'complete')->with('personas'),
+        ]);
+        $insights = $audit->insights ?? [];
+        $context = $audit->website_context ?? [];
+        [$creativeHeaders, $creativeRows] = $this->creativeExportTable($audit);
+
+        $overview = [
+            ['Audit', $audit->name],
+            ['Company', $audit->company_name],
+            ['Relationship', ucfirst(str_replace('_', ' ', $audit->company_type))],
+            ['Website', $audit->website_url],
+            ['Status', ucfirst(str_replace('_', ' ', $audit->status))],
+            ['Model', $audit->model],
+            ['Media depth', ucfirst(str_replace('_', ' ', $audit->media_depth))],
+            ['Created', optional($audit->created_at)->toIso8601String()],
+            ['Completed', optional($audit->completed_at)->toIso8601String()],
+            ['Insights freshness', $audit->insights_stale ? 'Stale after creative edits' : 'Current'],
+            ['Personas', $audit->personas->count()],
+            ['Completed creatives', $audit->creatives->count()],
+            ['Grouped ads', $audit->creatives->sum(fn ($creative) => count($creative->library_ad_ids ?? []))],
+            ['Input tokens', $audit->input_tokens],
+            ['Output tokens', $audit->output_tokens],
+            ['Estimated AI cost', $audit->estimated_cost],
+            ['Executive summary', $insights['executive_summary'] ?? 'Not available'],
+            ['Scope note', $insights['observations_disclaimer'] ?? 'Content observations only; Meta Ad Library does not establish performance.'],
+        ];
+
+        $contextRows = [['Summary', $context['summary'] ?? '']];
+        foreach (['facts', 'products', 'claims', 'audience_signals', 'positioning', 'value_propositions'] as $section) {
+            foreach ((array) ($context[$section] ?? []) as $item) {
+                $contextRows[] = [ucfirst(str_replace('_', ' ', $section)), $item];
+            }
+        }
+
+        $personaRows = $audit->personas->map(fn (AdLibraryAuditPersona $persona) => [
+            $persona->name,
+            $persona->description,
+            $persona->demographics,
+            implode('; ', $persona->problems ?? []),
+            implode('; ', $persona->desired_outcomes ?? []),
+            implode('; ', $persona->motivations ?? []),
+            implode('; ', $persona->purchase_triggers ?? []),
+            implode('; ', $persona->objections ?? []),
+            implode('; ', $persona->products ?? []),
+            implode('; ', $persona->evidence ?? []),
+            $persona->confidence === null ? '' : round($persona->confidence * 100).'%',
+        ])->all();
+
+        $personaEvidenceRows = $audit->creatives->flatMap(function (AdLibraryAuditCreative $creative) {
+            $name = $creative->source_snapshot['title'] ?? $creative->source_snapshot['link_title'] ?? 'Ad '.($creative->library_ad_ids[0] ?? $creative->id);
+
+            return collect($creative->persona_candidates ?? [])->map(fn ($candidate) => [
+                $name,
+                $candidate['name'] ?? '',
+                $candidate['description'] ?? '',
+                implode('; ', $candidate['evidence'] ?? []),
+                isset($candidate['confidence']) ? round((float) $candidate['confidence'] * 100).'%' : '',
+                optional($creative->personas->firstWhere('pivot.role', 'primary'))->name ?? '',
+            ]);
+        })->values()->all();
+
+        $coverageRows = collect($insights['persona_creative_coverage'] ?? [])->map(fn ($row) => [
+            'Persona to creative', $row['persona'] ?? '', $row['creative_count'] ?? '',
+        ])->merge(collect($insights['persona_product_coverage'] ?? [])->map(fn ($row) => [
+            'Persona to product', $row['persona'] ?? '', implode('; ', $row['products'] ?? []),
+        ]))->all();
+
+        $distributionRows = collect([
+            'Angles' => $insights['angle_distribution'] ?? [],
+            'Formats' => $insights['format_distribution'] ?? [],
+            'Types' => $insights['type_distribution'] ?? [],
+        ])->flatMap(fn ($rows, $category) => collect($rows)->map(fn ($row) => [
+            $category, $row['label'] ?? '', $row['count'] ?? 0,
+        ]))->values()->all();
+
+        $recommendationRows = collect([
+            'Coverage gaps' => $insights['gaps'] ?? [],
+            'Content opportunities' => $insights['content_opportunities'] ?? [],
+            'Test recommendations' => $insights['test_recommendations'] ?? [],
+            'Repetition and concentration' => $insights['repetition_and_concentration'] ?? [],
+            'Long-running patterns' => $insights['long_running_patterns'] ?? [],
+        ])->flatMap(fn ($items, $category) => collect($items)->values()->map(fn ($item, $index) => [
+            $category, $index + 1, $item,
+        ]))->values()->all();
+
+        $sourceRows = collect(is_array($audit->context_sources) ? $audit->context_sources : [])->map(fn ($source) => [
+            $source['title'] ?? $source['url'] ?? '', $source['url'] ?? '',
+        ])->all();
+
+        return [
+            ['name' => 'Overview', 'headers' => ['Field', 'Value'], 'rows' => $overview],
+            ['name' => 'Brand Context', 'headers' => ['Section', 'Details'], 'rows' => $contextRows],
+            ['name' => 'Personas', 'headers' => ['Persona', 'Description', 'Demographics or life stage', 'Problems', 'Desired outcomes', 'Motivations', 'Purchase triggers', 'Objections', 'Products', 'Evidence', 'Confidence'], 'rows' => $personaRows],
+            ['name' => 'Creative Audit', 'headers' => $creativeHeaders, 'rows' => $creativeRows],
+            ['name' => 'Persona Evidence', 'headers' => ['Creative', 'Candidate persona', 'Description', 'Evidence', 'Confidence', 'Final primary persona'], 'rows' => $personaEvidenceRows],
+            ['name' => 'Coverage', 'headers' => ['Coverage type', 'Persona', 'Count or products'], 'rows' => $coverageRows],
+            ['name' => 'Distributions', 'headers' => ['Dimension', 'Label', 'Creative count'], 'rows' => $distributionRows],
+            ['name' => 'Recommendations', 'headers' => ['Category', 'Order', 'Observation or recommendation'], 'rows' => $recommendationRows],
+            ['name' => 'Sources', 'headers' => ['Source', 'URL'], 'rows' => $sourceRows],
+        ];
+    }
+
     private function spreadsheetSafe(mixed $value): string
     {
         $value = (string) ($value ?? '');
@@ -446,9 +680,20 @@ class AdLibraryAuditController extends Controller
         return preg_match('/^\s*[=+\-@]/u', $value) ? "'".$value : $value;
     }
 
+    private function videoScriptLabel(AdLibraryAuditCreative $creative): string
+    {
+        return match ($creative->video_script_status) {
+            'no_speech' => 'No speech detected',
+            'not_requested' => 'Script not captured — Full media required',
+            'unavailable' => 'Video unavailable for transcription',
+            'failed' => 'Transcription failed',
+            default => '',
+        };
+    }
+
     private function payload(AdLibraryAudit $audit): array
     {
-        $audit = $audit->fresh()->load(['run.search:id,name,company_name,company_type,website_url', 'personas'])->loadCount(['creatives', 'personas']);
+        $audit = $audit->fresh()->load(['run.search:id,name,company_name,company_type,website_url,related_client_id', 'personas', 'relatedClient:id,name'])->loadCount(['creatives', 'personas']);
         $counts = $audit->creatives()->reorder()->selectRaw("COUNT(*) total,
             SUM(CASE WHEN processing_status != 'skipped' THEN 1 ELSE 0 END) selected,
             SUM(CASE WHEN processing_status = 'pending' THEN 1 ELSE 0 END) pending,
@@ -459,9 +704,20 @@ class AdLibraryAuditController extends Controller
             SUM(CASE WHEN processing_status = 'complete' AND review_status = 'reviewed' THEN 1 ELSE 0 END) reviewed,
             SUM(CASE WHEN processing_status = 'complete' AND review_status != 'reviewed' THEN 1 ELSE 0 END) pending_review")->first();
 
-        return $audit->toArray() + ['creative_summary' => collect([
+        $lastCreativeActivityAt = $audit->creatives()->where('processing_status', '!=', 'skipped')->max('updated_at');
+        $unfinished = (int) ($counts->pending ?? 0) + (int) ($counts->running ?? 0);
+        $stalled = $audit->status === 'analyzing_creatives'
+            && $unfinished > 0
+            && $lastCreativeActivityAt
+            && now()->diffInMinutes($lastCreativeActivityAt, absolute: true) >= config('ad_library_audit.analysis_stall_minutes', 5);
+
+        return $audit->toArray() + ['creative_format_options' => CreativeFormatTaxonomy::labels(), 'creative_summary' => collect([
             'total', 'selected', 'pending', 'running', 'complete', 'failed', 'skipped', 'reviewed', 'pending_review',
-        ])->mapWithKeys(fn ($key) => [$key => (int) ($counts->{$key} ?? 0)])->all()];
+        ])->mapWithKeys(fn ($key) => [$key => (int) ($counts->{$key} ?? 0)])->all(), 'analysis_health' => [
+            'stalled' => $stalled,
+            'last_activity_at' => $lastCreativeActivityAt,
+            'message' => $stalled ? 'Creative analysis has not made progress. The analysis queue worker may be offline.' : null,
+        ]];
     }
 
     private function manage(Request $request, ?AdLibraryAudit $audit = null): void
@@ -482,7 +738,7 @@ class AdLibraryAuditController extends Controller
 
     private function personaEditable(AdLibraryAudit $audit): void
     {
-        abort_if(in_array($audit->status, ['collecting_context', 'generating_personas', 'analyzing_creatives', 'creative_paused', 'generating_insights'], true), 409, 'Wait for the current audit stage to finish before changing personas.');
+        abort_if(in_array($audit->status, ['collecting_context', 'generating_personas', 'analyzing_creatives', 'creative_paused', 'consolidating_personas', 'creative_attention', 'generating_insights'], true), 409, 'Wait for the current audit stage to finish before changing personas.');
     }
 
     private function personaData(Request $request, bool $partial = false): array
@@ -494,6 +750,15 @@ class AdLibraryAuditController extends Controller
 
     private function invalidateAfterPersonaChange(AdLibraryAudit $audit): void
     {
+        if ((int) $audit->workflow_version >= 2) {
+            $audit->personas()->update(['confirmed' => false]);
+            $audit->update([
+                'status' => 'persona_review', 'personas_confirmed_at' => null, 'grid_confirmed_at' => null,
+                'insights_stale' => $audit->insights !== null, 'completed_at' => null, 'failed_stage' => null, 'error_message' => null,
+            ]);
+
+            return;
+        }
         if (! $audit->personas_confirmed_at && ! in_array($audit->status, ['analyzing_creatives', 'creative_review', 'generating_insights', 'complete'], true)) {
             if ($audit->status === 'failed' && $audit->failed_stage === 'personas') {
                 $audit->update(['status' => 'persona_review', 'failed_stage' => null, 'error_message' => null]);
@@ -524,7 +789,23 @@ class AdLibraryAuditController extends Controller
         $failed = (int) ($counts->failed ?? 0);
         $total = (int) ($counts->total ?? 0);
         $fields = ['progress_total' => $total, 'progress_completed' => $completed, 'progress_failed' => $failed];
+        if ((int) $audit->workflow_version >= 2 && $audit->status === 'creative_attention' && $failed === 0 && $completed > 0) {
+            $fields['status'] = 'consolidating_personas';
+            $audit->update($fields);
+            ConsolidateAdLibraryPersonasJob::dispatch($audit->id);
+
+            return;
+        }
         if ($audit->status === 'analyzing_creatives' && $total > 0 && $completed + $failed >= $total) {
+            if ((int) $audit->workflow_version >= 2) {
+                $fields['status'] = $failed > 0 ? 'creative_attention' : 'consolidating_personas';
+                $audit->update($fields);
+                if ($failed === 0) {
+                    ConsolidateAdLibraryPersonasJob::dispatch($audit->id);
+                }
+
+                return;
+            }
             $fields['status'] = 'creative_review';
         }
         $audit->update($fields);
@@ -565,6 +846,6 @@ class AdLibraryAuditController extends Controller
 
     private function auditStatuses(): array
     {
-        return ['draft', 'collecting_context', 'context_review', 'generating_personas', 'persona_review', 'creative_selection', 'analyzing_creatives', 'creative_paused', 'creative_review', 'generating_insights', 'complete', 'failed'];
+        return ['draft', 'collecting_context', 'context_review', 'generating_personas', 'persona_review', 'creative_selection', 'analyzing_creatives', 'creative_paused', 'creative_attention', 'consolidating_personas', 'creative_review', 'generating_insights', 'complete', 'failed'];
     }
 }

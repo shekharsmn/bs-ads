@@ -7,6 +7,7 @@ use App\Models\ReportRun;
 use App\Services\GoogleChatNotifier;
 use App\Services\MetricsQueryService;
 use App\Services\NotificationDispatcher;
+use App\Services\PerformanceCollectionService;
 use App\Services\WorkflowActivityService;
 use App\Services\WorkflowCoordinator;
 use Illuminate\Contracts\Queue\ShouldBeUnique;
@@ -25,7 +26,10 @@ class GenerateReportSnapshotJob implements ShouldBeUnique, ShouldQueue
     public function __construct(public readonly int $reportRunId)
     {
         $this->onQueue(config('workloads.queues.reports', 'reports'));
-        $this->timeout = config('workloads.policies.reports.timeout', 120);
+        $this->timeout = max(
+            config('workloads.policies.reports.timeout', 120),
+            config('workloads.policies.collection.timeout', 300),
+        );
         $this->tries = config('workloads.policies.reports.tries', 3);
     }
 
@@ -34,12 +38,20 @@ class GenerateReportSnapshotJob implements ShouldBeUnique, ShouldQueue
         return 'performance-report:'.$this->reportRunId;
     }
 
-    public function handle(MetricsQueryService $metrics, GoogleChatNotifier $chat, NotificationDispatcher $notifications, WorkflowActivityService $activities, WorkflowCoordinator $workflows): void
+    public function handle(MetricsQueryService $metrics, GoogleChatNotifier $chat, NotificationDispatcher $notifications, WorkflowActivityService $activities, WorkflowCoordinator $workflows, PerformanceCollectionService $collector): void
     {
         $run = ReportRun::with(['client', 'template'])->findOrFail($this->reportRunId);
         $attempt = $workflows->start($activities->sync($run), 'generating_snapshot', 'report:'.$run->id.':'.($this->job?->uuid() ?? Str::uuid()));
         try {
             $run->update(['status' => 'running', 'error_message' => null]);
+            $uncollectedAccounts = $run->client->adAccounts()
+                ->with(['connection', 'client'])
+                ->where('status', 'active')
+                ->whereNull('last_collected_at')
+                ->get();
+            foreach ($uncollectedAccounts as $account) {
+                $collector->collect($account, $run->period_start->toDateString(), $run->period_end->toDateString());
+            }
             $filters = ['client_id' => $run->client_id, 'client' => $run->client, 'start_date' => $run->period_start->toDateString(), 'end_date' => $run->period_end->toDateString()];
             $periodDays = $run->period_start->diffInDays($run->period_end) + 1;
             $previousEnd = $run->period_start->copy()->subDay();

@@ -18,10 +18,10 @@ class MethodologyRegistry
             'previous_version' => 'legacy-1.0', 'changes' => ['Added comparison and data-freshness sections.', 'Snapshots now preserve the exact methodology.'],
         ],
         'content-audit' => [
-            'version' => '2.0.0', 'released_at' => '2026-10-24',
-            'summary' => 'Evidence-backed creative classification and content observations without performance claims.',
-            'checks' => ['context', 'personas', 'creative_classification', 'confidence_review', 'insights'],
-            'previous_version' => 'legacy-1.0', 'changes' => ['Added confidence review and evidence requirements.', 'Formalized the no-performance-claims boundary.'],
+            'version' => '3.0.0', 'released_at' => '2026-10-26',
+            'summary' => 'Creative-first classification, evidence-backed persona consolidation, and content observations without performance claims.',
+            'checks' => ['context', 'creative_classification', 'video_transcript', 'persona_candidates', 'persona_consolidation', 'confidence_review', 'insights'],
+            'previous_version' => '2.0.0', 'changes' => ['Moved persona discovery after per-creative analysis.', 'Added Full-media spoken transcripts and candidate-to-canonical persona provenance.'],
         ],
     ];
 

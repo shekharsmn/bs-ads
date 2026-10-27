@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Jobs\CollectAccountMetricsJob;
 use App\Models\AdAccount;
 use App\Models\PlatformConnection;
 use App\Services\ClientAccess;
@@ -82,6 +83,7 @@ class ConnectionController extends Controller
         $data = $request->validate(['client_id' => 'required|exists:clients,id', 'external_id' => 'required|string', 'manager_external_id' => 'nullable|string', 'name' => 'required|string', 'currency' => 'required|string|size:3', 'timezone' => 'required|timezone:all_with_bc', 'monthly_budget' => 'nullable|numeric|min:0']);
         $this->ensureClientAssignment($connection, (int) $data['client_id']);
         $account = AdAccount::updateOrCreate(['platform_connection_id' => $connection->id, 'external_id' => $data['external_id']], $data + ['platform' => $connection->platform->value, 'status' => 'active']);
+        CollectAccountMetricsJob::dispatch($account->id);
 
         return response()->json($account, 201);
     }
@@ -111,6 +113,7 @@ class ConnectionController extends Controller
                 );
             });
         });
+        $accounts->each(fn (AdAccount $account) => CollectAccountMetricsJob::dispatch($account->id));
 
         return response()->json(['accounts' => $accounts], 201);
     }

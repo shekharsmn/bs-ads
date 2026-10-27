@@ -13,10 +13,12 @@ use Illuminate\Support\Facades\Http;
 
 class PerformanceCollectionService
 {
-    public function collect(AdAccount $account): void
+    public function collect(AdAccount $account, ?string $start = null, ?string $end = null): void
     {
         $account->loadMissing(['connection', 'client']);
-        $rows = $account->platform === Platform::Google ? $this->google($account) : $this->meta($account);
+        $end ??= now($account->timezone)->toDateString();
+        $start ??= now($account->timezone)->subDays($account->last_collected_at ? 14 : 89)->toDateString();
+        $rows = $account->platform === Platform::Google ? $this->google($account, $start, $end) : $this->meta($account, $start, $end);
         DB::transaction(function () use ($account, $rows) {
             $now = now();
             $campaignRows = collect($rows)->map(fn ($row) => [
@@ -72,12 +74,10 @@ class PerformanceCollectionService
         });
     }
 
-    private function google(AdAccount $account): array
+    private function google(AdAccount $account, string $start, string $end): array
     {
         $credentials = $account->connection->credentials;
         $client = GoogleAdsClientFactory::fromRefreshToken($credentials['refresh_token'], $account->manager_external_id ?? $credentials['login_customer_id'] ?? $account->connection->manager_external_id);
-        $start = now($account->timezone)->subDays(14)->toDateString();
-        $end = now($account->timezone)->toDateString();
         $query = "SELECT campaign.id, campaign.name, campaign.status, campaign.advertising_channel_type, campaign_budget.amount_micros, segments.date, metrics.cost_micros, metrics.impressions, metrics.clicks, metrics.conversions, metrics.conversions_value FROM campaign WHERE segments.date BETWEEN '$start' AND '$end' AND campaign.status != 'REMOVED'";
         $service = $client->getGoogleAdsServiceClient();
         $stream = $service->searchStream(SearchGoogleAdsStreamRequest::build($account->external_id, $query));
@@ -141,11 +141,9 @@ class PerformanceCollectionService
         return $rows;
     }
 
-    private function meta(AdAccount $account): array
+    private function meta(AdAccount $account, string $start, string $end): array
     {
         $credentials = $account->connection->credentials;
-        $start = now($account->timezone)->subDays(14)->toDateString();
-        $end = now($account->timezone)->toDateString();
         $url = 'https://graph.facebook.com/v24.0/'.(str_starts_with($account->external_id, 'act_') ? $account->external_id : 'act_'.$account->external_id).'/insights';
         $response = Http::timeout(60)->retry(3, 500)->get($url, [
             'access_token' => $credentials['access_token'], 'level' => 'campaign', 'time_increment' => 1,

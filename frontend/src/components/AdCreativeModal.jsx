@@ -2,9 +2,11 @@ import { useEffect, useMemo, useState } from 'react'
 import { Check, Copy, ExternalLink, Image as ImageIcon, PlayCircle, X } from 'lucide-react'
 import { copyText } from '../utils/clipboard'
 
-export default function AdCreativeModal({ open, onClose, creative }) {
+export default function AdCreativeModal({ open, onClose, creative: creativeRecord }) {
   const [mediaIndex, setMediaIndex] = useState(0)
   const [copied, setCopied] = useState(false)
+  const [scriptCopied, setScriptCopied] = useState(false)
+  const creative = creativeRecord?.source_snapshot || creativeRecord
 
   useEffect(() => {
     if (!open) return undefined
@@ -16,21 +18,29 @@ export default function AdCreativeModal({ open, onClose, creative }) {
   }, [open, onClose])
 
   const media = useMemo(() => {
-    if (!creative) return []
-    const videos = (creative.video_urls || []).map((url, index) => ({ type: 'video', url, label: `Video ${index + 1}` }))
-    const images = (creative.image_urls || []).map((url, index) => ({ type: 'image', url, label: `Image ${index + 1}` }))
+    if (!creativeRecord) return []
+    const source = creativeRecord.source_snapshot || creativeRecord
+    const videos = (source.video_urls || []).map((url, index) => ({ type: 'video', url, label: `Video ${index + 1}` }))
+    const images = (source.image_urls || []).map((url, index) => ({ type: 'image', url, label: `Image ${index + 1}` }))
     return videos.length > 0 ? videos : images
-  }, [creative])
+  }, [creativeRecord])
 
-  if (!open || !creative) return null
+  if (!open || !creativeRecord || !creative) return null
 
   const selected = media[Math.min(mediaIndex, Math.max(media.length - 1, 0))]
-  const rawJson = JSON.stringify(creative.raw_payload ?? creative, null, 2)
+  const rawJson = JSON.stringify(creativeRecord.raw_payload ?? creativeRecord, null, 2)
   const copyJson = async () => {
     await copyText(rawJson)
     setCopied(true)
     window.setTimeout(() => setCopied(false), 1800)
   }
+  const copyScript = async () => {
+    await copyText(creativeRecord.video_script || '')
+    setScriptCopied(true)
+    window.setTimeout(() => setScriptCopied(false), 1800)
+  }
+  const primaryPersona = creativeRecord.personas?.find(persona => persona.pivot?.role === 'primary')
+  const secondaryPersonas = creativeRecord.personas?.filter(persona => persona.pivot?.role === 'secondary') || []
 
   return <div className="ad-creative-modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="ad-creative-title" onClick={onClose}>
     <div className="ad-creative-modal" onClick={event => event.stopPropagation()}>
@@ -118,6 +128,10 @@ export default function AdCreativeModal({ open, onClose, creative }) {
             </div>
           </DetailSection>}
 
+          {creativeRecord.source_snapshot && creative.media_type === 'video' && <section className="ad-creative-detail-section audit-video-script"><h3>Video script</h3><div className="audit-video-script-head"><span>{scriptStatusLabel(creativeRecord.video_script_status)}</span>{creativeRecord.video_script && <button type="button" onClick={copyScript}>{scriptCopied ? <Check size={13}/> : <Copy size={13}/>} {scriptCopied ? 'Copied' : 'Copy script'}</button>}</div>{creativeRecord.video_script ? <pre>{creativeRecord.video_script}</pre> : <p>{scriptStatusDescription(creativeRecord.video_script_status)}</p>}</section>}
+
+          {creativeRecord.source_snapshot && (creativeRecord.persona_candidates?.length > 0 || primaryPersona) && <section className="ad-creative-detail-section audit-persona-evidence"><h3>Persona evidence</h3>{creativeRecord.persona_candidates?.map((candidate, index) => <article key={candidate.key || index}><header><strong>{candidate.name || `Candidate ${index + 1}`}</strong><span>{Math.round((candidate.confidence || 0) * 100)}%</span></header><p>{candidate.description}</p>{candidate.evidence?.length > 0 && <ul>{candidate.evidence.map((item, evidenceIndex) => <li key={evidenceIndex}>{item}</li>)}</ul>}</article>)}{primaryPersona && <div className="audit-final-assignment"><span>Final primary persona</span><strong>{primaryPersona.name}</strong>{secondaryPersonas.length > 0 && <small>Secondary: {secondaryPersonas.map(persona => persona.name).join(', ')}</small>}{primaryPersona.pivot?.rationale && <p>{primaryPersona.pivot.rationale}</p>}{primaryPersona.pivot?.confidence != null && <small>{Math.round(primaryPersona.pivot.confidence * 100)}% assignment confidence</small>}</div>}</section>}
+
           <details className="ad-creative-raw">
             <summary>Raw provider JSON</summary>
             <div><button type="button" onClick={copyJson}>{copied ? <Check size={13} /> : <Copy size={13} />}{copied ? 'Copied' : 'Copy JSON'}</button></div>
@@ -149,4 +163,12 @@ function formatDate(value) {
 
 function formatNumber(value) {
   return value == null ? null : Number(value).toLocaleString()
+}
+
+function scriptStatusLabel(status) {
+  return ({ captured: 'Captured from spoken audio', no_speech: 'No speech detected', not_requested: 'Not captured', unavailable: 'Video unavailable', failed: 'Transcription failed' })[status] || 'Not available'
+}
+
+function scriptStatusDescription(status) {
+  return ({ no_speech: 'No spoken dialogue or voice-over was detected.', not_requested: 'Script not captured — Full media required.', unavailable: 'The video could not be downloaded for transcription.', failed: 'The spoken transcript could not be captured.' })[status] || 'No script was recorded for this creative.'
 }

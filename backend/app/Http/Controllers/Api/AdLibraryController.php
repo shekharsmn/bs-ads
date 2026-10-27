@@ -8,6 +8,7 @@ use App\Models\AdLibraryResult;
 use App\Models\AdLibraryRun;
 use App\Models\AdLibrarySearch;
 use App\Models\AdLibraryTag;
+use App\Services\ClientAccess;
 use Illuminate\Http\Request;
 use Illuminate\Pagination\LengthAwarePaginator;
 use Illuminate\Support\Str;
@@ -19,11 +20,15 @@ class AdLibraryController extends Controller
     {
         $this->enabled();
         $data = $request->validate(['company_type' => ['nullable', Rule::in($this->companyTypes())], 'tag_id' => 'nullable|integer|exists:ad_library_tags,id']);
+        $accessibleClientIds = ClientAccess::clientsFor($request->user())->pluck('id');
 
         return ['searches' => AdLibrarySearch::query()
             ->when($data['company_type'] ?? null, fn ($query, $type) => $query->where('company_type', $type))
             ->when($data['tag_id'] ?? null, fn ($query, $id) => $query->whereHas('tags', fn ($tags) => $tags->whereKey($id)))
-            ->with('tags:id,name,slug')->withCount('runs')->latest()->get(), 'tags' => AdLibraryTag::query()->orderBy('name')->get(['id', 'name', 'slug'])];
+            ->with([
+                'tags:id,name,slug',
+                'relatedClient' => fn ($query) => $query->whereIn('clients.id', $accessibleClientIds)->select('clients.id', 'clients.name'),
+            ])->withCount('runs')->latest()->get(), 'tags' => AdLibraryTag::query()->orderBy('name')->get(['id', 'name', 'slug'])];
     }
 
     public function store(Request $request)
@@ -32,6 +37,7 @@ class AdLibraryController extends Controller
         $data = $this->validateSearch($request);
         $this->manage($request);
         $data = $this->normalizeSearch($data);
+        $this->authorizeRelatedClient($request, $data['related_client_id'] ?? null);
         $data['created_by'] = $request->user()->id;
 
         return response()->json(AdLibrarySearch::create($data), 201);
@@ -42,7 +48,8 @@ class AdLibraryController extends Controller
         $this->enabled();
         $this->manage($request);
         $data = $this->validateSearch($request, true);
-        $candidate = array_merge($search->only(['company_name', 'company_type', 'website_url', 'name', 'search_mode', 'query', 'advertiser_page_id', 'region', 'active_status', 'ad_type', 'exact_phrase', 'details', 'max_results']), $data);
+        $candidate = array_merge($search->only(['related_client_id', 'company_name', 'company_type', 'website_url', 'name', 'search_mode', 'query', 'advertiser_page_id', 'region', 'active_status', 'ad_type', 'exact_phrase', 'details', 'max_results']), $data);
+        $this->authorizeRelatedClient($request, $candidate['related_client_id'] ?? null);
         $search->update($this->normalizeSearch($candidate));
 
         return $search->fresh();
@@ -96,6 +103,8 @@ class AdLibraryController extends Controller
             'q' => 'nullable|string|max:100',
             'media_type' => ['nullable', Rule::in(['all', 'static', 'video'])],
             'favorites' => 'nullable|boolean',
+            'sort' => ['nullable', Rule::in(['relevance', 'oldest'])],
+            'min_age_days' => ['nullable', 'integer', Rule::in([7, 30, 90, 180])],
         ]);
 
         $favoriteIds = $request->user()->belongsToMany(AdLibraryResult::class, 'ad_library_favorites')->pluck('ad_library_results.id');
@@ -116,13 +125,14 @@ class AdLibraryController extends Controller
             $rows = $rows->filter(fn (AdLibraryResult $result) => $this->mediaType($result) === $mediaType)->values();
         }
 
-        $rawTotal = $rows->count();
         $creatives = $rows->groupBy(fn (AdLibraryResult $result) => $this->creativeFingerprint($result))
             ->map(function ($variants, $fingerprint) use ($favoriteIds) {
                 /** @var AdLibraryResult $primary */
                 $primary = $variants->first();
                 $payload = $primary->toArray();
+                $oldestFirstShownAt = $variants->pluck('first_shown_at')->filter()->sort()->first();
                 $payload['creative_key'] = $fingerprint;
+                $payload['_oldest_first_shown_at'] = optional($oldestFirstShownAt)->toDateString();
                 $payload['media_type'] = $this->mediaType($primary);
                 $payload['variant_count'] = $variants->count();
                 $payload['favorite'] = $variants->pluck('id')->intersect($favoriteIds)->isNotEmpty();
@@ -138,6 +148,18 @@ class AdLibraryController extends Controller
 
                 return $payload;
             })->values();
+
+        if ($data['min_age_days'] ?? null) {
+            $cutoff = now()->subDays((int) $data['min_age_days'])->toDateString();
+            $creatives = $creatives->filter(fn (array $creative) => filled($creative['_oldest_first_shown_at']) && $creative['_oldest_first_shown_at'] <= $cutoff)->values();
+        }
+
+        if (($data['sort'] ?? 'relevance') === 'oldest') {
+            $creatives = $creatives->sortBy(fn (array $creative) => $creative['_oldest_first_shown_at'] ?? '9999-12-31')->values();
+        }
+
+        $rawTotal = $creatives->sum('variant_count');
+        $creatives = $creatives->map(fn (array $creative) => collect($creative)->except('_oldest_first_shown_at')->all());
 
         $perPage = $data['per_page'] ?? 24;
         $page = LengthAwarePaginator::resolveCurrentPage();
@@ -291,6 +313,7 @@ class AdLibraryController extends Controller
 
         return $request->validate([
             'company_name' => $prefix.'string|max:160', 'company_type' => [$partial ? 'sometimes' : 'required', Rule::in($this->companyTypes())],
+            'related_client_id' => 'nullable|integer|exists:clients,id',
             'website_url' => 'nullable|url:http,https|max:2000', 'name' => $prefix.'string|max:120',
             'search_mode' => $prefix.'in:keyword,advertiser', 'query' => 'nullable|string|max:255',
             'advertiser_page_id' => ['nullable', 'string', 'max:64', 'regex:/^\d+$/'],
@@ -332,6 +355,13 @@ class AdLibraryController extends Controller
     private function manage(Request $request): void
     {
         abort_unless($request->user()->canManage(), 403, 'Read-only users cannot modify Ad Library research.');
+    }
+
+    private function authorizeRelatedClient(Request $request, mixed $clientId): void
+    {
+        if ($clientId !== null) {
+            ClientAccess::authorize($request->user(), (int) $clientId);
+        }
     }
 
     private function companyTypes(): array

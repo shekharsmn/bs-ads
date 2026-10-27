@@ -18,6 +18,6 @@ class AdLibraryAuditPersona extends Model
     }
 
     public function audit() { return $this->belongsTo(AdLibraryAudit::class, 'ad_library_audit_id'); }
-    public function creatives() { return $this->belongsToMany(AdLibraryAuditCreative::class, 'ad_library_audit_creative_persona')->withPivot('role')->withTimestamps(); }
+    public function creatives() { return $this->belongsToMany(AdLibraryAuditCreative::class, 'ad_library_audit_creative_persona')->withPivot('role', 'rationale', 'confidence')->withTimestamps(); }
     public function editor() { return $this->belongsTo(User::class, 'edited_by'); }
 }

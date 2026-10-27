@@ -2,12 +2,14 @@
 
 namespace Tests\Feature;
 
+use App\Jobs\CollectAccountMetricsJob;
 use App\Models\AdAccount;
 use App\Models\Client;
 use App\Models\MetricSnapshot;
 use App\Models\PlatformConnection;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Queue;
 use Tests\TestCase;
 
 class OperationsApiTest extends TestCase
@@ -76,6 +78,7 @@ class OperationsApiTest extends TestCase
 
     public function test_discovered_accounts_can_be_assigned_to_clients_in_bulk_with_manager_context(): void
     {
+        Queue::fake();
         $admin = User::factory()->create(['role' => 'admin']);
         $client = Client::create(['name' => 'Acme', 'slug' => 'acme', 'currency' => 'AED', 'timezone' => 'Asia/Dubai']);
         $connection = PlatformConnection::create([
@@ -104,6 +107,7 @@ class OperationsApiTest extends TestCase
             'manager_external_id' => '9999999999',
             'timezone' => 'Asia/Calcutta',
         ]);
+        Queue::assertPushed(CollectAccountMetricsJob::class, fn (CollectAccountMetricsJob $job) => $job->adAccountId === AdAccount::query()->where('external_id', '1234567890')->value('id'));
     }
 
     public function test_agency_connection_only_exposes_accounts_for_assigned_clients(): void

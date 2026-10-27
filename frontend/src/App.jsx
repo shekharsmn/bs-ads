@@ -24,6 +24,7 @@ const PublicPerformanceReportPage = lazy(() => import('./pages/PublicPerformance
 const ConnectionsPage = lazy(() => import('./pages/ConnectionsPage'))
 const AdLibraryPage = lazy(() => import('./pages/AdLibraryPage'))
 const AdLibraryAuditPage = lazy(() => import('./pages/AdLibraryAuditPage'))
+const AdLibraryAuditReportPage = lazy(() => import('./pages/AdLibraryAuditReportPage'))
 const AiModelSettingsPage = lazy(() => import('./pages/AiModelSettingsPage'))
 
 function RouteFallback() { return <div className="route-loading" role="status"><span/>Loading workspace…</div> }
@@ -98,6 +99,7 @@ export default function App() {
               <Route path="ad-library" element={<AdLibraryPage />} />
               <Route path="ad-library/audits" element={<AdLibraryAuditPage />} />
               <Route path="ad-library/audits/:id" element={<AdLibraryAuditPage />} />
+              <Route path="ad-library/audits/:id/report" element={<AdLibraryAuditReportPage />} />
               <Route path="accounts/google/callback" element={<GoogleCallbackPage />} />
             </Route>
             <Route path="*" element={<Navigate to="/" replace />} />
