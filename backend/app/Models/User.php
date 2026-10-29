@@ -24,6 +24,9 @@ class User extends Authenticatable
         'password',
         'google_subject',
         'role',
+        'run_performance_audits',
+        'run_content_audits',
+        'use_data_inspector',
         'avatar_url',
         'last_login_at',
         'disabled_at',
@@ -51,6 +54,9 @@ class User extends Authenticatable
             'email_verified_at' => 'datetime',
             'password' => 'hashed',
             'role' => UserRole::class,
+            'run_performance_audits' => 'boolean',
+            'run_content_audits' => 'boolean',
+            'use_data_inspector' => 'boolean',
             'last_login_at' => 'datetime',
             'disabled_at' => 'datetime',
         ];
@@ -84,6 +90,21 @@ class User extends Authenticatable
     public function canManage(): bool
     {
         return ! $this->disabled_at && ($this->role?->canManage() ?? false);
+    }
+
+    public function canRunPerformanceAudits(): bool
+    {
+        return ! $this->disabled_at && ($this->isAdmin() || $this->run_performance_audits);
+    }
+
+    public function canRunContentAudits(): bool
+    {
+        return ! $this->disabled_at && ($this->isAdmin() || $this->run_content_audits);
+    }
+
+    public function canUseDataInspector(): bool
+    {
+        return ! $this->disabled_at && ($this->isAdmin() || $this->use_data_inspector);
     }
 
     public function canAccessClient(int $clientId): bool

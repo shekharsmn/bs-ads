@@ -40,32 +40,34 @@ class GenerateReportSnapshotJob implements ShouldBeUnique, ShouldQueue
 
     public function handle(MetricsQueryService $metrics, GoogleChatNotifier $chat, NotificationDispatcher $notifications, WorkflowActivityService $activities, WorkflowCoordinator $workflows, PerformanceCollectionService $collector): void
     {
-        $run = ReportRun::with(['client', 'template'])->findOrFail($this->reportRunId);
+        $run = ReportRun::with(['client', 'adAccount', 'template'])->findOrFail($this->reportRunId);
         $attempt = $workflows->start($activities->sync($run), 'generating_snapshot', 'report:'.$run->id.':'.($this->job?->uuid() ?? Str::uuid()));
         try {
             $run->update(['status' => 'running', 'error_message' => null]);
             $uncollectedAccounts = $run->client->adAccounts()
                 ->with(['connection', 'client'])
+                ->when($run->ad_account_id, fn ($query, $id) => $query->whereKey($id))
                 ->where('status', 'active')
                 ->whereNull('last_collected_at')
                 ->get();
             foreach ($uncollectedAccounts as $account) {
                 $collector->collect($account, $run->period_start->toDateString(), $run->period_end->toDateString());
             }
-            $filters = ['client_id' => $run->client_id, 'client' => $run->client, 'start_date' => $run->period_start->toDateString(), 'end_date' => $run->period_end->toDateString()];
+            $filters = ['client_id' => $run->client_id, 'ad_account_id' => $run->ad_account_id, 'client' => $run->client, 'start_date' => $run->period_start->toDateString(), 'end_date' => $run->period_end->toDateString()];
             $periodDays = $run->period_start->diffInDays($run->period_end) + 1;
             $previousEnd = $run->period_start->copy()->subDay();
-            $previousFilters = ['client_id' => $run->client_id, 'client' => $run->client, 'start_date' => $previousEnd->copy()->subDays($periodDays - 1)->toDateString(), 'end_date' => $previousEnd->toDateString()];
+            $previousFilters = ['client_id' => $run->client_id, 'ad_account_id' => $run->ad_account_id, 'client' => $run->client, 'start_date' => $previousEnd->copy()->subDays($periodDays - 1)->toDateString(), 'end_date' => $previousEnd->toDateString()];
             $template = $run->template;
             $sections = $template?->sections ?: ['summary', 'trends', 'campaigns', 'alerts'];
             $snapshot = [
                 'client' => $run->client->only(['name', 'slug', 'timezone', 'currency', 'objective', 'goals']),
+                'ad_account' => $run->adAccount?->only(['id', 'name', 'external_id', 'platform', 'currency', 'timezone']),
                 'frequency' => $run->frequency, 'period' => ['start' => $filters['start_date'], 'end' => $filters['end_date']],
                 'summary' => in_array('summary', $sections, true) ? $metrics->summary($filters) : null,
                 'comparison' => in_array('summary', $sections, true) ? ['label' => 'Previous period', 'summary' => $metrics->summary($previousFilters)] : null,
                 'trends' => in_array('trends', $sections, true) ? $metrics->trends($filters) : null,
                 'campaigns' => in_array('campaigns', $sections, true) ? $metrics->campaigns($filters) : null,
-                'alerts' => in_array('alerts', $sections, true) ? AlertIncident::query()->where('client_id', $run->client_id)->whereBetween('triggered_at', [$run->period_start->startOfDay(), $run->period_end->endOfDay()])->get(['severity', 'title', 'status', 'triggered_at', 'resolved_at'])->toArray() : null,
+                'alerts' => in_array('alerts', $sections, true) ? AlertIncident::query()->where('client_id', $run->client_id)->when($run->ad_account_id, fn ($query, $id) => $query->where('ad_account_id', $id))->whereBetween('triggered_at', [$run->period_start->startOfDay(), $run->period_end->endOfDay()])->get(['severity', 'title', 'status', 'triggered_at', 'resolved_at'])->toArray() : null,
                 'template' => ['name' => $template?->name, 'sections' => $sections, 'brand_name' => $template?->brand_name, 'brand_color' => $template?->brand_color, 'logo_url' => $template?->logo_url],
                 'generated_at' => now()->toIso8601String(),
             ];

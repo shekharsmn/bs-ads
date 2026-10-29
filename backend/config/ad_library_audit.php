@@ -3,6 +3,7 @@
 return [
     'enabled' => env('AD_LIBRARY_AUDITS_ENABLED', false),
     'max_creatives' => (int) env('AD_LIBRARY_AUDIT_MAX_CREATIVES', 50),
+    'max_personas' => 5,
     'analysis_stall_minutes' => (int) env('AD_LIBRARY_AUDIT_STALL_MINUTES', 5),
     'providers' => [
         'gemini' => ['api_key' => env('GEMINI_API_KEY'), 'base_url' => env('GEMINI_API_BASE', 'https://generativelanguage.googleapis.com/v1beta')],

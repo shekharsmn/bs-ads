@@ -5,10 +5,10 @@ import { Check, ChevronLeft, ChevronRight, Clock, MessageSquare, Search, UserChe
 import { api } from '../api/client'
 import { Page } from './ClientsPage'
 import { useAuth } from '../context/AuthContext'
-import { useWorkspace } from '../context/WorkspaceContext'
 import { useToast } from '../context/ToastContext'
 import ConfirmDialog from '../components/ui/ConfirmDialog'
 import { AsyncStateNotice } from '../components/ui/AsyncState'
+import ScopeFilterBar from '../components/ScopeFilterBar'
 
 export default function AlertInboxPage() {
   const { id } = useParams()
@@ -16,7 +16,6 @@ export default function AlertInboxPage() {
   const qc = useQueryClient()
   const toast = useToast()
   const { user } = useAuth()
-  const { clientId } = useWorkspace()
   const [search, setSearch] = useSearchParams()
   const [selected, setSelected] = useState([])
   const [noteOpen, setNoteOpen] = useState(false)
@@ -24,7 +23,7 @@ export default function AlertInboxPage() {
   const savedViewKey = `pulse:alert-views:${user?.id || 'guest'}`
   const [savedViews, setSavedViews] = useState(() => { try { return JSON.parse(localStorage.getItem(savedViewKey) || '[]') } catch { return [] } })
   const page = Number(search.get('page') || 1)
-  const filters = { client_id: clientId || undefined, status: search.get('status') || undefined, severity: search.get('severity') || undefined, q: search.get('q') || undefined, page, per_page: 25 }
+  const filters = { client_id: search.get('client_id') || undefined, ad_account_id: search.get('ad_account_id') || undefined, status: search.get('status') || undefined, severity: search.get('severity') || undefined, q: search.get('q') || undefined, page, per_page: 25 }
   const alerts = useQuery({ queryKey: ['alerts', filters], queryFn: () => api.getAlerts(filters).then(r => r.data), refetchInterval: query => query.state.data?.data?.some(row => row.status !== 'resolved') ? 30_000 : 90_000 })
   const detail = useQuery({ queryKey: ['alert', id], queryFn: () => api.getAlert(id).then(r => r.data), enabled: Boolean(id) })
   const finish = message => { qc.invalidateQueries({ queryKey: ['alerts'] }); qc.invalidateQueries({ queryKey: ['alert', id] }); setSelected([]); toast.success(message) }
@@ -33,6 +32,7 @@ export default function AlertInboxPage() {
   const operate = user?.role !== 'viewer'
   const rows = alerts.data?.data || []
   const setFilter = (key, value) => setSearch(current => { const next = new URLSearchParams(current); value ? next.set(key, value) : next.delete(key); next.delete('page'); return next }, { replace: true })
+  const setScope = (clientId, accountId) => { const next = new URLSearchParams(search); clientId ? next.set('client_id', clientId) : next.delete('client_id'); accountId ? next.set('ad_account_id', accountId) : next.delete('ad_account_id'); next.delete('page'); setSearch(next, { replace: true }) }
   const saveView = () => {
     const query = search.toString()
     if (!query) return
@@ -43,6 +43,7 @@ export default function AlertInboxPage() {
 
   return <Page title="Alert inbox" subtitle="Triage, assign and resolve performance exceptions across clients.">
     <AsyncStateNotice queries={[alerts, detail]}/>
+    <ScopeFilterBar clientId={search.get('client_id') || ''} accountId={search.get('ad_account_id') || ''} onScopeChange={setScope} onAccountChange={value => setFilter('ad_account_id', value)}/>
     <div className="alert-toolbar">
       <label className="alert-search"><Search size={14}/><input value={search.get('q') || ''} onChange={event => setFilter('q', event.target.value)} placeholder="Search incidents"/></label>
       <select value={search.get('status') || ''} onChange={event => setFilter('status', event.target.value)}><option value="">All states</option><option value="open">Open</option><option value="acknowledged">Acknowledged</option><option value="snoozed">Snoozed</option><option value="resolved">Resolved</option></select>

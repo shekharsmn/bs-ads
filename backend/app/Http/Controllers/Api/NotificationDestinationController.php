@@ -71,7 +71,7 @@ class NotificationDestinationController extends Controller
     public function test(Request $request, NotificationDestination $destination)
     {
         ClientAccess::authorize($request->user(), $destination->client_id, true);
-        $delivery = NotificationDelivery::create(['notification_destination_id' => $destination->id, 'event_type' => 'test', 'idempotency_key' => 'test:'.Str::uuid(), 'payload' => ['title' => 'Pulse test notification', 'text' => 'This destination is connected to Pulse.']]);
+        $delivery = NotificationDelivery::create(['notification_destination_id' => $destination->id, 'event_type' => 'test', 'idempotency_key' => 'test:'.Str::uuid(), 'payload' => ['title' => 'SharkAds test notification', 'text' => 'This destination is connected to SharkAds.']]);
         try {
             SendNotificationJob::dispatchSync($delivery->id);
             $destination->update(['last_tested_at' => now(), 'last_test_status' => 'delivered', 'last_error' => null]);

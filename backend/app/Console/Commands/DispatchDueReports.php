@@ -29,7 +29,7 @@ class DispatchDueReports extends Command
                 $end = $now->copy()->subDay()->endOfDay();
                 $start = $schedule->frequency === 'weekly' ? $end->copy()->subDays(6)->startOfDay() : $end->copy()->startOfMonth();
                 $identity = [
-                    'client_id' => $schedule->client_id, 'report_schedule_id' => $schedule->id,
+                    'client_id' => $schedule->client_id, 'ad_account_id' => $schedule->ad_account_id, 'report_schedule_id' => $schedule->id,
                     'report_template_id' => $schedule->report_template_id,
                     'frequency' => $schedule->frequency, 'period_start' => $start->toDateString(), 'period_end' => $end->toDateString(),
                 ];

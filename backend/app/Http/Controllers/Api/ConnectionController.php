@@ -5,21 +5,42 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Jobs\CollectAccountMetricsJob;
 use App\Models\AdAccount;
+use App\Models\Client;
 use App\Models\PlatformConnection;
 use App\Services\ClientAccess;
 use App\Services\GoogleAdsAccountDiscovery;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
+use RuntimeException;
+use Throwable;
 
 class ConnectionController extends Controller
 {
     public function index(Request $request)
     {
+        $filters = $request->validate([
+            'client_id' => 'nullable|integer|exists:clients,id',
+            'ad_account_id' => 'nullable|integer|exists:ad_accounts,id',
+            'platform' => 'nullable|in:google,meta',
+            'status' => 'nullable|in:pending,healthy,error,disconnected',
+        ]);
         $clientIds = ClientAccess::clientsFor($request->user())->pluck('id');
+        if ($filters['client_id'] ?? null) {
+            ClientAccess::authorize($request->user(), Client::findOrFail($filters['client_id']));
+        }
+        if ($filters['ad_account_id'] ?? null) {
+            $account = AdAccount::findOrFail($filters['ad_account_id']);
+            ClientAccess::authorize($request->user(), Client::findOrFail($account->client_id));
+            abort_if(($filters['client_id'] ?? null) && (int) $filters['client_id'] !== (int) $account->client_id, 422, 'The selected account does not belong to this client.');
+        }
 
         return PlatformConnection::query()
             ->where(fn ($q) => $q->whereNull('client_id')->orWhereIn('client_id', $clientIds))
+            ->when($filters['client_id'] ?? null, fn ($q, $id) => $q->whereHas('adAccounts', fn ($accounts) => $accounts->where('client_id', $id)))
+            ->when($filters['ad_account_id'] ?? null, fn ($q, $id) => $q->whereHas('adAccounts', fn ($accounts) => $accounts->whereKey($id)))
+            ->when($filters['platform'] ?? null, fn ($q, $value) => $q->where('platform', $value))
+            ->when($filters['status'] ?? null, fn ($q, $value) => $q->where('status', $value))
             ->with([
                 'client:id,name',
                 'adAccounts' => fn ($q) => $q->whereIn('client_id', $clientIds)->select('id', 'client_id', 'platform_connection_id', 'external_id', 'manager_external_id', 'name', 'currency', 'timezone', 'status'),
@@ -40,6 +61,9 @@ class ConnectionController extends Controller
         ]);
         if ($data['scope'] === 'client') {
             $data['client_id'] = $data['client_id'] ?? abort(422, 'Client connection requires a client.');
+        }
+        if ($data['platform'] === 'meta') {
+            $this->verifyMetaCredentials($data['credentials']);
         }
 
         return response()->json(PlatformConnection::create($data + ['status' => 'pending']), 201);
@@ -126,6 +150,14 @@ class ConnectionController extends Controller
         return response()->noContent();
     }
 
+    public function destroyAccount(Request $request, AdAccount $account)
+    {
+        abort_unless($request->user()->isAdmin(), 403);
+        $account->delete();
+
+        return response()->noContent();
+    }
+
     private function ensureClientAssignment(PlatformConnection $connection, int $clientId): void
     {
         if ($connection->scope === 'client' && (int) $connection->client_id !== $clientId) {
@@ -136,7 +168,9 @@ class ConnectionController extends Controller
     private function discoverMeta(PlatformConnection $connection): array
     {
         $response = Http::timeout(30)->get('https://graph.facebook.com/v24.0/me/adaccounts', ['access_token' => $connection->credentials['access_token'], 'fields' => 'id,name,currency,timezone_name', 'limit' => 200]);
-        $response->throw();
+        if (! $response->successful()) {
+            throw new RuntimeException($this->metaAccessError($response->status()));
+        }
 
         return array_map(fn ($a) => [
             'external_id' => $a['id'],
@@ -148,5 +182,29 @@ class ConnectionController extends Controller
             'level' => 0,
             'manager_external_id' => null,
         ], $response->json('data', []));
+    }
+
+    private function verifyMetaCredentials(array $credentials): void
+    {
+        $token = $credentials['access_token'] ?? null;
+        abort_unless(is_string($token) && trim($token) !== '', 422, 'A Meta System User access token is required.');
+
+        try {
+            $response = Http::timeout(30)->get('https://graph.facebook.com/v24.0/me/adaccounts', [
+                'access_token' => $token,
+                'fields' => 'id',
+                'limit' => 1,
+            ]);
+        } catch (Throwable) {
+            abort(422, 'Meta could not be reached to verify this token. Please try again.');
+        }
+        abort_unless($response->successful(), 422, $this->metaAccessError($response->status()));
+    }
+
+    private function metaAccessError(int $status): string
+    {
+        return in_array($status, [400, 401, 403], true)
+            ? 'Meta rejected this token. Confirm the System User, assigned ad accounts, and ads_read permission, then generate a new token.'
+            : 'Meta could not verify this token. Please try again.';
     }
 }

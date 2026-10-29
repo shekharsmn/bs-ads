@@ -12,7 +12,7 @@ vi.mock('../api/client', () => ({ api: {
   getAdLibraryAuditCsvUrl: vi.fn(() => '#csv'), getAdLibraryAuditXlsxUrl: vi.fn(() => '#xlsx'), getAdLibraryAuditJsonUrl: vi.fn(() => '#json'),
 } }))
 vi.mock('../utils/clipboard', () => ({ copyText: vi.fn() }))
-vi.mock('../context/AuthContext', () => ({ useAuth: () => ({ features: { ad_library_audits: true }, permissions: { manage_ad_library: true } }) }))
+vi.mock('../context/AuthContext', () => ({ useAuth: () => ({ features: { ad_library_audits: true }, permissions: { manage_ad_library: true, run_content_audits: true } }) }))
 vi.mock('../context/ToastContext', () => ({ useToast: () => ({ success: vi.fn(), error: vi.fn() }) }))
 
 const baseAudit = {
@@ -80,6 +80,17 @@ describe('Ad Library audit workflow', () => {
     fireEvent.change(await screen.findByLabelText('Brand summary'), { target: { value: 'Unsaved edit' } })
     fireEvent.click(within(screen.getByRole('navigation', { name: 'Audit stages' })).getByRole('button', { name: /Personas/ }))
     expect(screen.getByRole('alertdialog', { name: /Discard unsaved context changes/ })).toBeInTheDocument()
+  })
+
+  it('caps personas at five and guides legacy audits to merge overlapping audiences', async () => {
+    const personas = Array.from({ length: 6 }, (_, index) => ({ id: index + 1, name: `Persona ${index + 1}`, description: 'A decision mindset' }))
+    api.getAdLibraryAudit.mockResolvedValue({ data: { ...baseAudit, workflow_version: 2, status: 'persona_review', persona_limit: 5, personas } })
+    renderPage('/ad-library/audits/12?stage=personas')
+
+    expect(await screen.findByText('6/5 personas')).toBeInTheDocument()
+    expect(screen.getByText('Merge this legacy set down to 5 personas.')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /Add persona/ })).toBeDisabled()
+    expect(screen.getByRole('button', { name: /Confirm personas/ })).toBeDisabled()
   })
 
   it('starts a new audit from a focused two-step dialog', async () => {

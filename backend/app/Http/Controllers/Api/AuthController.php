@@ -67,6 +67,9 @@ class AuthController extends Controller
             'manage_ai_models' => $user->isAdmin(),
             'manage_alerts' => $user->canManage(),
             'manage_ad_library' => $user->canManage(),
+            'run_performance_audits' => $user->canRunPerformanceAudits(),
+            'run_content_audits' => $user->canRunContentAudits(),
+            'use_data_inspector' => $user->canUseDataInspector(),
         ], 'features' => [
             'ad_library' => (bool) config('services.ad_library.enabled'),
             'ad_library_audits' => (bool) config('services.ad_library.enabled') && (bool) config('ad_library_audit.enabled'),

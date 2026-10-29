@@ -18,10 +18,10 @@ class MethodologyRegistry
             'previous_version' => 'legacy-1.0', 'changes' => ['Added comparison and data-freshness sections.', 'Snapshots now preserve the exact methodology.'],
         ],
         'content-audit' => [
-            'version' => '3.0.0', 'released_at' => '2026-10-26',
-            'summary' => 'Creative-first classification, evidence-backed persona consolidation, and content observations without performance claims.',
+            'version' => '4.0.0', 'released_at' => '2026-10-27',
+            'summary' => 'Creative-first classification, insight-led persona consolidation capped at five audiences, and content observations without performance claims.',
             'checks' => ['context', 'creative_classification', 'video_transcript', 'persona_candidates', 'persona_consolidation', 'confidence_review', 'insights'],
-            'previous_version' => '2.0.0', 'changes' => ['Moved persona discovery after per-creative analysis.', 'Added Full-media spoken transcripts and candidate-to-canonical persona provenance.'],
+            'previous_version' => '3.0.0', 'changes' => ['Capped canonical personas at five.', 'Reframed personas around underlying motivations and decision logic instead of products, conditions, or demographics.'],
         ],
     ];
 

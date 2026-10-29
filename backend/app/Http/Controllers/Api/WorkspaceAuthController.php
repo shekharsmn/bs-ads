@@ -4,11 +4,14 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\User;
+use App\Models\UserInvitation;
+use App\Services\AuditTrail;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 use Throwable;
 
@@ -33,7 +36,7 @@ class WorkspaceAuthController extends Controller
         return redirect()->away('https://accounts.google.com/o/oauth2/v2/auth?'.$params);
     }
 
-    public function callback(Request $request)
+    public function callback(Request $request, AuditTrail $audit)
     {
         $frontend = rtrim(config('services.google_workspace.frontend_url'), '/');
         if ($request->query('error')) {
@@ -68,12 +71,37 @@ class WorkspaceAuthController extends Controller
         $shouldBootstrap = $bootstrapEmail !== ''
             && hash_equals($bootstrapEmail, $email)
             && User::query()->where('role', 'admin')->whereNull('disabled_at')->doesntExist();
-        $user = User::updateOrCreate(['email' => $email], [
-            'name' => $profile->json('name') ?: Str::before($email, '@'),
-            'google_subject' => $profile->json('sub'), 'avatar_url' => $profile->json('picture'),
-            'email_verified_at' => now(), 'last_login_at' => now(),
-            ...($shouldBootstrap ? ['role' => 'admin'] : []),
-        ]);
+        $invitation = UserInvitation::where('email', $email)->first();
+        abort_if($invitation?->revoked_at && ! $invitation->accepted_at, 403, 'This invitation has been revoked. Ask an administrator to restore access.');
+        $pendingInvitation = $invitation && ! $invitation->accepted_at && ! $invitation->revoked_at ? $invitation : null;
+        $user = DB::transaction(function () use ($email, $profile, $shouldBootstrap, $pendingInvitation) {
+            $user = User::firstOrNew(['email' => $email]);
+            abort_if($user->exists && $user->disabled_at, 403, 'This account has been disabled.');
+            $user->fill([
+                'name' => $profile->json('name') ?: Str::before($email, '@'),
+                'google_subject' => $profile->json('sub'), 'avatar_url' => $profile->json('picture'),
+                'email_verified_at' => now(), 'last_login_at' => now(),
+            ]);
+            if (! $user->exists) {
+                $user->role = $shouldBootstrap ? 'admin' : ($pendingInvitation?->role?->value ?? 'viewer');
+                $user->run_performance_audits = $shouldBootstrap || (bool) $pendingInvitation?->run_performance_audits;
+                $user->run_content_audits = $shouldBootstrap || (bool) $pendingInvitation?->run_content_audits;
+                $user->use_data_inspector = $shouldBootstrap || (bool) $pendingInvitation?->use_data_inspector;
+            }
+            $user->save();
+            if ($pendingInvitation) {
+                $user->clients()->sync($pendingInvitation->clients()->pluck('clients.id')->all());
+                $pendingInvitation->update(['accepted_at' => now()]);
+            }
+            return $user;
+        });
+        if ($pendingInvitation) {
+            $audit->record('access.invitation_accepted', $user, ['status' => 'pending', 'invitation_id' => $pendingInvitation->id], [
+                'status' => 'active', 'role' => $user->role->value, 'client_ids' => $user->clients()->pluck('clients.id')->all(),
+                'run_performance_audits' => $user->canRunPerformanceAudits(), 'run_content_audits' => $user->canRunContentAudits(),
+                'use_data_inspector' => $user->canUseDataInspector(),
+            ], null, $user, $request);
+        }
         abort_if($user->disabled_at, 403, 'This account has been disabled.');
         Auth::login($user, true);
         $request->session()->regenerate();

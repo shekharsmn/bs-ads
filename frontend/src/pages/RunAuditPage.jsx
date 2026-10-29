@@ -1,9 +1,10 @@
 import { useState, useEffect, useRef } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { api } from '../api/client'
 import AuditErrorModal from '../components/AuditErrorModal'
-import { ArrowLeft, PlayCircle, CheckCircle, AlertCircle, Clock, Square } from 'lucide-react'
+import { useAuth } from '../context/AuthContext'
+import { ArrowLeft, PlayCircle, CheckCircle, AlertCircle, Clock, ShieldAlert, Square } from 'lucide-react'
 
 const PERIODS = [
   { value: 'last_7d', label: 'Last 7 Days' },
@@ -20,13 +21,15 @@ const STATUS_MESSAGES = {
 }
 
 export default function RunAuditPage() {
+  const { permissions } = useAuth()
   const navigate = useNavigate()
+  const [search] = useSearchParams()
   const queryClient = useQueryClient()
   const [form, setForm] = useState({
     platform: 'meta',
     meta_account_id: '',
     google_account_id: '',
-    ad_account_id: '',
+    ad_account_id: search.get('ad_account_id') || '',
     period: 'last_30d',
   })
   const [reportId, setReportId] = useState(null)
@@ -51,9 +54,11 @@ export default function RunAuditPage() {
   })
 
   const operationalAccounts = clients.flatMap(client => (client.ad_accounts || []).map(account => ({ ...account, client_name: client.name, normalized: true })))
-  const legacyAccounts = (form.platform === 'meta' ? metaAccounts : googleAccounts).map(account => ({ ...account, normalized: false }))
+  const selectedOperationalAccount = operationalAccounts.find(account => String(account.id) === String(form.ad_account_id))
+  const selectedPlatform = selectedOperationalAccount?.platform || form.platform
+  const legacyAccounts = (selectedPlatform === 'meta' ? metaAccounts : googleAccounts).map(account => ({ ...account, normalized: false }))
   const accountsLoading = metaLoading || googleLoading || clientsLoading
-  const accounts = [...operationalAccounts.filter(account => account.platform === form.platform), ...legacyAccounts]
+  const accounts = [...operationalAccounts.filter(account => account.platform === selectedPlatform), ...legacyAccounts]
 
   const startMutation = useMutation({
     mutationFn: (data) => api.createReport(data),
@@ -117,8 +122,8 @@ export default function RunAuditPage() {
     e.preventDefault()
     const period = form.period
     if (form.ad_account_id) {
-      startMutation.mutate({ platform: form.platform, ad_account_id: parseInt(form.ad_account_id, 10), period })
-    } else if (form.platform === 'meta') {
+      startMutation.mutate({ platform: selectedPlatform, ad_account_id: parseInt(form.ad_account_id, 10), period })
+    } else if (selectedPlatform === 'meta') {
       startMutation.mutate({
         platform: 'meta',
         meta_account_id: parseInt(form.meta_account_id, 10),
@@ -138,9 +143,11 @@ export default function RunAuditPage() {
   const isFailed = jobStatus?.status === 'failed'
   const isCancelled = jobStatus?.status === 'cancelled'
 
-  const accountOk = form.platform === 'meta'
+  const accountOk = selectedPlatform === 'meta'
     ? !!form.meta_account_id || !!form.ad_account_id
     : !!form.google_account_id || !!form.ad_account_id
+
+  if (!permissions?.run_performance_audits) return <main className="audit-permission-empty"><ShieldAlert/><h1>Performance audits are restricted</h1><p>An administrator can grant this permission and assign the clients you need from User management.</p><button onClick={() => navigate('/command-center')}><ArrowLeft size={14}/> Back to Command Center</button></main>
 
   return (
     <div style={{ padding: '32px', maxWidth: '560px', margin: '0 auto' }}>
@@ -177,7 +184,7 @@ export default function RunAuditPage() {
               display: 'flex', alignItems: 'center', gap: '8px',
             }}>
               <AlertCircle size={14} />
-              No {form.platform === 'meta' ? 'Meta' : 'Google'} accounts connected.{' '}
+              No {selectedPlatform === 'meta' ? 'Meta' : 'Google'} accounts connected.{' '}
               <button
                 onClick={() => navigate('/connections')}
                 style={{ background: 'none', border: 'none', color: '#d97706', fontWeight: 700, cursor: 'pointer', padding: 0, fontFamily: 'inherit', fontSize: '13px' }}
@@ -207,11 +214,11 @@ export default function RunAuditPage() {
                     }))}
                     style={{
                       flex: 1, padding: '10px',
-                      border: form.platform === id ? '2px solid #3b82f6' : '1px solid #e2e8f0',
+                      border: selectedPlatform === id ? '2px solid #3b82f6' : '1px solid #e2e8f0',
                       borderRadius: '8px', fontSize: '13px', fontWeight: 600,
                       fontFamily: 'inherit', cursor: 'pointer',
-                      background: form.platform === id ? '#eff6ff' : '#f8fafc',
-                      color: form.platform === id ? '#2563eb' : '#64748b',
+                      background: selectedPlatform === id ? '#eff6ff' : '#f8fafc',
+                      color: selectedPlatform === id ? '#2563eb' : '#64748b',
                     }}
                   >{label}</button>
                 ))}
@@ -220,11 +227,11 @@ export default function RunAuditPage() {
 
             <div>
               <label style={{ display: 'block', fontSize: '12px', fontWeight: 600, color: '#475569', marginBottom: '6px', letterSpacing: '0.04em', textTransform: 'uppercase' }}>
-                {form.platform === 'meta' ? 'Meta account' : 'Google Ads account'}
+                {selectedPlatform === 'meta' ? 'Meta account' : 'Google Ads account'}
               </label>
               <select
                 required
-                value={form.ad_account_id ? `ops:${form.ad_account_id}` : (form.platform === 'meta' ? form.meta_account_id : form.google_account_id)}
+                value={form.ad_account_id ? `ops:${form.ad_account_id}` : (selectedPlatform === 'meta' ? form.meta_account_id : form.google_account_id)}
                 onChange={e => setForm(f => {
                   if (e.target.value.startsWith('ops:')) return { ...f, ad_account_id: e.target.value.slice(4), meta_account_id: '', google_account_id: '' }
                   return f.platform === 'meta'
@@ -277,7 +284,7 @@ export default function RunAuditPage() {
               <Clock size={13} color="#94a3b8" />
               <p style={{ margin: 0, fontSize: '12px', color: '#64748b' }}>
                 <strong style={{ color: '#0f172a' }}>Estimated time:</strong>{' '}
-                {form.platform === 'meta' ? '2–5 minutes (includes AI creative).' : '1–4 minutes (API fetch + checklist).'}
+                {selectedPlatform === 'meta' ? '2–5 minutes (includes AI creative).' : '1–4 minutes (API fetch + checklist).'}
               </p>
             </div>
 
@@ -387,7 +394,7 @@ export default function RunAuditPage() {
               borderRadius: '10px', padding: '16px',
               display: 'flex', flexDirection: 'column', gap: '10px', textAlign: 'left',
             }}>
-              {(form.platform === 'meta'
+              {(selectedPlatform === 'meta'
                 ? [
                     { label: 'Fetching campaigns, ads, and creatives', done: true },
                     { label: 'Running Meta audit checks', done: jobStatus?.status === 'running' },

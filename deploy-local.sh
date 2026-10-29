@@ -88,6 +88,22 @@ run_queue_worker &
 PID_QUEUE=$!
 echo -e "${GREEN}[QUEUE]   Supervised worker for all queues started              (pid $PID_QUEUE)${NC}"
 
+run_scheduler() {
+    while true; do
+        if php artisan schedule:work; then
+            EXIT_CODE=0
+        else
+            EXIT_CODE=$?
+        fi
+        echo -e "${YELLOW}[SCHED] Scheduler exited with code ${EXIT_CODE}; restarting in 3 seconds...${NC}"
+        sleep 3
+    done
+}
+
+run_scheduler &
+PID_SCHEDULER=$!
+echo -e "${GREEN}[SCHED]   Supervised Laravel scheduler started                 (pid $PID_SCHEDULER)${NC}"
+
 (
     cd "$FRONTEND"
     exec npm run dev -- --host "$VITE_HOST" --port "$VITE_PORT"
@@ -99,8 +115,8 @@ cleanup() {
     trap - INT TERM EXIT
     echo ""
     echo "Stopping local services..."
-    kill "$PID_API" "$PID_QUEUE" "$PID_VITE" 2>/dev/null || true
-    wait "$PID_API" "$PID_QUEUE" "$PID_VITE" 2>/dev/null || true
+    kill "$PID_API" "$PID_QUEUE" "$PID_SCHEDULER" "$PID_VITE" 2>/dev/null || true
+    wait "$PID_API" "$PID_QUEUE" "$PID_SCHEDULER" "$PID_VITE" 2>/dev/null || true
 }
 
 trap cleanup INT TERM EXIT

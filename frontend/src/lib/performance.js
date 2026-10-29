@@ -1,0 +1,6 @@
+export const formatNumber = value => value == null ? '—' : new Intl.NumberFormat('en-IN', { maximumFractionDigits: 2 }).format(value)
+export const formatMoney = (value, currency = 'INR') => value == null ? '—' : new Intl.NumberFormat('en-IN', { style: 'currency', currency, maximumFractionDigits: 2 }).format(value)
+export const formatRoas = value => value == null ? '—' : `${formatNumber(value)}×`
+export function dateInTimeZone(date, timezone) { const parts = Object.fromEntries(new Intl.DateTimeFormat('en', { timeZone: timezone || 'UTC', year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(date).map(part => [part.type, part.value])); return `${parts.year}-${parts.month}-${parts.day}` }
+export function completedDateRange(days, timezone) { const now = new Date(); const yesterday = new Date(now.getTime() - 86_400_000); const start = new Date(yesterday.getTime() - (days - 1) * 86_400_000); return { start_date: dateInTimeZone(start, timezone), end_date: dateInTimeZone(yesterday, timezone) } }
+export const metricColumns = [{ key: 'spend', label: 'Spend', format: formatMoney }, { key: 'leads', label: 'Leads', format: formatNumber }, { key: 'cpl', label: 'CPL', format: formatMoney }, { key: 'purchases', label: 'Purchases', format: formatNumber }, { key: 'cpp', label: 'CPP', format: formatMoney }, { key: 'roas', label: 'ROAS', format: formatRoas }]

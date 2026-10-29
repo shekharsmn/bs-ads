@@ -15,7 +15,7 @@ class InspectorAccountAccessTest extends TestCase
 
     public function test_operational_google_account_requires_client_access(): void
     {
-        $viewer = User::factory()->create(['role' => 'viewer']);
+        $viewer = User::factory()->create(['role' => 'viewer', 'use_data_inspector' => true]);
         $client = Client::create(['name' => 'Hidden', 'slug' => 'hidden']);
         $account = $this->googleAccount($client, ['refresh_token' => 'secret']);
 
@@ -25,6 +25,17 @@ class InspectorAccountAccessTest extends TestCase
             'account_id' => $account->id,
             'period' => 'last_30d',
         ])->assertForbidden();
+    }
+
+    public function test_data_inspector_requires_its_explicit_permission(): void
+    {
+        $viewer = User::factory()->create(['role' => 'viewer', 'use_data_inspector' => false]);
+
+        $this->actingAs($viewer)->postJson('/api/inspect', [
+            'platform' => 'google',
+            'account_id' => 999,
+            'period' => 'last_30d',
+        ])->assertForbidden()->assertSee('permission to use Data Inspector');
     }
 
     public function test_operational_google_account_reports_missing_connection_credentials_cleanly(): void

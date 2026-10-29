@@ -1,21 +1,20 @@
 import { createElement, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { BookOpenCheck, Download, History, Send, ShieldCheck, Trash2, Users } from 'lucide-react'
+import { BookOpenCheck, Download, History, Send, ShieldCheck, Trash2 } from 'lucide-react'
 import { api } from '../api/client'
 import { useToast } from '../context/ToastContext'
 import ConfirmDialog from '../components/ui/ConfirmDialog'
 
 const tabs = [
-  ['access', 'Access', Users], ['audit', 'Audit trail', History],
-  ['notifications', 'Destinations', Send], ['methodologies', 'Methodologies', BookOpenCheck],
+  ['audit', 'Audit trail', History], ['notifications', 'Destinations', Send], ['methodologies', 'Methodologies', BookOpenCheck],
 ]
 
 export default function GovernancePage() {
-  const [tab, setTab] = useState('access')
+  const [tab, setTab] = useState('audit')
   return <main className="governance-page">
     <header className="governance-header"><span><ShieldCheck size={18}/></span><div><h1>Governance</h1><p>Access, traceability, delivery controls, and methodology history.</p></div></header>
     <nav className="governance-tabs" aria-label="Governance sections">{tabs.map(([key, label, icon]) => <button key={key} className={tab === key ? 'active' : ''} onClick={() => setTab(key)}>{createElement(icon, { size: 14 })}{label}</button>)}</nav>
-    {tab === 'access' && <AccessPanel/>}
+    {tab === '__legacy_access' && <AccessPanel/>}
     {tab === 'audit' && <AuditPanel/>}
     {tab === 'notifications' && <NotificationPanel/>}
     {tab === 'methodologies' && <MethodologyPanel/>}

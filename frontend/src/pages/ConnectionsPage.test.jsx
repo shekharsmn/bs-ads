@@ -1,5 +1,5 @@
 import { fireEvent, render, within } from '@testing-library/react'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { discoveryErrorMessage } from '../lib/connectionErrors'
 import { ConnectionSetupGuide } from './ConnectionsPage'
 
@@ -18,15 +18,27 @@ describe('connection setup guidance', () => {
     const view = render(<ConnectionSetupGuide platform="meta" />)
     const guide = within(view.container)
 
-    expect(guide.getByText('Prepare a Meta System User token')).toBeInTheDocument()
+    expect(guide.getByText('Prepare a dedicated Meta System User token')).toBeInTheDocument()
     expect(guide.getByText('ads_read')).toBeInTheDocument()
-    expect(guide.getByText(/View performance/)).toBeInTheDocument()
+    expect(guide.getByText(/view account performance/)).toBeInTheDocument()
+    expect(guide.getByText(/Copy it immediately/)).toBeInTheDocument()
 
     const summary = guide.getByText('Setup steps')
     const disclosure = summary.closest('details')
     expect(disclosure).toHaveAttribute('open')
     fireEvent.click(summary)
     expect(disclosure).not.toHaveAttribute('open')
+  })
+
+  it('provides a confirmable Meta readiness checklist', () => {
+    const onChecklistChange = vi.fn()
+    const view = render(<ConnectionSetupGuide platform="meta" checklist={{ systemUser: false, assets: true, permission: false }} onChecklistChange={onChecklistChange} />)
+    const guide = within(view.container)
+
+    expect(guide.getByText('Confirm before entering the token')).toBeInTheDocument()
+    expect(guide.getByLabelText(/assigned every ad account/)).toBeChecked()
+    fireEvent.click(guide.getByLabelText(/generated token includes/))
+    expect(onChecklistChange).toHaveBeenCalledWith('permission', true)
   })
 })
 

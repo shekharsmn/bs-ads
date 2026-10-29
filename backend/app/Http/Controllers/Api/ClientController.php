@@ -21,7 +21,8 @@ class ClientController extends Controller
     public function show(Request $request, Client $client)
     {
         ClientAccess::authorize($request->user(), $client);
-        return $client->load(['users:id,name,email,role', 'adAccounts.connection:id,name,status', 'reportSchedules']);
+        return $client->load(['users:id,name,email,role', 'adAccounts.connection:id,name,status', 'reportSchedules.adAccount:id,name,platform'])
+            ->loadCount(['incidents' => fn ($query) => $query->whereNot('status', 'resolved'), 'adLibrarySearches', 'adLibraryAudits', 'reportRuns']);
     }
 
     public function store(Request $request)
@@ -37,6 +38,14 @@ class ClientController extends Controller
         ClientAccess::authorize($request->user(), $client, true);
         $client->update($this->validated($request, $client));
         return $client->fresh();
+    }
+
+    public function destroy(Request $request, Client $client)
+    {
+        abort_unless($request->user()->isAdmin(), 403);
+        $client->delete();
+
+        return response()->noContent();
     }
 
     public function assign(Request $request, Client $client)

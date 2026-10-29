@@ -24,7 +24,7 @@ class CollectAccountMetricsJob implements ShouldBeUnique, ShouldQueue
 
     public int $uniqueFor = 3300;
 
-    public function __construct(public readonly int $adAccountId)
+    public function __construct(public readonly int $adAccountId, public readonly ?string $startDate = null, public readonly ?string $endDate = null, public readonly ?string $refreshToken = null)
     {
         $this->onQueue(config('workloads.queues.collection', 'collection'));
         $this->timeout = config('workloads.policies.collection.timeout', 300);
@@ -33,7 +33,7 @@ class CollectAccountMetricsJob implements ShouldBeUnique, ShouldQueue
 
     public function uniqueId(): string
     {
-        return 'metrics:'.$this->adAccountId;
+        return 'metrics:'.$this->adAccountId.':'.($this->startDate ?? 'incremental').':'.($this->endDate ?? 'current').':'.($this->refreshToken ?? 'scheduled');
     }
 
     public function handle(PerformanceCollectionService $collector, AlertEngine $alerts, WorkflowActivityService $activities, WorkflowCoordinator $workflows, DataQualityMonitor $quality): void
@@ -42,7 +42,7 @@ class CollectAccountMetricsJob implements ShouldBeUnique, ShouldQueue
         $activity = $activities->beginMetricCollection($account);
         $attempt = $workflows->start($activity, 'collecting', 'metrics:'.$account->id.':'.($this->job?->uuid() ?? Str::uuid()));
         try {
-            $collector->collect($account);
+            $collector->collect($account, $this->startDate, $this->endDate);
         } catch (\Throwable $e) {
             $workflows->fail($attempt, $e, 'collection_failed');
             $account->update(['last_error' => $e->getMessage()]);

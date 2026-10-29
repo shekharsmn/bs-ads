@@ -1,17 +1,7 @@
-/* global process */
 import { defineConfig } from '@playwright/test'
-
-const storageState = process.env.PLAYWRIGHT_STORAGE_STATE
 
 export default defineConfig({
   testDir: './e2e',
-  fullyParallel: false,
-  retries: process.env.CI ? 2 : 0,
-  reporter: process.env.CI ? [['html', { open: 'never' }], ['line']] : 'list',
-  use: {
-    baseURL: process.env.PLAYWRIGHT_BASE_URL || 'http://127.0.0.1:5173',
-    storageState: storageState || undefined,
-    trace: 'retain-on-failure',
-    screenshot: 'only-on-failure',
-  },
+  use: { baseURL: 'http://127.0.0.1:4173', channel: 'chrome', trace: 'retain-on-failure' },
+  webServer: { command: 'npm run preview -- --host 127.0.0.1 --port 4173', url: 'http://127.0.0.1:4173', reuseExistingServer: true },
 })

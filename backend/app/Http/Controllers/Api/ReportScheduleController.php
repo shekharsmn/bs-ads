@@ -19,9 +19,23 @@ class ReportScheduleController extends Controller
 
     public function index(Request $request)
     {
+        $filters = $request->validate([
+            'client_id' => 'nullable|integer|exists:clients,id',
+            'ad_account_id' => 'nullable|integer|exists:ad_accounts,id',
+        ]);
         $ids = ClientAccess::clientsFor($request->user())->pluck('id');
+        if (($filters['client_id'] ?? null) || ($filters['ad_account_id'] ?? null)) {
+            $this->scopes->resolve($request->user(), $filters);
+        }
 
-        return ['schedules' => ReportSchedule::whereIn('client_id', $ids)->with('client:id,name')->get(), 'runs' => ReportRun::whereIn('client_id', $ids)->with('client:id,name')->latest()->limit(100)->get()->map(fn ($r) => $this->runPayload($r))];
+        $scope = fn ($query) => $query->whereIn('client_id', $ids)
+            ->when($filters['client_id'] ?? null, fn ($q, $id) => $q->where('client_id', $id))
+            ->when($filters['ad_account_id'] ?? null, fn ($q, $id) => $q->where('ad_account_id', $id));
+
+        return [
+            'schedules' => $scope(ReportSchedule::query())->with(['client:id,name', 'adAccount:id,name,platform,external_id'])->get(),
+            'runs' => $scope(ReportRun::query())->with(['client:id,name', 'adAccount:id,name,platform,external_id'])->latest()->limit(100)->get()->map(fn ($r) => $this->runPayload($r)),
+        ];
     }
 
     public function store(Request $request)
@@ -29,8 +43,9 @@ class ReportScheduleController extends Controller
         $data = $this->validateSchedule($request);
         $this->scopes->resolve($request->user(), $data, manage: true);
         $this->validateTemplateForClient($data['report_template_id'] ?? null, (int) $data['client_id']);
+        $data['scope_key'] = $this->scopeKey($data['ad_account_id'] ?? null);
 
-        return response()->json(ReportSchedule::updateOrCreate(['client_id' => $data['client_id'], 'frequency' => $data['frequency']], $data), 201);
+        return response()->json(ReportSchedule::updateOrCreate(['client_id' => $data['client_id'], 'scope_key' => $data['scope_key'], 'frequency' => $data['frequency']], $data), 201);
     }
 
     public function update(Request $request, ReportSchedule $reportSchedule)
@@ -38,8 +53,10 @@ class ReportScheduleController extends Controller
         ClientAccess::authorize($request->user(), Client::findOrFail($reportSchedule->client_id), true);
         $data = $this->validateSchedule($request, true);
         $targetClientId = (int) ($data['client_id'] ?? $reportSchedule->client_id);
-        $this->scopes->resolve($request->user(), ['client_id' => $targetClientId], manage: true);
+        $targetAccountId = array_key_exists('ad_account_id', $data) ? $data['ad_account_id'] : $reportSchedule->ad_account_id;
+        $this->scopes->resolve($request->user(), ['client_id' => $targetClientId, 'ad_account_id' => $targetAccountId], manage: true);
         $this->validateTemplateForClient($data['report_template_id'] ?? null, $targetClientId);
+        $data['scope_key'] = $this->scopeKey($targetAccountId);
         $reportSchedule->update($data);
 
         return $reportSchedule->fresh();
@@ -53,7 +70,9 @@ class ReportScheduleController extends Controller
             'preset' => 'nullable|in:last_7d,last_30d,month_to_date',
             'period_start' => 'required_without:preset|date',
             'period_end' => 'required_without:preset|date|after_or_equal:period_start', 'report_template_id' => 'nullable|integer|exists:report_templates,id',
+            'ad_account_id' => 'nullable|integer|exists:ad_accounts,id',
         ]);
+        $resolved = $this->scopes->resolve($request->user(), ['client_id' => $client->id, 'ad_account_id' => $data['ad_account_id'] ?? null], manage: true);
 
         if ($data['preset'] ?? null) {
             $today = now($client->timezone)->startOfDay();
@@ -71,7 +90,7 @@ class ReportScheduleController extends Controller
 
         unset($data['preset']);
         $data['frequency'] = $data['frequency'] ?? 'instant';
-        $run = ReportRun::create($data + ['client_id' => $client->id, 'status' => 'pending'] + $methodologies->columns('performance-report'));
+        $run = ReportRun::create($data + ['client_id' => $client->id, 'ad_account_id' => $resolved->adAccount?->id, 'status' => 'pending'] + $methodologies->columns('performance-report'));
         GenerateReportSnapshotJob::dispatch($run->id);
 
         return response()->json($this->runPayload($run), 202);
@@ -81,6 +100,7 @@ class ReportScheduleController extends Controller
     {
         return $request->validate([
             'client_id' => ($partial ? 'sometimes|' : '').'required|exists:clients,id',
+            'ad_account_id' => 'nullable|integer|exists:ad_accounts,id',
             'frequency' => ($partial ? 'sometimes|' : '').'required|in:weekly,monthly',
             'weekday' => 'nullable|integer|min:0|max:6', 'day_of_month' => 'nullable|integer|min:1|max:28',
             'local_time' => 'sometimes|date_format:H:i', 'enabled' => 'sometimes|boolean', 'report_template_id' => 'nullable|integer|exists:report_templates,id',
@@ -98,5 +118,10 @@ class ReportScheduleController extends Controller
             return;
         }
         abort_unless(ReportTemplate::query()->whereKey($templateId)->where(fn ($query) => $query->whereNull('client_id')->orWhere('client_id', $clientId))->exists(), 422, 'The selected template is not available for this client.');
+    }
+
+    private function scopeKey(?int $accountId): string
+    {
+        return $accountId ? 'account:'.$accountId : 'client';
     }
 }

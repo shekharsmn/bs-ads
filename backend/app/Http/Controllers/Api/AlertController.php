@@ -14,7 +14,7 @@ class AlertController extends Controller
     public function index(Request $request)
     {
         $data = $request->validate([
-            'client_id' => 'nullable|exists:clients,id', 'status' => 'nullable|in:open,acknowledged,snoozed,resolved',
+            'client_id' => 'nullable|exists:clients,id', 'ad_account_id' => 'nullable|exists:ad_accounts,id', 'status' => 'nullable|in:open,acknowledged,snoozed,resolved',
             'severity' => 'nullable|in:info,warning,critical', 'assigned_to' => 'nullable|integer|exists:users,id',
             'q' => 'nullable|string|max:100', 'per_page' => 'nullable|integer|min:10|max:100',
         ]);
@@ -22,6 +22,7 @@ class AlertController extends Controller
 
         return AlertIncident::query()->whereIn('client_id', $ids)
             ->when($data['client_id'] ?? null, fn ($q, $v) => $q->where('client_id', $v))
+            ->when($data['ad_account_id'] ?? null, fn ($q, $v) => $q->where('ad_account_id', $v))
             ->when($data['status'] ?? null, fn ($q, $v) => $q->where('status', $v))
             ->when($data['severity'] ?? null, fn ($q, $v) => $q->where('severity', $v))
             ->when($data['assigned_to'] ?? null, fn ($q, $v) => $q->where('assigned_to', $v))

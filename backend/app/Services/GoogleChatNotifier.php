@@ -45,7 +45,7 @@ class GoogleChatNotifier
     public function test(Client $client): void
     {
         abort_unless($client->google_chat_webhook, 422, 'No Google Chat webhook is configured.');
-        $this->post($client->google_chat_webhook, 'test-'.$client->id, ['text' => "Brandshark reporting is connected for {$client->name}."]);
+        $this->post($client->google_chat_webhook, 'test-'.$client->id, ['text' => "SharkAds reporting is connected for {$client->name}."]);
     }
 
     public function sendReport(ReportRun $run): bool
@@ -74,6 +74,6 @@ class GoogleChatNotifier
     {
         return $event === 'recovered'
             ? 'Performance has returned to the expected range. Monitoring continues.'
-            : 'A performance signal moved outside the agreed range. The Brandshark team is reviewing it.';
+            : 'A performance signal moved outside the agreed range. Your SharkAds team is reviewing it.';
     }
 }

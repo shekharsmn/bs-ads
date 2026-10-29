@@ -1,13 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { BookOpen, Cable, Check, ChevronDown, ExternalLink, KeyRound, Plus, RefreshCw, Search, ShieldCheck, Trash2, X } from 'lucide-react'
+import { useSearchParams } from 'react-router-dom'
+import { ArrowLeft, ArrowRight, BookOpen, Cable, Check, ChevronDown, Eye, EyeOff, ExternalLink, KeyRound, Plus, RefreshCw, Search, ShieldCheck, Trash2, X } from 'lucide-react'
 import { api } from '../api/client'
 import ConfirmDialog from '../components/ui/ConfirmDialog'
 import { AsyncStateNotice } from '../components/ui/AsyncState'
+import ScopeFilterBar from '../components/ScopeFilterBar'
 import { useAuth } from '../context/AuthContext'
 import { discoveryErrorMessage } from '../lib/connectionErrors'
 import { Page } from './ClientsPage'
-import { useWorkspace } from '../context/WorkspaceContext'
 
 const emptyForm = {
   platform: 'google',
@@ -21,10 +22,13 @@ const emptyForm = {
 
 export default function ConnectionsPage() {
   const { user } = useAuth()
-  const { clientId: workspaceClientId } = useWorkspace()
   const qc = useQueryClient()
+  const [search, setSearch] = useSearchParams()
   const oauthDiscoveryStarted = useRef(false)
   const [showConnect, setShowConnect] = useState(false)
+  const [setupStep, setSetupStep] = useState(1)
+  const [showToken, setShowToken] = useState(false)
+  const [metaChecks, setMetaChecks] = useState({ systemUser: false, assets: false, permission: false })
   const [form, setForm] = useState(emptyForm)
   const [activeConnectionId, setActiveConnectionId] = useState(null)
   const [discovered, setDiscovered] = useState({})
@@ -35,17 +39,20 @@ export default function ConnectionsPage() {
   const [warning, setWarning] = useState('')
 
   const clients = useQuery({ queryKey: ['clients'], queryFn: () => api.getClients().then(response => response.data) })
-  const connections = useQuery({ queryKey: ['connections'], queryFn: () => api.getConnections().then(response => response.data) })
+  const filters = { client_id: search.get('client_id') || undefined, ad_account_id: search.get('ad_account_id') || undefined, platform: search.get('platform') || undefined, status: search.get('status') || undefined }
+  const connections = useQuery({ queryKey: ['connections', filters], queryFn: () => api.getConnections(filters).then(response => response.data) })
   const clientList = clients.data || []
   const hasClients = clientList.length > 0
+  const setFilter = (key, value) => setSearch(current => { const next = new URLSearchParams(current); value ? next.set(key, value) : next.delete(key); return next }, { replace: true })
+  const setScope = (clientId, accountId) => { const next = new URLSearchParams(search); clientId ? next.set('client_id', clientId) : next.delete('client_id'); accountId ? next.set('ad_account_id', accountId) : next.delete('ad_account_id'); setSearch(next, { replace: true }) }
 
   const initializeSelection = useCallback((connection, accounts) => {
-    const fallbackClientId = connection.client_id || workspaceClientId || clients.data?.[0]?.id || ''
+    const fallbackClientId = connection.client_id || ''
     setSelection(Object.fromEntries(accounts.filter(account => account.selectable).map(account => [account.external_id, {
       selected: false,
       client_id: account.assigned_client?.id || fallbackClientId,
     }])))
-  }, [clients.data, workspaceClientId])
+  }, [])
 
   const discover = useCallback(async connection => {
     setError('')
@@ -100,6 +107,9 @@ export default function ConnectionsPage() {
     },
     onSuccess: async connection => {
       setShowConnect(false)
+      setSetupStep(1)
+      setShowToken(false)
+      setMetaChecks({ systemUser: false, assets: false, permission: false })
       setForm(emptyForm)
       await qc.invalidateQueries({ queryKey: ['connections'] })
       await discover(connection)
@@ -162,6 +172,34 @@ export default function ConnectionsPage() {
     createMeta.mutate()
   }
 
+  const closeSetup = () => {
+    setShowConnect(false)
+    setSetupStep(1)
+    setShowToken(false)
+    setMetaChecks({ systemUser: false, assets: false, permission: false })
+    setForm(emptyForm)
+    setError('')
+  }
+
+  const nextSetupStep = () => {
+    setError('')
+    if (setupStep === 1 && form.scope === 'client' && !form.client_id) {
+      setError('Choose the client that owns this connection before continuing.')
+      return
+    }
+    if (setupStep === 2 && form.platform === 'meta') {
+      if (!Object.values(metaChecks).every(Boolean)) {
+        setError('Complete the Meta readiness checklist before continuing.')
+        return
+      }
+      if (form.access_token.trim().length < 20) {
+        setError('Paste the complete Meta System User access token before continuing.')
+        return
+      }
+    }
+    setSetupStep(current => Math.min(3, current + 1))
+  }
+
   const updateSelection = (externalId, patch) => {
     setSelection(current => ({ ...current, [externalId]: { ...current[externalId], ...patch } }))
   }
@@ -170,32 +208,72 @@ export default function ConnectionsPage() {
 
   return <Page title="Ad platforms" subtitle="Connect once, discover accessible ad accounts, then assign them to clients.">
     <AsyncStateNotice queries={[clients, connections]}/>
+    <ScopeFilterBar clientId={search.get('client_id') || ''} accountId={search.get('ad_account_id') || ''} onScopeChange={setScope} onAccountChange={value => setFilter('ad_account_id', value)}><select value={search.get('platform') || ''} onChange={event => setFilter('platform', event.target.value)}><option value="">All platforms</option><option value="google">Google Ads</option><option value="meta">Meta</option></select><select value={search.get('status') || ''} onChange={event => setFilter('status', event.target.value)}><option value="">All statuses</option><option value="healthy">Healthy</option><option value="pending">Pending</option><option value="error">Error</option><option value="disconnected">Disconnected</option></select></ScopeFilterBar>
     <div className="ops-toolbar">
-      {user?.role === 'admin' && !showConnect && <button className="ops-primary" onClick={() => setShowConnect(true)}><Plus size={15}/> Connect platform</button>}
+      {user?.role === 'admin' && !showConnect && <button className="ops-primary" onClick={() => { setShowConnect(true); setSetupStep(1); setError('') }}><Plus size={15}/> Connect platform</button>}
     </div>
 
     {showConnect && <form className="connection-setup" onSubmit={connect}>
-      <div className="connection-step"><b>1</b><span><strong>Platform</strong><small>Choose the ad network.</small></span></div>
-      <div className="connection-fields two">
-        <Field label="Platform"><select value={form.platform} onChange={event => setForm({ ...form, platform: event.target.value })}><option value="google">Google Ads</option><option value="meta">Meta Ads</option></select></Field>
-        <Field label="Connection name"><input value={form.name} onChange={event => setForm({ ...form, name: event.target.value })} placeholder={form.platform === 'google' ? 'Brandshark Google Ads' : 'Brandshark Meta Ads'}/></Field>
+      <div className="connection-wizard-head">
+        <div><strong>Add an ad platform</strong><p>{form.platform === 'meta' ? 'Set up secure Meta reporting access, then discover and assign ad accounts.' : 'Authorize Google Ads, then discover and assign accessible accounts.'}</p></div>
+        <button type="button" aria-label="Close connection setup" onClick={closeSetup}><X size={16}/></button>
       </div>
-      <div className="connection-step"><b>2</b><span><strong>Assignment scope</strong><small>This controls where the connection can be used inside this app. Google permissions are unchanged.</small></span></div>
-      <div className="connection-fields two">
-        <Field label="Use connection for"><select value={form.scope} onChange={event => setForm({ ...form, scope: event.target.value })}><option value="agency">Multiple clients (manager / agency)</option><option value="client">One client only</option></select></Field>
-        {form.scope === 'client' && <Field label="Client"><select required value={form.client_id} onChange={event => setForm({ ...form, client_id: event.target.value })}><option value="">Choose client</option>{clientList.map(client => <option key={client.id} value={client.id}>{client.name}</option>)}</select></Field>}
-      </div>
-      <div className="connection-step"><b>3</b><span><strong>Authorize</strong><small>{form.platform === 'google' ? 'Continue securely with Google OAuth.' : 'Enter a Meta system-user token with ads_read access.'}</small></span></div>
-      <ConnectionSetupGuide key={form.platform} platform={form.platform}/>
-      {form.platform === 'meta' && <div className="connection-fields three">
-        <Field label="Access token" hint="Required · paste the token exactly as Meta shows it"><input required type="password" autoComplete="off" value={form.access_token} onChange={event => setForm({ ...form, access_token: event.target.value })} placeholder="EAAB…"/></Field>
-        <Field label="App ID" hint="Optional · App settings → Basic"><input value={form.app_id} onChange={event => setForm({ ...form, app_id: event.target.value })} placeholder="1234567890"/></Field>
-        <Field label="App secret" hint="Optional · stored encrypted"><input type="password" autoComplete="new-password" value={form.app_secret} onChange={event => setForm({ ...form, app_secret: event.target.value })} placeholder="••••••••••••"/></Field>
+      <ol className="connection-progress" aria-label="Connection setup progress">
+        {['Connection details', 'Authorize access', 'Review and connect'].map((label, index) => <li key={label} className={setupStep === index + 1 ? 'active' : setupStep > index + 1 ? 'complete' : ''}><span>{setupStep > index + 1 ? <Check size={12}/> : index + 1}</span><b>{label}</b></li>)}
+      </ol>
+
+      {setupStep === 1 && <div className="connection-wizard-body">
+        <div className="connection-step"><b>1</b><span><strong>Choose the platform and scope</strong><small>The scope controls which clients can use this connection inside the app.</small></span></div>
+        <div className="connection-fields two">
+          <Field label="Platform" hint="Meta uses a System User token; Google uses OAuth."><select value={form.platform} onChange={event => { setForm({ ...form, platform: event.target.value, access_token: '', app_id: '', app_secret: '' }); setMetaChecks({ systemUser: false, assets: false, permission: false }) }}><option value="google">Google Ads</option><option value="meta">Meta Ads</option></select></Field>
+          <Field label="Connection name" hint="Use a name your team will recognize later."><input value={form.name} onChange={event => setForm({ ...form, name: event.target.value })} placeholder={form.platform === 'google' ? 'SharkAds Google Ads' : 'SharkAds Meta Ads'}/></Field>
+          <Field label="Use connection for" hint={form.scope === 'agency' ? 'Recommended when one business portfolio manages several clients.' : 'Limits account assignment to one client.'}><select value={form.scope} onChange={event => setForm({ ...form, scope: event.target.value, client_id: event.target.value === 'agency' ? '' : form.client_id })}><option value="agency">Multiple clients (agency)</option><option value="client">One client only</option></select></Field>
+          {form.scope === 'client' && <Field label="Client" hint="Only this client can receive accounts from the connection."><select required value={form.client_id} onChange={event => setForm({ ...form, client_id: event.target.value })}><option value="">Choose client</option>{clientList.map(client => <option key={client.id} value={client.id}>{client.name}</option>)}</select></Field>}
+        </div>
       </div>}
-      <div className="connection-actions"><button type="button" onClick={() => { setShowConnect(false); setForm(emptyForm) }}><X size={14}/> Cancel</button><button className="ops-primary" disabled={createMeta.isPending}><KeyRound size={14}/>{form.platform === 'google' ? 'Continue with Google' : createMeta.isPending ? 'Connecting…' : 'Connect Meta'}</button></div>
+
+      {setupStep === 2 && <div className="connection-wizard-body">
+        <div className="connection-step"><b>2</b><span><strong>{form.platform === 'meta' ? 'Prepare and enter Meta access' : 'Authorize Google access'}</strong><small>{form.platform === 'meta' ? 'Complete each prerequisite in Meta Business settings before entering the token.' : 'Use a Google login that already has access to the required Ads accounts.'}</small></span></div>
+        <ConnectionSetupGuide key={form.platform} platform={form.platform} checklist={metaChecks} onChecklistChange={(key, checked) => setMetaChecks(current => ({ ...current, [key]: checked }))}/>
+        {form.platform === 'meta' && <div className="connection-credential-block">
+          <div className="connection-token-row">
+            <Field label="System User access token" hint="Required · stored encrypted and never shown again">
+              <div className="connection-secret-input"><input required type={showToken ? 'text' : 'password'} autoComplete="off" value={form.access_token} onChange={event => setForm({ ...form, access_token: event.target.value.trim() })} placeholder="EAA…"/><button type="button" aria-label={showToken ? 'Hide access token' : 'Show access token'} onClick={() => setShowToken(current => !current)}>{showToken ? <EyeOff size={15}/> : <Eye size={15}/>}</button></div>
+            </Field>
+            <span className={`connection-token-state ${form.access_token.trim().length >= 20 ? 'ready' : ''}`}>{form.access_token.trim().length >= 20 ? <><Check size={13}/> Token entered</> : 'Waiting for token'}</span>
+          </div>
+          <details className="connection-advanced">
+            <summary>Advanced app credentials <ChevronDown size={14}/></summary>
+            <p>Only add these when your deployment specifically requires app-level credentials.</p>
+            <div className="connection-fields two">
+              <Field label="App ID" hint="Optional · Meta App dashboard → Settings → Basic"><input value={form.app_id} onChange={event => setForm({ ...form, app_id: event.target.value })} placeholder="1234567890"/></Field>
+              <Field label="App secret" hint="Optional · stored encrypted"><input type="password" autoComplete="new-password" value={form.app_secret} onChange={event => setForm({ ...form, app_secret: event.target.value })} placeholder="••••••••••••"/></Field>
+            </div>
+          </details>
+        </div>}
+      </div>}
+
+      {setupStep === 3 && <div className="connection-wizard-body">
+        <div className="connection-step"><b>3</b><span><strong>Review before connecting</strong><small>No ad accounts are imported until you choose them after discovery.</small></span></div>
+        <dl className="connection-review">
+          <div><dt>Platform</dt><dd>{form.platform === 'meta' ? 'Meta Ads' : 'Google Ads'}</dd></div>
+          <div><dt>Connection</dt><dd>{form.name || (form.platform === 'meta' ? 'Meta Ads' : 'Google Ads')}</dd></div>
+          <div><dt>Scope</dt><dd>{form.scope === 'agency' ? 'Multiple clients' : clientList.find(client => String(client.id) === String(form.client_id))?.name || 'One client'}</dd></div>
+          <div><dt>Authorization</dt><dd>{form.platform === 'meta' ? 'System User token ready' : 'Google OAuth on next screen'}</dd></div>
+        </dl>
+        <div className="connection-next-note"><ShieldCheck size={17}/><span><strong>What happens next</strong><small>{form.platform === 'meta' ? 'We will verify the token, list accessible ad accounts, and let you assign each account to a client.' : 'Google will ask you to approve access. After returning, choose which discovered accounts to assign.'}</small></span></div>
+      </div>}
+
+      {error && <div className="connection-error in-form" role="alert">{error}</div>}
+      <div className="connection-actions">
+        <button type="button" onClick={setupStep === 1 ? closeSetup : () => { setError(''); setSetupStep(current => current - 1) }}>{setupStep === 1 ? <X size={14}/> : <ArrowLeft size={14}/>} {setupStep === 1 ? 'Cancel' : 'Back'}</button>
+        {setupStep < 3
+          ? <button key="next-setup-step" type="button" className="ops-primary" onClick={nextSetupStep}>Continue <ArrowRight size={14}/></button>
+          : <button key="submit-connection" type="submit" className="ops-primary" disabled={createMeta.isPending}><KeyRound size={14}/>{form.platform === 'google' ? 'Continue with Google' : createMeta.isPending ? 'Verifying Meta access…' : 'Verify and connect Meta'}</button>}
+      </div>
     </form>}
 
-    {error && <div className="connection-error">{error}</div>}
+    {!showConnect && error && <div className="connection-error">{error}</div>}
     {warning && <div className="connection-warning">{warning}</div>}
 
     <div className="connection-list">{(connections.data || []).map(connection => {
@@ -231,24 +309,24 @@ export default function ConnectionsPage() {
   </Page>
 }
 
-export function ConnectionSetupGuide({ platform }) {
+export function ConnectionSetupGuide({ platform, checklist, onChecklistChange }) {
   const isGoogle = platform === 'google'
 
   return <aside className={`connection-setup-guide ${platform}`} aria-label={`${isGoogle ? 'Google Ads' : 'Meta Ads'} connection instructions`}>
     <div className="connection-guide-intro">
       <span className="connection-guide-icon">{isGoogle ? <ShieldCheck size={17}/> : <BookOpen size={17}/>}</span>
       <div>
-        <strong>{isGoogle ? 'Use a Google login with Ads access' : 'Prepare a Meta System User token'}</strong>
+        <strong>{isGoogle ? 'Use a Google login with Ads access' : 'Prepare a dedicated Meta System User token'}</strong>
         <p>{isGoogle
           ? 'The accounts discovered here are the accounts that the Google user can already access.'
-          : 'Use a dedicated, read-only token so reporting access is not tied to a person’s login.'}</p>
+          : 'A System User keeps reporting access independent of an employee’s personal Facebook login.'}</p>
       </div>
       <span className="connection-guide-time">{isGoogle ? '2–3 min' : '5–10 min'}</span>
     </div>
 
     <div className="connection-guide-checks">
-      <span><Check size={13}/>{isGoogle ? 'Access to the Google Ads manager or client account' : 'Admin access to the Meta business portfolio'}</span>
-      <span><Check size={13}/>{isGoogle ? 'The correct Google email ready for sign-in' : 'A Meta app owned by the same business portfolio'}</span>
+      <span><Check size={13}/>{isGoogle ? 'Access to the Google Ads manager or client account' : 'Full control of the Meta business portfolio'}</span>
+      <span><Check size={13}/>{isGoogle ? 'The correct Google email ready for sign-in' : 'A Meta app connected to that business portfolio'}</span>
     </div>
 
     <details open>
@@ -259,16 +337,24 @@ export function ConnectionSetupGuide({ platform }) {
           <li><b>Continue with Google.</b> Choose that email and approve Google Ads access. No Google password is shared with this app.</li>
           <li><b>Assign accounts.</b> After returning here, select the discovered client accounts and assign each one to a client. Manager accounts appear only to show the hierarchy.</li>
         </> : <>
-          <li><b>Create or select a System User.</b> Open Meta Business settings, then go to <em>Users → System users</em>.</li>
-          <li><b>Assign ad accounts.</b> Choose <em>Assign assets → Ad accounts</em> and grant <em>View performance</em> for every account you want to import.</li>
-          <li><b>Generate the token.</b> Choose your Meta app, include <code>ads_read</code>, select an appropriate expiration, and copy the token when Meta displays it.</li>
-          <li><b>Connect and assign.</b> Paste the token here. After discovery, select each ad account and assign it to a client.</li>
+          <li><b>Open the correct portfolio.</b> In Meta Business settings, confirm the portfolio switcher shows the business that owns or has partner access to the ad accounts.</li>
+          <li><b>Create or select a System User.</b> Go to <em>Users → System users</em>. Use a dedicated system user for reporting instead of a person’s login.</li>
+          <li><b>Assign the required ad accounts.</b> Select the system user, choose <em>Assign assets → Ad accounts</em>, and enable permission to view account performance for every account you need.</li>
+          <li><b>Generate a token.</b> Choose the app owned by the same portfolio, enable <code>ads_read</code>, choose an expiration appropriate for your security policy, and generate the token.</li>
+          <li><b>Copy it immediately.</b> Meta only shows the complete token at generation time. Paste the full value into the field below.</li>
+          <li><b>Discover and assign.</b> After verification, select each accessible ad account and map it to the correct client in this app.</li>
         </>}
       </ol>
       <a href={isGoogle ? 'https://developers.google.com/google-ads/api/docs/oauth/overview' : 'https://business.facebook.com/settings/system-users'} target="_blank" rel="noreferrer">
         {isGoogle ? 'Google Ads access guide' : 'Open Meta Business settings'} <ExternalLink size={12}/>
       </a>
     </details>
+    {!isGoogle && onChecklistChange && <div className="connection-readiness">
+      <strong>Confirm before entering the token</strong>
+      <label><input type="checkbox" checked={Boolean(checklist?.systemUser)} onChange={event => onChecklistChange('systemUser', event.target.checked)}/><span>I selected a dedicated System User in the correct business portfolio.</span></label>
+      <label><input type="checkbox" checked={Boolean(checklist?.assets)} onChange={event => onChecklistChange('assets', event.target.checked)}/><span>I assigned every ad account that should be discoverable.</span></label>
+      <label><input type="checkbox" checked={Boolean(checklist?.permission)} onChange={event => onChecklistChange('permission', event.target.checked)}/><span>The generated token includes <code>ads_read</code>.</span></label>
+    </div>}
   </aside>
 }
 

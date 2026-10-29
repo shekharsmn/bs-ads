@@ -42,11 +42,11 @@ class SendNotificationJob implements ShouldBeUnique, ShouldQueue
         $delivery->increment('attempts');
         try {
             if ($destination->channel === 'email') {
-                Mail::raw((string) ($delivery->payload['text'] ?? json_encode($delivery->payload)), fn ($message) => $message->to($config['address'])->subject($delivery->payload['title'] ?? 'Pulse notification'));
+                Mail::raw((string) ($delivery->payload['text'] ?? json_encode($delivery->payload)), fn ($message) => $message->to($config['address'])->subject($delivery->payload['title'] ?? 'SharkAds notification'));
             } else {
                 $url = $urls->assert((string) ($config['url'] ?? ''));
                 abort_unless(str_starts_with($url, 'https://'), 422, 'Notification webhooks must use HTTPS.');
-                $payload = in_array($destination->channel, ['google_chat', 'slack', 'teams'], true) ? ['text' => $delivery->payload['text'] ?? $delivery->payload['title'] ?? 'Pulse notification'] : $delivery->payload;
+                $payload = in_array($destination->channel, ['google_chat', 'slack', 'teams'], true) ? ['text' => $delivery->payload['text'] ?? $delivery->payload['title'] ?? 'SharkAds notification'] : $delivery->payload;
                 $request = Http::timeout(10)->acceptJson()->withOptions(['allow_redirects' => false]);
                 if ($destination->channel === 'webhook' && filled($config['secret'] ?? null)) {
                     $request = $request->withHeaders(['X-Pulse-Signature' => hash_hmac('sha256', json_encode($payload, JSON_THROW_ON_ERROR), $config['secret'])]);

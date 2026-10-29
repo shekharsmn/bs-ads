@@ -38,11 +38,11 @@ function AuditHome() {
   const toast = useToast()
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
-  const canManage = Boolean(permissions?.manage_ad_library)
+  const canManage = Boolean(permissions?.run_content_audits)
   const [runs, setRuns] = useState([])
   const [audits, setAudits] = useState([])
   const [pagination, setPagination] = useState({ current: 1, last: 1, total: 0 })
-  const [filters, setFilters] = useState({ q: '', status: '', company_type: '', page: 1 })
+  const [filters, setFilters] = useState({ q: '', status: '', company_type: '', related_client_id: searchParams.get('related_client_id') || '', page: 1 })
   const [loading, setLoading] = useState(true)
   const [listLoading, setListLoading] = useState(true)
   const [error, setError] = useState('')
@@ -51,12 +51,12 @@ function AuditHome() {
 
   useEffect(() => {
     let current = true
-    api.getAdLibraryRuns({ per_page: 100 }).then(({ data }) => {
+    api.getAdLibraryRuns({ per_page: 100, related_client_id: searchParams.get('related_client_id') || undefined }).then(({ data }) => {
       if (!current) return
       setRuns((data.data || []).filter(run => ['complete', 'partial'].includes(run.status) && run.result_count > 0))
     }).catch(() => current && setError('Unable to load completed Ad Library runs.')).finally(() => current && setLoading(false))
     return () => { current = false }
-  }, [])
+  }, [searchParams])
 
   useEffect(() => {
     let current = true
@@ -210,7 +210,7 @@ function NewAuditDialog({ open, runs, initialRunId, loadingRuns, onClose, onCrea
 
 function AuditWorkspace({ id }) {
   const { permissions } = useAuth()
-  const canManage = Boolean(permissions?.manage_ad_library)
+  const canManage = Boolean(permissions?.run_content_audits)
   const [searchParams, setSearchParams] = useSearchParams()
   const [audit, setAudit] = useState(null)
   const [creatives, setCreatives] = useState([])
@@ -395,12 +395,15 @@ function PersonasStep({ audit, creatives = [], canManage, busy, act }) {
   const save = persona => runChange(() => act(() => api.updateAdLibraryAuditPersona(audit.id, persona.id, payloadFor(draft(persona))), 'Unable to save persona.'))
   const move = (index, direction) => { const ordered = [...personas]; const target = index + direction; if (target < 0 || target >= ordered.length) return; [ordered[index], ordered[target]] = [ordered[target], ordered[index]]; runChange(() => act(() => api.reorderAdLibraryAuditPersonas(audit.id, ordered.map(item => item.id)), 'Unable to reorder personas.')) }
   const evidenceFirst = Number(audit.workflow_version || 1) >= 2
+  const personaLimit = Number(audit.persona_limit || 5)
+  const overPersonaLimit = personas.length > personaLimit
   const unassigned = creatives.filter(creative => creative.processing_status === 'complete' && !creative.personas?.some(persona => persona.pivot?.role === 'primary'))
   const assign = (creative, form) => act(() => api.updateAdLibraryAuditCreative(audit.id, creative.id, form), 'Unable to save this persona assignment.', true)
-  return <section className="audit-stage-panel"><StageHeading number={evidenceFirst ? '3' : '2'} title="Confirm audience personas" description={evidenceFirst ? 'Review the consolidated segments and verify that every creative has a sensible primary assignment.' : 'Review the suggested segments before classifying creatives.'} meta={`${personas.length}/10 personas`}/>
+  return <section className="audit-stage-panel"><StageHeading number={evidenceFirst ? '3' : '2'} title="Confirm audience personas" description={evidenceFirst ? 'Review the consolidated, insight-led audiences and verify that every creative has a sensible primary assignment.' : 'Review the suggested segments before classifying creatives.'} meta={`${personas.length}/${personaLimit} personas`}/>
     <div className="audit-personas compact">{personas.map((persona, index) => { const value = draft(persona); const isOpen = expanded === persona.id; return <article key={persona.id} className={isOpen ? 'open' : ''}><button className="audit-persona-summary" onClick={() => setExpanded(isOpen ? null : persona.id)}><span className="audit-persona-avatar">{(value.name || '?').slice(0, 1).toUpperCase()}</span><span><strong>{value.name || 'Unnamed persona'}</strong><small>{short(value.description || 'No description', 120)}</small></span><span className="audit-persona-confidence">{saveState[persona.id] === 'saving' ? 'Saving…' : saveState[persona.id] === 'saved' ? 'Saved' : saveState[persona.id] === 'error' ? 'Save failed' : `${Math.round((persona.confidence || 0) * 100)}% confidence`}</span><ChevronDown size={16}/></button>{isOpen && <div className="audit-persona-editor"><div className="audit-persona-head"><input disabled={!canManage} aria-label="Persona name" value={value.name || ''} onChange={event => update(persona, 'name', event.target.value)}/>{canManage && <div><button disabled={index === 0} aria-label="Move persona up" onClick={() => move(index, -1)}><ChevronLeft size={14}/></button><button disabled={index === personas.length - 1} aria-label="Move persona down" onClick={() => move(index, 1)}><ChevronRight size={14}/></button><button aria-label="Delete persona" onClick={() => runChange(() => act(() => api.deleteAdLibraryAuditPersona(audit.id, persona.id), 'Unable to delete persona.'))}><Trash2 size={14}/></button></div>}</div><Field label="Description"><textarea disabled={!canManage} rows="2" value={value.description || ''} onChange={event => update(persona, 'description', event.target.value)}/></Field><Field label="Demographics or life stage"><input disabled={!canManage} value={value.demographics || ''} onChange={event => update(persona, 'demographics', event.target.value)}/></Field><div className="audit-persona-fields">{personaArrayFields.map(key => <Field key={key} label={key.replaceAll('_', ' ')}><textarea disabled={!canManage} rows="3" value={Array.isArray(value[key]) ? value[key].join('\n') : value[key] || ''} onChange={event => update(persona, key, event.target.value)}/></Field>)}</div>{canManage && evidenceFirst && personas.length > 1 && <div className="audit-persona-merge"><select aria-label={`Merge ${persona.name} into`} value={mergeTargets[persona.id] || ''} onChange={event => setMergeTargets(current => ({ ...current, [persona.id]: event.target.value }))}><option value="">Merge into…</option>{personas.filter(item => item.id !== persona.id).map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select><button className="audit-text-button" disabled={!mergeTargets[persona.id]} onClick={() => act(() => api.mergeAdLibraryAuditPersona(audit.id, persona.id, Number(mergeTargets[persona.id])), 'Unable to merge personas.', true)}>Merge</button></div>}{canManage && !autosave && <button className="audit-text-button" onClick={() => save(persona)}>Save persona</button>}</div>}</article>})}</div>
     {evidenceFirst && unassigned.length > 0 && <div className="audit-warning"><strong>{unassigned.length} creative{unassigned.length === 1 ? '' : 's'} need a primary persona.</strong><div className="audit-orphan-list">{unassigned.map(creative => <button key={creative.id} onClick={() => setAssignment(creative)}>{creative.source_snapshot?.title || creative.source_snapshot?.link_title || `Ad ${creative.id}`} <Pencil size={12}/></button>)}</div></div>}
-    {canManage && <div className="audit-sticky-actions"><span>{unassigned.length ? `${unassigned.length} assignments must be repaired` : autosave ? 'Edits save automatically' : 'Changes may reset later stages'}</span><div>{audit.status === 'failed' && audit.failed_stage === 'personas' && <button className="audit-button secondary" disabled={busy} onClick={() => act(() => evidenceFirst ? api.consolidateAdLibraryAuditPersonas(audit.id) : api.generateAdLibraryAuditPersonas(audit.id), 'Unable to retry persona consolidation.')}><RefreshCw size={14}/> Retry consolidation</button>}<button className="audit-button secondary" disabled={busy || personas.length >= 10} onClick={() => runChange(() => act(() => api.createAdLibraryAuditPersona(audit.id, { name: 'New persona', description: 'Describe this audience segment.' }), 'Unable to add a persona.'))}><Plus size={14}/> Add persona</button>{audit.status === 'persona_review' && <button className="audit-button primary" disabled={busy || personas.length < 1 || unassigned.length > 0} onClick={() => act(() => api.confirmAdLibraryAuditPersonas(audit.id), 'Unable to confirm personas.')}><Check size={14}/> Confirm personas</button>}</div></div>}
+    {overPersonaLimit && <div className="audit-warning"><strong>Merge this legacy set down to {personaLimit} personas.</strong><span>Keep the distinct underlying motivations; move product, condition, and demographic facts into the supporting fields.</span></div>}
+    {canManage && <div className="audit-sticky-actions"><span>{overPersonaLimit ? `${personas.length - personaLimit} personas must be merged` : unassigned.length ? `${unassigned.length} assignments must be repaired` : autosave ? 'Edits save automatically' : 'Changes may reset later stages'}</span><div>{audit.status === 'failed' && audit.failed_stage === 'personas' && <button className="audit-button secondary" disabled={busy} onClick={() => act(() => evidenceFirst ? api.consolidateAdLibraryAuditPersonas(audit.id) : api.generateAdLibraryAuditPersonas(audit.id), 'Unable to retry persona consolidation.')}><RefreshCw size={14}/> Retry consolidation</button>}<button className="audit-button secondary" disabled={busy || personas.length >= personaLimit} onClick={() => runChange(() => act(() => api.createAdLibraryAuditPersona(audit.id, { name: 'New persona', description: 'Describe the underlying motivation or decision mindset.' }), 'Unable to add a persona.'))}><Plus size={14}/> Add persona</button>{audit.status === 'persona_review' && <button className="audit-button primary" disabled={busy || personas.length < 1 || overPersonaLimit || unassigned.length > 0} onClick={() => act(() => api.confirmAdLibraryAuditPersonas(audit.id), 'Unable to confirm personas.')}><Check size={14}/> Confirm personas</button>}</div></div>}
     <CreativeEditorDrawer key={assignment?.id || 'no-assignment'} creative={assignment} personas={personas} formatOptions={audit.creative_format_options} busy={busy} onClose={() => setAssignment(null)} onSave={async form => { if (await assign(assignment, form)) setAssignment(null) }}/>
     <ConfirmDialog open={Boolean(destructiveAction)} title="Change confirmed personas?" description="This will clear creative classifications and generated insights so the audit can be run again with the updated personas." confirmLabel="Change personas" busy={busy} onClose={() => setDestructiveAction(null)} onConfirm={async () => { const action = destructiveAction; setDestructiveAction(null); await action?.() }}/>
   </section>

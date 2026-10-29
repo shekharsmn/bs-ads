@@ -8,6 +8,7 @@ use App\Jobs\CollectAdLibraryAuditContextJob;
 use App\Models\AdLibraryAudit;
 use App\Models\AdLibrarySearch;
 use App\Models\AiModel;
+use App\Models\Client;
 use App\Models\User;
 use App\Services\AdLibraryAudit\AdLibraryAuditWorkflow;
 use App\Services\AdLibraryAudit\CreativeMediaPreprocessor;
@@ -71,6 +72,10 @@ class AdLibraryAuditApiTest extends TestCase
         $audit = AdLibraryAudit::findOrFail($response->json('id'));
         $this->assertSame('Acme Running', $audit->company_name);
         $this->assertSame('competitor', $audit->company_type);
+        $this->assertSame(3, $audit->prompt_version);
+        $this->assertSame(3, $audit->schema_version);
+        $this->assertSame('4.0.0', $audit->methodology_version);
+        $response->assertJsonPath('persona_limit', 5);
         $this->assertSame(['ad-1', 'ad-2'], $audit->creatives()->first()->library_ad_ids);
         Queue::assertPushed(CollectAdLibraryAuditContextJob::class, fn ($job) => $job->auditId === $audit->id);
         $run->delete();
@@ -99,7 +104,7 @@ class AdLibraryAuditApiTest extends TestCase
 
     public function test_audit_list_filters_and_detail_summary_support_the_operator_workspace(): void
     {
-        $manager = User::factory()->create(['role' => UserRole::Marketer]);
+        $manager = User::factory()->create(['role' => UserRole::Marketer, 'run_content_audits' => true]);
         $matching = AdLibraryAudit::create(['company_name' => 'Northstar Labs', 'company_type' => 'competitor', 'created_by' => $manager->id, 'name' => 'Northstar creative review', 'provider' => 'gemini', 'model' => 'gemini-2.5-flash-lite', 'model_key' => 'gemini:gemini-2.5-flash-lite', 'status' => 'creative_review']);
         AdLibraryAudit::create(['company_name' => 'Acme Running', 'company_type' => 'client', 'created_by' => $manager->id, 'name' => 'Acme context', 'provider' => 'gemini', 'model' => 'gemini-2.5-flash-lite', 'model_key' => 'gemini:gemini-2.5-flash-lite', 'status' => 'context_review']);
         $matching->creatives()->create(['creative_key' => 'reviewed', 'library_ad_ids' => ['reviewed'], 'source_snapshot' => [], 'processing_status' => 'complete', 'review_status' => 'reviewed']);
@@ -123,7 +128,7 @@ class AdLibraryAuditApiTest extends TestCase
     public function test_audit_detail_flags_creative_analysis_that_stopped_making_progress(): void
     {
         config(['ad_library_audit.analysis_stall_minutes' => 5]);
-        $manager = User::factory()->create(['role' => UserRole::Marketer]);
+        $manager = User::factory()->create(['role' => UserRole::Marketer, 'run_content_audits' => true]);
         $audit = AdLibraryAudit::create(['company_name' => 'Northstar Labs', 'company_type' => 'competitor', 'created_by' => $manager->id, 'name' => 'Stalled analysis', 'provider' => 'gemini', 'model' => 'gemini-2.5-flash-lite', 'model_key' => 'gemini:gemini-2.5-flash-lite', 'status' => 'analyzing_creatives']);
         $creative = $audit->creatives()->create(['creative_key' => 'waiting', 'library_ad_ids' => ['waiting'], 'source_snapshot' => [], 'processing_status' => 'pending']);
         $creative->timestamps = false;
@@ -138,7 +143,7 @@ class AdLibraryAuditApiTest extends TestCase
 
     public function test_manager_marks_every_completed_creative_reviewed(): void
     {
-        $manager = User::factory()->create(['role' => UserRole::Marketer]);
+        $manager = User::factory()->create(['role' => UserRole::Marketer, 'run_content_audits' => true]);
         $audit = AdLibraryAudit::create(['company_name' => 'Northstar Labs', 'company_type' => 'competitor', 'created_by' => $manager->id, 'name' => 'Bulk review', 'provider' => 'gemini', 'model' => 'gemini-2.5-flash-lite', 'model_key' => 'gemini:gemini-2.5-flash-lite', 'status' => 'creative_review']);
         $pending = $audit->creatives()->create(['creative_key' => 'pending', 'library_ad_ids' => ['pending'], 'source_snapshot' => [], 'processing_status' => 'complete', 'review_status' => 'pending']);
         $reviewed = $audit->creatives()->create(['creative_key' => 'reviewed', 'library_ad_ids' => ['reviewed'], 'source_snapshot' => [], 'processing_status' => 'complete', 'review_status' => 'reviewed']);
@@ -274,7 +279,7 @@ class AdLibraryAuditApiTest extends TestCase
     public function test_persona_confirmation_analysis_and_creative_edit_invalidate_insights(): void
     {
         Bus::fake();
-        $manager = User::factory()->create(['role' => UserRole::Marketer]);
+        $manager = User::factory()->create(['role' => UserRole::Marketer, 'run_content_audits' => true]);
         $audit = AdLibraryAudit::create(['company_name' => 'Acme Running', 'company_type' => 'partner', 'created_by' => $manager->id, 'name' => 'Audit', 'provider' => 'gemini', 'model' => 'gemini-2.5-flash-lite', 'model_key' => 'gemini:gemini-2.5-flash-lite', 'status' => 'persona_review']);
         $persona = $audit->personas()->create(['name' => 'Busy parent', 'description' => 'Needs convenience', 'position' => 0]);
         $creative = $audit->creatives()->create(['creative_key' => 'one', 'library_ad_ids' => ['one'], 'source_snapshot' => ['library_ad_id' => 'one'], 'processing_status' => 'complete', 'angle' => 'Convenience']);
@@ -292,10 +297,31 @@ class AdLibraryAuditApiTest extends TestCase
         $this->assertNull($audit->grid_confirmed_at);
     }
 
+    public function test_persona_limit_is_enforced_for_manual_changes_and_legacy_confirmation(): void
+    {
+        $manager = User::factory()->create(['role' => UserRole::Marketer, 'run_content_audits' => true]);
+        $audit = AdLibraryAudit::create([
+            'company_name' => 'Insight Co', 'company_type' => 'client', 'created_by' => $manager->id, 'name' => 'Audience limit',
+            'provider' => 'gemini', 'model' => 'gemini-2.5-flash-lite', 'model_key' => 'gemini:gemini-2.5-flash-lite',
+            'workflow_version' => 2, 'status' => 'persona_review',
+        ]);
+        foreach (range(1, 5) as $position) {
+            $audit->personas()->create(['name' => "Mindset {$position}", 'description' => 'A distinct decision mindset.', 'position' => $position - 1]);
+        }
+
+        $this->actingAs($manager)->postJson('/api/ad-library/audits/'.$audit->id.'/personas', [
+            'name' => 'Sixth mindset', 'description' => 'This exceeds the audit limit.',
+        ])->assertStatus(422)->assertJsonPath('message', 'An audit can have at most five personas.');
+
+        $audit->personas()->create(['name' => 'Legacy sixth persona', 'description' => 'Created by the former workflow.', 'position' => 5]);
+        $this->postJson('/api/ad-library/audits/'.$audit->id.'/personas/confirm')
+            ->assertStatus(422)->assertJsonPath('message', 'An audit must have between one and five personas.');
+    }
+
     public function test_manager_selects_creatives_and_can_pause_and_resume_analysis(): void
     {
         Bus::fake();
-        $manager = User::factory()->create(['role' => UserRole::Marketer]);
+        $manager = User::factory()->create(['role' => UserRole::Marketer, 'run_content_audits' => true]);
         $audit = AdLibraryAudit::create(['company_name' => 'Acme Running', 'company_type' => 'partner', 'created_by' => $manager->id, 'name' => 'Selectable audit', 'provider' => 'gemini', 'model' => 'gemini-2.5-flash-lite', 'model_key' => 'gemini:gemini-2.5-flash-lite', 'status' => 'creative_selection', 'personas_confirmed_at' => now()]);
         $selected = $audit->creatives()->create(['creative_key' => 'selected', 'library_ad_ids' => ['selected'], 'source_snapshot' => ['library_ad_id' => 'selected']]);
         $skipped = $audit->creatives()->create(['creative_key' => 'skipped', 'library_ad_ids' => ['skipped'], 'source_snapshot' => ['library_ad_id' => 'skipped']]);
@@ -562,7 +588,7 @@ class AdLibraryAuditApiTest extends TestCase
     public function test_evidence_first_context_confirmation_starts_every_selected_creative(): void
     {
         Bus::fake();
-        $manager = User::factory()->create(['role' => UserRole::Marketer]);
+        $manager = User::factory()->create(['role' => UserRole::Marketer, 'run_content_audits' => true]);
         $audit = AdLibraryAudit::create([
             'company_name' => 'Evidence Co', 'company_type' => 'client', 'created_by' => $manager->id,
             'name' => 'Evidence first', 'provider' => 'gemini', 'model' => 'gemini-2.5-flash-lite',
@@ -767,7 +793,7 @@ class AdLibraryAuditApiTest extends TestCase
 
     public function test_consolidation_assigns_exactly_one_primary_with_rationale_and_confirmation_rejects_orphans(): void
     {
-        $manager = User::factory()->create(['role' => UserRole::Marketer]);
+        $manager = User::factory()->create(['role' => UserRole::Marketer, 'run_content_audits' => true]);
         $audit = AdLibraryAudit::create([
             'company_name' => 'Evidence Co', 'company_type' => 'client', 'created_by' => $manager->id, 'name' => 'Consolidation',
             'provider' => 'gemini', 'model' => 'gemini-2.5-flash-lite', 'model_key' => 'gemini:gemini-2.5-flash-lite',
@@ -779,18 +805,26 @@ class AdLibraryAuditApiTest extends TestCase
             'remarks' => 'Shows a quick reading.', 'evidence' => ['Quick reading'], 'confidence' => 0.85,
             'persona_candidates' => [['key' => 'local', 'name' => 'Reassurance seeker', 'evidence' => ['Quick reading']]],
         ]);
-        Http::fake(fn () => Http::response($this->geminiResponse([
-            'personas' => [[
-                'key' => 'reassurance', 'name' => 'Reassurance seeker', 'description' => 'Wants confidence from a quick reading.', 'demographics' => '',
-                'problems' => ['Uncertainty'], 'desired_outcomes' => ['Confidence'], 'motivations' => ['Stay informed'],
-                'purchase_triggers' => ['Quick reading'], 'objections' => ['Accuracy'], 'products' => ['Monitor'],
-                'evidence' => ['Creative one shows a quick reading.'], 'confidence' => 0.88,
-            ]],
-            'assignments' => [[
-                'creative_id' => $creative->id, 'primary_persona_key' => 'reassurance', 'secondary_persona_keys' => [],
-                'rationale' => 'The creative directly addresses uncertainty with a quick reading.', 'confidence' => 0.93,
-            ]],
-        ])));
+        Http::fake(function ($request) use ($creative) {
+            $requestData = $request->data();
+            $prompt = data_get($requestData, 'contents.0.parts.0.text', '');
+            $this->assertStringContainsString('no more than five canonical personas', $prompt);
+            $this->assertStringContainsString('Better Supplement Seeker', $prompt);
+            $this->assertSame(5, data_get($requestData, 'generationConfig.responseSchema.properties.personas.maxItems'));
+
+            return Http::response($this->geminiResponse([
+                'personas' => [[
+                    'key' => 'reassurance', 'name' => 'Reassurance seeker', 'description' => 'Wants confidence from a quick reading.', 'demographics' => '',
+                    'problems' => ['Uncertainty'], 'desired_outcomes' => ['Confidence'], 'motivations' => ['Stay informed'],
+                    'purchase_triggers' => ['Quick reading'], 'objections' => ['Accuracy'], 'products' => ['Monitor'],
+                    'evidence' => ['Creative one shows a quick reading.'], 'confidence' => 0.88,
+                ]],
+                'assignments' => [[
+                    'creative_id' => $creative->id, 'primary_persona_key' => 'reassurance', 'secondary_persona_keys' => [],
+                    'rationale' => 'The creative directly addresses uncertainty with a quick reading.', 'confidence' => 0.93,
+                ]],
+            ]));
+        });
 
         app(AdLibraryAuditWorkflow::class)->consolidatePersonas($audit);
 
@@ -851,8 +885,10 @@ class AdLibraryAuditApiTest extends TestCase
 
     private function runFor(UserRole $role): array
     {
-        $user = User::factory()->create(['role' => $role]);
-        $search = AdLibrarySearch::create(['created_by' => $user->id, 'company_name' => 'Acme Running', 'company_type' => 'competitor', 'website_url' => 'https://acme.example', 'name' => 'Search', 'search_mode' => 'keyword', 'query' => 'shoes']);
+        $user = User::factory()->create(['role' => $role, 'run_content_audits' => $role !== UserRole::Viewer]);
+        $client = Client::create(['name' => 'Acme', 'slug' => 'acme-'.strtolower($role->value)]);
+        $client->users()->attach($user);
+        $search = AdLibrarySearch::create(['created_by' => $user->id, 'related_client_id' => $client->id, 'company_name' => 'Acme Running', 'company_type' => 'competitor', 'website_url' => 'https://acme.example', 'name' => 'Search', 'search_mode' => 'keyword', 'query' => 'shoes']);
         $run = $search->runs()->create(['requested_by' => $user->id, 'status' => 'complete', 'result_count' => 2]);
 
         return [$user, $run];

@@ -23,5 +23,8 @@ class Client extends Model
     public function conversionMappings() { return $this->hasMany(ConversionMapping::class); }
     public function incidents() { return $this->hasMany(AlertIncident::class); }
     public function reportSchedules() { return $this->hasMany(ReportSchedule::class); }
+    public function reportRuns() { return $this->hasMany(ReportRun::class); }
+    public function adLibrarySearches() { return $this->hasMany(AdLibrarySearch::class, 'related_client_id'); }
+    public function adLibraryAudits() { return $this->hasMany(AdLibraryAudit::class, 'related_client_id'); }
     public function getGoogleChatWebhookConfiguredAttribute(): bool { return filled($this->google_chat_webhook); }
 }

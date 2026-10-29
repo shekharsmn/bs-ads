@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { Link, Navigate } from 'react-router-dom'
+import { Link, Navigate, useSearchParams } from 'react-router-dom'
 import { Check as CheckIcon, Clock3, Copy, ExternalLink, LibraryBig, LoaderCircle, Play, PlayCircle, Plus, RefreshCw, Search, Star, Trash2, X } from 'lucide-react'
 import { api } from '../api/client'
 import AdCreativeModal from '../components/AdCreativeModal'
@@ -14,8 +14,11 @@ const initialForm = { company_name: '', company_type: 'competitor', related_clie
 
 export default function AdLibraryPage() {
   const { permissions, features } = useAuth()
+  const [urlSearch] = useSearchParams()
+  const relatedClientId = urlSearch.get('related_client_id') || ''
   const toast = useToast()
   const canManage = Boolean(permissions?.manage_ad_library)
+  const canRunContentAudits = Boolean(permissions?.run_content_audits)
   const [form, setForm] = useState(initialForm)
   const [searches, setSearches] = useState([])
   const [clients, setClients] = useState([])
@@ -41,8 +44,8 @@ export default function AdLibraryPage() {
     if (!features?.ad_library) return
     try {
       const [searchResponse, runResponse, clientResponse] = await Promise.all([
-        api.getAdLibrarySearches(tagFilter ? { tag_id: tagFilter } : undefined),
-        api.getAdLibraryRuns(),
+        api.getAdLibrarySearches({ tag_id: tagFilter || undefined, related_client_id: relatedClientId || undefined }),
+        api.getAdLibraryRuns({ related_client_id: relatedClientId || undefined }),
         canManage ? api.getClients().catch(() => ({ data: [] })) : Promise.resolve({ data: [] }),
       ])
       setSearches(searchResponse.data.searches || [])
@@ -53,7 +56,7 @@ export default function AdLibraryPage() {
     } catch (requestError) {
       setError(requestError.response?.data?.message || 'Unable to load Ad Library research.')
     }
-  }, [canManage, features?.ad_library, tagFilter])
+  }, [canManage, features?.ad_library, relatedClientId, tagFilter])
 
   const loadResults = useCallback(async (run, page = 1) => {
     if (!run || !terminalStatuses.has(run.status) || run.result_count === 0) {
@@ -200,7 +203,7 @@ export default function AdLibraryPage() {
                   {runJsonCopyState === 'copied' ? <CheckIcon size={13} /> : runJsonCopyState === 'copying' ? <LoaderCircle className="spin" size={13} /> : <Copy size={13} />}
                   {runJsonCopyState === 'copied' ? 'Copied' : 'Copy run JSON'}
                 </button>}
-                {features?.ad_library_audits && canManage && ['complete', 'partial'].includes(selectedRun.status) && selectedRun.result_count > 0 && <Link to={`/ad-library/audits?run=${selectedRun.id}`} style={{ ...jsonButton, textDecoration: 'none' }}>Create content audit</Link>}
+                {features?.ad_library_audits && canRunContentAudits && ['complete', 'partial'].includes(selectedRun.status) && selectedRun.result_count > 0 && <Link to={`/ad-library/audits?run=${selectedRun.id}`} style={{ ...jsonButton, textDecoration: 'none' }}>Create content audit</Link>}
                 <IconButton title="Refresh" onClick={async () => { const response = await api.getAdLibraryRun(selectedRun.id); setSelectedRun(response.data); await loadResults(response.data) }}><RefreshCw size={14} /></IconButton>
                 {canManage && terminalStatuses.has(selectedRun.status) && <IconButton title="Delete run" onClick={() => setPendingDelete({ type: 'run', id: selectedRun.id, title: `Run #${selectedRun.id}` })}><Trash2 size={14} /></IconButton>}
               </div>

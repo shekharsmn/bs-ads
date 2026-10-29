@@ -13,9 +13,15 @@ class ReportTemplateController extends Controller
 {
     public function index(Request $request)
     {
+        $filters = $request->validate(['client_id' => 'nullable|integer|exists:clients,id']);
         $ids = ClientAccess::clientsFor($request->user())->pluck('id');
+        if ($filters['client_id'] ?? null) {
+            ClientAccess::authorize($request->user(), Client::findOrFail($filters['client_id']));
+        }
 
-        return ReportTemplate::query()->where(fn ($query) => $query->whereNull('client_id')->orWhereIn('client_id', $ids))->with('client:id,name')->orderByDesc('is_default')->orderBy('name')->get();
+        return ReportTemplate::query()->where(fn ($query) => $query->whereNull('client_id')->orWhereIn('client_id', $ids))
+            ->when($filters['client_id'] ?? null, fn ($query, $id) => $query->where(fn ($nested) => $nested->whereNull('client_id')->orWhere('client_id', $id)))
+            ->with('client:id,name')->orderByDesc('is_default')->orderBy('name')->get();
     }
 
     public function store(Request $request)

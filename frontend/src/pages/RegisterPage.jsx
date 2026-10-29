@@ -71,7 +71,7 @@ export default function RegisterPage() {
             }}>
               <Zap size={22} color="white" strokeWidth={2.5} />
             </div>
-            <span style={{ fontFamily: 'Syne, sans-serif', fontSize: '28px', fontWeight: 800, color: 'white', letterSpacing: '-0.03em' }}>AdAudit</span>
+            <span style={{ fontFamily: 'Syne, sans-serif', fontSize: '28px', fontWeight: 800, color: 'white', letterSpacing: '-0.03em' }}>SharkAds</span>
           </div>
           <p style={{ color: 'rgba(255,255,255,0.4)', fontSize: '13px', margin: '8px 0 0' }}>Create your account</p>
         </div>

@@ -1,8 +1,11 @@
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Building2, Pencil, Plus, Send, X } from 'lucide-react'
+import { Building2, Pencil, Plus, Send, Trash2, X } from 'lucide-react'
+import { Link } from 'react-router-dom'
 import { api } from '../api/client'
+import ConfirmDialog from '../components/ui/ConfirmDialog'
 import { useAuth } from '../context/AuthContext'
+import { useToast } from '../context/ToastContext'
 
 const emptyForm = {
   name: '',
@@ -17,8 +20,10 @@ const emptyForm = {
 
 export default function ClientsPage() {
   const { user } = useAuth()
+  const toast = useToast()
   const qc = useQueryClient()
   const [editingId, setEditingId] = useState(null)
+  const [pendingDelete, setPendingDelete] = useState(null)
   const [form, setForm] = useState(emptyForm)
   const clients = useQuery({ queryKey: ['clients'], queryFn: () => api.getClients().then(r => r.data) })
 
@@ -41,6 +46,19 @@ export default function ClientsPage() {
       qc.invalidateQueries({ queryKey: ['clients'] })
       closeForm()
     },
+  })
+
+  const remove = useMutation({
+    mutationFn: target => api.deleteClient(target.id),
+    onSuccess: (_, target) => {
+      qc.invalidateQueries({ queryKey: ['clients'] })
+      qc.invalidateQueries({ queryKey: ['performance-accounts'] })
+      qc.invalidateQueries({ queryKey: ['connections'] })
+      if (editingId === target.id) closeForm()
+      setPendingDelete(null)
+      toast.success(`${target.name} was deleted.`)
+    },
+    onError: error => toast.error(error?.response?.data?.message || 'Could not delete the client.'),
   })
 
   const openCreate = () => {
@@ -96,14 +114,24 @@ export default function ClientsPage() {
 
     <div className="ops-list">{(clients.data || []).map(client => <div className="ops-list-row" key={client.id}>
       <Building2 size={17}/>
-      <div><strong>{client.name}</strong><small>{client.timezone} · {client.currency} · {client.objective.replace('_', ' ')} · {client.active ? 'active' : 'paused'}</small></div>
+      <div><Link className="client-name-link" to={`/clients/${client.id}`}><strong>{client.name}</strong></Link><small>{client.timezone} · {client.currency} · {client.objective.replace('_', ' ')} · {client.active ? 'active' : 'paused'}</small></div>
       <span>{client.ad_accounts_count} accounts</span>
       <span className={client.incidents_count ? 'ops-danger' : 'ops-ok'}>{client.incidents_count} open alerts</span>
       {client.google_chat_webhook_configured && <button title="Test Google Chat" onClick={() => api.testClientChat(client.id)}><Send size={14}/></button>}
       {canManage && <button title={`Edit ${client.name}`} onClick={() => openEdit(client)}><Pencil size={14}/></button>}
+      {user?.role === 'admin' && <button className="client-delete-button" title={`Delete ${client.name}`} aria-label={`Delete ${client.name}`} onClick={() => setPendingDelete(client)}><Trash2 size={14}/></button>}
     </div>)}</div>
+    <ConfirmDialog
+      open={Boolean(pendingDelete)}
+      title={`Delete ${pendingDelete?.name || 'client'}?`}
+      description="This permanently deletes the client and its ad accounts, collected performance data, alerts, data-health records, report schedules, and client-specific templates. Connections and research records are retained but unlinked from this client. This cannot be undone."
+      confirmLabel="Delete client"
+      busy={remove.isPending}
+      onClose={() => setPendingDelete(null)}
+      onConfirm={() => pendingDelete && remove.mutate(pendingDelete)}
+    />
   </Page>
 }
 
-export function Page({ title, subtitle, children }) { return <div style={{ padding: '30px 34px 48px', maxWidth: 1200, margin: '0 auto' }}><header style={{ marginBottom: 28 }}><p className="ops-eyebrow">Brandshark Pulse</p><h1 className="ops-title">{title}</h1><p className="ops-subtitle">{subtitle}</p></header>{children}</div> }
+export function Page({ title, subtitle, children }) { return <div style={{ padding: '30px 34px 48px', maxWidth: 1200, margin: '0 auto' }}><header style={{ marginBottom: 28 }}><p className="ops-eyebrow">SharkAds</p><h1 className="ops-title">{title}</h1><p className="ops-subtitle">{subtitle}</p></header>{children}</div> }
 function Field({ label, children }) { return <label><span>{label}</span>{children}</label> }

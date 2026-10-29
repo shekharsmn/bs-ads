@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { api } from '../api/client'
 import { ToastProvider } from '../context/ToastContext'
@@ -29,22 +29,16 @@ describe('governance workspace', () => {
     api.getMethodologies.mockResolvedValue({ data: [] })
   })
 
-  it('shows effective access and updates a role', async () => {
+  it('moves access management out of governance and defaults to the audit trail', async () => {
     renderPage()
-    expect(await screen.findByText('Morgan')).toBeInTheDocument()
-    expect(screen.getByText('1 clients')).toBeInTheDocument()
-    fireEvent.change(screen.getByDisplayValue('Viewer'), { target: { value: 'marketer' } })
-    await waitFor(() => expect(api.updateGovernanceUser).toHaveBeenCalledWith(2, { role: 'marketer' }))
+    expect(await screen.findByRole('button', { name: 'Audit trail' })).toHaveClass('active')
+    expect(screen.queryByRole('button', { name: 'Access' })).not.toBeInTheDocument()
+    expect(api.getGovernanceUsers).not.toHaveBeenCalled()
   })
 
-  it('stages client access changes and saves one complete assignment', async () => {
+  it('retains the governance destinations workspace', async () => {
     renderPage()
-    expect(await screen.findByText('Morgan')).toBeInTheDocument()
-    fireEvent.click(screen.getByLabelText('Beta'))
-    expect(api.updateGovernanceUser).not.toHaveBeenCalled()
-
-    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
-
-    await waitFor(() => expect(api.updateGovernanceUser).toHaveBeenCalledWith(2, { client_ids: [4, 5] }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Destinations' }))
+    expect(await screen.findByText('Add destination')).toBeInTheDocument()
   })
 })

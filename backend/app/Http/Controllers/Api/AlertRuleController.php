@@ -31,12 +31,16 @@ class AlertRuleController extends Controller
 
     public function index(Request $request)
     {
-        $data = $request->validate(['client_id' => 'nullable|exists:clients,id']);
+        $data = $request->validate(['client_id' => 'nullable|exists:clients,id', 'ad_account_id' => 'nullable|exists:ad_accounts,id']);
         $clientIds = ClientAccess::clientsFor($request->user())->pluck('id');
+        if (($data['client_id'] ?? null) || ($data['ad_account_id'] ?? null)) {
+            $this->scopes->resolve($request->user(), $data);
+        }
 
         return AlertRule::query()->where(function ($q) use ($clientIds) {
             $q->whereNull('client_id')->orWhereIn('client_id', $clientIds);
         })->when($data['client_id'] ?? null, fn ($q, $id) => $q->where(fn ($sq) => $sq->whereNull('client_id')->orWhere('client_id', $id)))
+            ->when($data['ad_account_id'] ?? null, fn ($q, $id) => $q->where(fn ($scope) => $scope->whereNull('ad_account_id')->orWhere('ad_account_id', $id)))
             ->with(['template:id,key,name', 'client:id,name', 'adAccount:id,name', 'campaign:id,name'])->orderBy('name')->get();
     }
 

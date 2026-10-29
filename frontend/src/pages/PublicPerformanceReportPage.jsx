@@ -85,7 +85,7 @@ function CampaignTable({ campaigns, currency }) {
 }
 
 function ReportState({ error = false }) {
-  return <main className="public-report-state"><div className="public-report-mark"><Activity size={20} /></div>{error ? <><h1>This report is unavailable</h1><p>The share link may be invalid or expired. Ask your Brandshark contact for a fresh link.</p></> : <><span className="public-report-loader" /><h1>Preparing your report</h1><p>Loading the latest performance snapshot…</p></>}</main>
+  return <main className="public-report-state"><div className="public-report-mark"><Activity size={20} /></div>{error ? <><h1>This report is unavailable</h1><p>The share link may be invalid or expired. Ask your SharkAds administrator for a fresh link.</p></> : <><span className="public-report-loader" /><h1>Preparing your report</h1><p>Loading the latest performance snapshot…</p></>}</main>
 }
 
 export default function PublicPerformanceReportPage() {
@@ -101,7 +101,7 @@ export default function PublicPerformanceReportPage() {
   const campaigns = snapshot.campaigns?.campaigns || []
   const alerts = snapshot.alerts || []
   const branding = snapshot.template || {}
-  const brandName = branding.brand_name || 'Brandshark Pulse'
+  const brandName = branding.brand_name || 'SharkAds'
   const openAlerts = alerts.filter(alert => !['resolved', 'closed'].includes(`${alert.status}`.toLowerCase()))
 
   return <div className="public-report-page" style={{ '--report-accent': branding.brand_color || '#2563eb' }}>

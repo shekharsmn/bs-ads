@@ -16,6 +16,8 @@ class InspectorController extends Controller
 {
     public function fetch(Request $request)
     {
+        abort_unless($request->user()->canUseDataInspector(), 403, 'You do not have permission to use Data Inspector.');
+
         $request->validate([
             'platform' => 'nullable|string|in:meta,google',
             'account_id' => 'required|integer',

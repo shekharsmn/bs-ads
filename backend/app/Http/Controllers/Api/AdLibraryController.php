@@ -19,10 +19,13 @@ class AdLibraryController extends Controller
     public function searches(Request $request)
     {
         $this->enabled();
-        $data = $request->validate(['company_type' => ['nullable', Rule::in($this->companyTypes())], 'tag_id' => 'nullable|integer|exists:ad_library_tags,id']);
+        $data = $request->validate(['company_type' => ['nullable', Rule::in($this->companyTypes())], 'tag_id' => 'nullable|integer|exists:ad_library_tags,id', 'related_client_id' => 'nullable|integer|exists:clients,id']);
         $accessibleClientIds = ClientAccess::clientsFor($request->user())->pluck('id');
+        $this->authorizeRelatedClient($request, $data['related_client_id'] ?? null);
 
         return ['searches' => AdLibrarySearch::query()
+            ->where(fn ($query) => $query->whereNull('related_client_id')->orWhereIn('related_client_id', $accessibleClientIds))
+            ->when($data['related_client_id'] ?? null, fn ($query, $id) => $query->where('related_client_id', $id))
             ->when($data['company_type'] ?? null, fn ($query, $type) => $query->where('company_type', $type))
             ->when($data['tag_id'] ?? null, fn ($query, $id) => $query->whereHas('tags', fn ($tags) => $tags->whereKey($id)))
             ->with([
@@ -47,6 +50,7 @@ class AdLibraryController extends Controller
     {
         $this->enabled();
         $this->manage($request);
+        $this->authorizeSearchAccess($request, $search, true);
         $data = $this->validateSearch($request, true);
         $candidate = array_merge($search->only(['related_client_id', 'company_name', 'company_type', 'website_url', 'name', 'search_mode', 'query', 'advertiser_page_id', 'region', 'active_status', 'ad_type', 'exact_phrase', 'details', 'max_results']), $data);
         $this->authorizeRelatedClient($request, $candidate['related_client_id'] ?? null);
@@ -59,6 +63,7 @@ class AdLibraryController extends Controller
     {
         $this->enabled();
         $this->manage($request);
+        $this->authorizeSearchAccess($request, $search, true);
         $search->delete();
 
         return response()->noContent();
@@ -68,6 +73,7 @@ class AdLibraryController extends Controller
     {
         $this->enabled();
         $this->manage($request);
+        $this->authorizeSearchAccess($request, $search, true);
         $run = $search->runs()->create(['requested_by' => $request->user()->id, 'provider' => 'scraper', 'status' => 'pending']);
         RunAdLibraryScrapeJob::dispatch($run->id);
 
@@ -77,9 +83,13 @@ class AdLibraryController extends Controller
     public function runs(Request $request)
     {
         $this->enabled();
-        $data = $request->validate(['search_id' => 'nullable|integer', 'company_type' => ['nullable', Rule::in($this->companyTypes())], 'status' => ['nullable', Rule::in(['pending', 'running', 'complete', 'partial', 'empty', 'blocked', 'failed'])]]);
+        $data = $request->validate(['search_id' => 'nullable|integer', 'related_client_id' => 'nullable|integer|exists:clients,id', 'company_type' => ['nullable', Rule::in($this->companyTypes())], 'status' => ['nullable', Rule::in(['pending', 'running', 'complete', 'partial', 'empty', 'blocked', 'failed'])]]);
+        $accessibleClientIds = ClientAccess::clientsFor($request->user())->pluck('id');
+        $this->authorizeRelatedClient($request, $data['related_client_id'] ?? null);
         $runs = AdLibraryRun::query()
+            ->whereHas('search', fn ($search) => $search->where(fn ($scope) => $scope->whereNull('related_client_id')->orWhereIn('related_client_id', $accessibleClientIds)))
             ->when($data['search_id'] ?? null, fn ($q, $id) => $q->where('ad_library_search_id', $id))
+            ->when($data['related_client_id'] ?? null, fn ($q, $id) => $q->whereHas('search', fn ($search) => $search->where('related_client_id', $id)))
             ->when($data['company_type'] ?? null, fn ($q, $type) => $q->whereHas('search', fn ($search) => $search->where('company_type', $type)))
             ->when($data['status'] ?? null, fn ($q, $status) => $q->where('status', $status))
             ->with('search:id,name,deleted_at')->latest()->paginate(25);
@@ -91,6 +101,7 @@ class AdLibraryController extends Controller
     public function showRun(Request $request, AdLibraryRun $run)
     {
         $this->enabled();
+        $this->authorizeSearchAccess($request, $run->search);
 
         return $this->runPayload($run->load('search:id,name,deleted_at'));
     }
@@ -98,6 +109,7 @@ class AdLibraryController extends Controller
     public function results(Request $request, AdLibraryRun $run)
     {
         $this->enabled();
+        $this->authorizeSearchAccess($request, $run->search);
         $data = $request->validate([
             'per_page' => 'nullable|integer|min:1|max:100',
             'q' => 'nullable|string|max:100',
@@ -244,6 +256,7 @@ class AdLibraryController extends Controller
     public function runJson(Request $request, AdLibraryRun $run)
     {
         $this->enabled();
+        $this->authorizeSearchAccess($request, $run->search);
 
         $ads = $run->results()
             ->orderByRaw('rank IS NULL')
@@ -269,6 +282,7 @@ class AdLibraryController extends Controller
     {
         $this->enabled();
         $this->manage($request);
+        $this->authorizeSearchAccess($request, $run->search, true);
         abort_if(in_array($run->status, ['pending', 'running'], true), 409, 'A running search cannot be deleted.');
         $run->delete();
 
@@ -279,6 +293,7 @@ class AdLibraryController extends Controller
     {
         $this->enabled();
         $this->manage($request);
+        abort_unless($request->user()->isAdmin(), 403, 'Only administrators can manage shared Ad Library tags.');
         $data = $request->validate(['name' => 'required|string|max:60']);
         $name = trim($data['name']);
 
@@ -289,6 +304,7 @@ class AdLibraryController extends Controller
     {
         $this->enabled();
         $this->manage($request);
+        $this->authorizeSearchAccess($request, $search, true);
         $data = $request->validate(['tag_ids' => 'required|array|max:20', 'tag_ids.*' => 'integer|distinct|exists:ad_library_tags,id']);
         $search->tags()->sync($data['tag_ids']);
 
@@ -298,6 +314,7 @@ class AdLibraryController extends Controller
     public function favorite(Request $request, AdLibraryResult $result)
     {
         $this->enabled();
+        $this->authorizeSearchAccess($request, $result->run->search);
         $data = $request->validate(['favorite' => 'required|boolean']);
         $request->user()->belongsToMany(AdLibraryResult::class, 'ad_library_favorites')->syncWithoutDetaching($data['favorite'] ? [$result->id] : []);
         if (! $data['favorite']) {
@@ -361,6 +378,13 @@ class AdLibraryController extends Controller
     {
         if ($clientId !== null) {
             ClientAccess::authorize($request->user(), (int) $clientId);
+        }
+    }
+
+    private function authorizeSearchAccess(Request $request, AdLibrarySearch $search, bool $manage = false): void
+    {
+        if ($search->related_client_id) {
+            ClientAccess::authorize($request->user(), (int) $search->related_client_id);
         }
     }
 

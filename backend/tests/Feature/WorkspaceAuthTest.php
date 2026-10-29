@@ -3,6 +3,8 @@
 namespace Tests\Feature;
 
 use App\Models\User;
+use App\Models\Client;
+use App\Models\UserInvitation;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
@@ -42,6 +44,48 @@ class WorkspaceAuthTest extends TestCase
         $this->get('/api/auth/google/callback?state=valid&code=code')->assertRedirect('http://frontend.test');
 
         $this->assertSame('viewer', User::first()->role->value);
+        $this->assertFalse(User::first()->run_performance_audits);
+        $this->assertFalse(User::first()->run_content_audits);
+        $this->assertFalse(User::first()->use_data_inspector);
+        $this->assertCount(0, User::first()->clients);
+    }
+
+    public function test_pending_invitation_is_applied_atomically_on_first_sign_in(): void
+    {
+        config()->set('services.google_workspace.allowed_domains', ['brandshark.com']);
+        config()->set('services.google_workspace.frontend_url', 'http://frontend.test');
+        $admin = User::factory()->create(['role' => 'admin']);
+        $client = Client::create(['name' => 'Acme', 'slug' => 'acme']);
+        $invitation = UserInvitation::create(['email' => 'invitee@brandshark.com', 'name' => 'Invitee', 'role' => 'marketer', 'run_content_audits' => true, 'use_data_inspector' => true, 'invited_by' => $admin->id, 'invited_at' => now()]);
+        $invitation->clients()->attach($client);
+        Cache::put('workspace_sso:valid', true);
+        Http::fake([
+            'https://oauth2.googleapis.com/token' => Http::response(['access_token' => 'token']),
+            'https://openidconnect.googleapis.com/v1/userinfo' => Http::response(['sub' => 'google-invitee', 'email' => 'invitee@brandshark.com', 'email_verified' => true, 'hd' => 'brandshark.com', 'name' => 'Invitee']),
+        ]);
+
+        $this->get('/api/auth/google/callback?state=valid&code=code')->assertRedirect('http://frontend.test');
+        $user = User::where('email', 'invitee@brandshark.com')->firstOrFail();
+        $this->assertSame('marketer', $user->role->value);
+        $this->assertTrue($user->run_content_audits);
+        $this->assertFalse($user->run_performance_audits);
+        $this->assertTrue($user->use_data_inspector);
+        $this->assertTrue($user->clients()->whereKey($client->id)->exists());
+        $this->assertNotNull($invitation->fresh()->accepted_at);
+    }
+
+    public function test_revoked_invitation_blocks_sign_in_until_reinvited(): void
+    {
+        config()->set('services.google_workspace.allowed_domains', ['brandshark.com']);
+        UserInvitation::create(['email' => 'revoked@brandshark.com', 'role' => 'viewer', 'invited_at' => now(), 'revoked_at' => now()]);
+        Cache::put('workspace_sso:valid', true);
+        Http::fake([
+            'https://oauth2.googleapis.com/token' => Http::response(['access_token' => 'token']),
+            'https://openidconnect.googleapis.com/v1/userinfo' => Http::response(['sub' => 'google-revoked', 'email' => 'revoked@brandshark.com', 'email_verified' => true, 'hd' => 'brandshark.com', 'name' => 'Revoked']),
+        ]);
+
+        $this->get('/api/auth/google/callback?state=valid&code=code')->assertForbidden();
+        $this->assertDatabaseMissing('users', ['email' => 'revoked@brandshark.com']);
     }
 
     public function test_workspace_oauth_failure_does_not_expose_provider_response_content(): void

@@ -14,6 +14,7 @@ use App\Models\AdLibraryAuditPersona;
 use App\Models\AdLibraryResult;
 use App\Models\AdLibraryRun;
 use App\Services\AdLibraryAudit\ModelCatalog;
+use App\Services\ClientAccess;
 use App\Services\MethodologyRegistry;
 use App\Support\XlsxWriter;
 use App\Support\CreativeFormatTaxonomy;
@@ -41,10 +42,17 @@ class AdLibraryAuditController extends Controller
             'q' => 'nullable|string|max:100',
             'status' => ['nullable', Rule::in($this->auditStatuses())],
             'company_type' => ['nullable', Rule::in($this->companyTypes())],
+            'related_client_id' => 'nullable|integer|exists:clients,id',
             'per_page' => 'nullable|integer|min:1|max:100',
         ]);
+        $accessibleClientIds = ClientAccess::clientsFor($request->user())->pluck('id');
+        if ($data['related_client_id'] ?? null) {
+            ClientAccess::authorize($request->user(), (int) $data['related_client_id']);
+        }
 
         return AdLibraryAudit::query()
+            ->where(fn ($query) => $query->whereNull('related_client_id')->orWhereIn('related_client_id', $accessibleClientIds))
+            ->when($data['related_client_id'] ?? null, fn ($query, $id) => $query->where('related_client_id', $id))
             ->when($data['q'] ?? null, fn ($query, $term) => $query->where(fn ($nested) => $nested
                 ->where('name', 'like', "%{$term}%")
                 ->orWhere('company_name', 'like', "%{$term}%")))
@@ -62,8 +70,8 @@ class AdLibraryAuditController extends Controller
             'media_depth' => ['required', Rule::in(['text_only', 'visual', 'full_media'])], 'model_key' => 'required|string|max:180',
             'result_ids' => 'required|array|min:1|max:'.config('ad_library_audit.max_creatives', 50), 'result_ids.*' => 'integer|distinct',
         ]);
-        $this->manage($request);
         $run = AdLibraryRun::with('search.relatedClient')->findOrFail($data['run_id']);
+        $this->manage($request, null, $run->search->related_client_id);
         abort_unless(in_array($run->status, ['complete', 'partial'], true), 422, 'Only completed runs with usable results can be audited.');
         $model = $catalog->get($data['model_key'], $data['media_depth']);
         $groups = $this->groupedResults($run);
@@ -77,7 +85,7 @@ class AdLibraryAuditController extends Controller
                 'name' => $data['name'], 'website_url' => $data['website_url'] ?? $run->search->website_url,
                 'provider' => $model['provider'], 'model' => $model['model'], 'model_key' => $model['key'],
                 'media_depth' => $data['media_depth'], 'status' => 'collecting_context', 'progress_total' => $selected->count(),
-                'workflow_version' => 2, 'prompt_version' => 2, 'schema_version' => 2,
+                'workflow_version' => 2, 'prompt_version' => 3, 'schema_version' => 3,
                 'related_client_id' => $run->search->related_client_id,
                 'client_context' => $run->search->relatedClient ? $run->search->relatedClient->only(['name', 'objective', 'goals']) : null,
                 ...$methodologies->columns('content-audit'),
@@ -102,13 +110,14 @@ class AdLibraryAuditController extends Controller
     public function show(Request $request, AdLibraryAudit $audit)
     {
         $this->enabled();
+        $this->authorizeAudit($request, $audit);
 
         return $this->payload($audit);
     }
 
     public function update(Request $request, AdLibraryAudit $audit, ModelCatalog $catalog)
     {
-        $this->manage($request);
+        $this->manage($request, $audit);
         $data = $request->validate(['company_name' => 'sometimes|string|max:160', 'company_type' => ['sometimes', Rule::in($this->companyTypes())], 'name' => 'sometimes|string|max:160', 'website_url' => 'nullable|url:http,https|max:2000', 'media_depth' => ['sometimes', Rule::in(['text_only', 'visual', 'full_media'])], 'model_key' => 'sometimes|string|max:180']);
         if ((isset($data['model_key']) || isset($data['media_depth'])) && ! in_array($audit->status, ['draft', 'context_review'], true)) {
             abort(409, 'The audit model and media depth are locked after persona generation starts.');
@@ -125,7 +134,7 @@ class AdLibraryAuditController extends Controller
 
     public function destroy(Request $request, AdLibraryAudit $audit)
     {
-        $this->manage($request);
+        $this->manage($request, $audit);
         $audit->delete();
 
         return response()->noContent();
@@ -191,7 +200,7 @@ class AdLibraryAuditController extends Controller
     {
         $this->manage($request, $audit);
         $this->personaEditable($audit);
-        abort_if($audit->personas()->count() >= 10, 422, 'An audit can have at most ten personas.');
+        abort_if($audit->personas()->count() >= $this->maxPersonas(), 422, 'An audit can have at most five personas.');
         $data = $this->personaData($request);
         $data['position'] = $audit->personas()->max('position') + 1;
         $data['manually_edited'] = true;
@@ -230,7 +239,7 @@ class AdLibraryAuditController extends Controller
     {
         $this->manage($request, $audit);
         $this->personaEditable($audit);
-        $data = $request->validate(['persona_ids' => 'required|array|min:1|max:10', 'persona_ids.*' => 'integer|distinct']);
+        $data = $request->validate(['persona_ids' => 'required|array|min:1|max:'.$this->maxPersonas(), 'persona_ids.*' => 'integer|distinct']);
         abort_unless($audit->personas()->whereIn('id', $data['persona_ids'])->count() === count($data['persona_ids']) && $audit->personas()->count() === count($data['persona_ids']), 422);
         foreach ($data['persona_ids'] as $position => $id) {
             $audit->personas()->whereKey($id)->update(['position' => $position, 'manually_edited' => true, 'edited_by' => $request->user()->id, 'edited_at' => now()]);
@@ -278,7 +287,7 @@ class AdLibraryAuditController extends Controller
         $this->manage($request, $audit);
         abort_unless($audit->status === 'persona_review', 409);
         $count = $audit->personas()->count();
-        abort_unless($count >= 1 && $count <= 10, 422);
+        abort_unless($count >= 1 && $count <= $this->maxPersonas(), 422, 'An audit must have between one and five personas.');
         if ((int) $audit->workflow_version >= 2) {
             $invalid = $audit->creatives()->where('processing_status', 'complete')
                 ->withCount(['personas as primary_personas_count' => fn ($query) => $query->where('ad_library_audit_creative_persona.role', 'primary')])
@@ -711,7 +720,7 @@ class AdLibraryAuditController extends Controller
             && $lastCreativeActivityAt
             && now()->diffInMinutes($lastCreativeActivityAt, absolute: true) >= config('ad_library_audit.analysis_stall_minutes', 5);
 
-        return $audit->toArray() + ['creative_format_options' => CreativeFormatTaxonomy::labels(), 'creative_summary' => collect([
+        return $audit->toArray() + ['creative_format_options' => CreativeFormatTaxonomy::labels(), 'persona_limit' => $this->maxPersonas(), 'creative_summary' => collect([
             'total', 'selected', 'pending', 'running', 'complete', 'failed', 'skipped', 'reviewed', 'pending_review',
         ])->mapWithKeys(fn ($key) => [$key => (int) ($counts->{$key} ?? 0)])->all(), 'analysis_health' => [
             'stalled' => $stalled,
@@ -720,10 +729,26 @@ class AdLibraryAuditController extends Controller
         ]];
     }
 
-    private function manage(Request $request, ?AdLibraryAudit $audit = null): void
+    private function manage(Request $request, ?AdLibraryAudit $audit = null, ?int $relatedClientId = null): void
     {
         $this->enabled();
-        abort_unless($request->user()->canManage(), 403, 'Read-only users cannot modify Ad Library audits.');
+        abort_unless($request->user()->canRunContentAudits(), 403, 'You do not have permission to run content audits.');
+        if ($audit) {
+            $this->authorizeAudit($request, $audit, true);
+        } elseif ($relatedClientId) {
+            ClientAccess::authorize($request->user(), $relatedClientId);
+        } else {
+            abort_unless($request->user()->isAdmin(), 403, 'Only administrators can manage unlinked content audits.');
+        }
+    }
+
+    private function authorizeAudit(Request $request, AdLibraryAudit $audit, bool $manage = false): void
+    {
+        if ($audit->related_client_id) {
+            ClientAccess::authorize($request->user(), (int) $audit->related_client_id);
+        } elseif ($manage) {
+            abort_unless($request->user()->isAdmin() || ((int) $audit->created_by === (int) $request->user()->id && $request->user()->canRunContentAudits()), 403, 'Only administrators can manage unlinked content audits.');
+        }
     }
 
     private function ownsPersona(AdLibraryAudit $audit, AdLibraryAuditPersona $persona): void
@@ -745,7 +770,12 @@ class AdLibraryAuditController extends Controller
     {
         $required = $partial ? 'sometimes|' : 'required|';
 
-        return $request->validate(['name' => $required.'string|max:160', 'description' => $required.'string|max:5000', 'demographics' => 'nullable|string|max:1000', 'problems' => 'sometimes|array|max:30', 'desired_outcomes' => 'sometimes|array|max:30', 'motivations' => 'sometimes|array|max:30', 'purchase_triggers' => 'sometimes|array|max:30', 'objections' => 'sometimes|array|max:30', 'products' => 'sometimes|array|max:30', 'evidence' => 'sometimes|array|max:30', 'confidence' => 'nullable|numeric|min:0|max:1', 'position' => 'sometimes|integer|min:0|max:9']);
+        return $request->validate(['name' => $required.'string|max:160', 'description' => $required.'string|max:5000', 'demographics' => 'nullable|string|max:1000', 'problems' => 'sometimes|array|max:30', 'desired_outcomes' => 'sometimes|array|max:30', 'motivations' => 'sometimes|array|max:30', 'purchase_triggers' => 'sometimes|array|max:30', 'objections' => 'sometimes|array|max:30', 'products' => 'sometimes|array|max:30', 'evidence' => 'sometimes|array|max:30', 'confidence' => 'nullable|numeric|min:0|max:1', 'position' => 'sometimes|integer|min:0|max:'.($this->maxPersonas() - 1)]);
+    }
+
+    private function maxPersonas(): int
+    {
+        return min(5, max(1, (int) config('ad_library_audit.max_personas', 5)));
     }
 
     private function invalidateAfterPersonaChange(AdLibraryAudit $audit): void

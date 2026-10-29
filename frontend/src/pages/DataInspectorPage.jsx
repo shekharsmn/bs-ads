@@ -4,8 +4,9 @@ import { api } from '../api/client'
 import {
   Search, ChevronDown, ChevronRight, Video, Image, AlertCircle,
   Zap, TrendingUp, Clock, Eye, DollarSign, MousePointer, Activity,
-  BarChart2, Users, CheckCircle, XCircle, Copy, Check,
+  BarChart2, Users, CheckCircle, XCircle, Copy, Check, ShieldAlert,
 } from 'lucide-react'
+import { useAuth } from '../context/AuthContext'
 
 const PERIODS = [
   { value: 'last_7d', label: 'Last 7 Days' },
@@ -291,6 +292,7 @@ function Section({ title, count, children, defaultOpen = false, accent }) {
 
 // ─── Main Page ────────────────────────────────────────────────────────────────
 export default function DataInspectorPage() {
+  const { permissions } = useAuth()
   const [form, setForm] = useState({ platform: 'meta', account_id: '', period: 'last_30d' })
   const [result, setResult] = useState(null)
   const [copied, setCopied] = useState(false)
@@ -300,13 +302,13 @@ export default function DataInspectorPage() {
   const { data: metaAccounts = [] } = useQuery({
     queryKey: ['accounts'],
     queryFn: () => api.getAccounts().then(r => r.data),
-    enabled: form.platform === 'meta',
+    enabled: Boolean(permissions?.use_data_inspector) && form.platform === 'meta',
   })
 
   const { data: googleConnections = [] } = useQuery({
     queryKey: ['connections'],
     queryFn: () => api.getConnections().then(r => r.data),
-    enabled: form.platform === 'google',
+    enabled: Boolean(permissions?.use_data_inspector) && form.platform === 'google',
   })
 
   const googleAccounts = googleConnections
@@ -363,6 +365,8 @@ export default function DataInspectorPage() {
 
   const videoAds = filteredAds.filter(a => a.video_metrics)
   const nonVideoAds = filteredAds.filter(a => !a.video_metrics)
+
+  if (!permissions?.use_data_inspector) return <main className="audit-permission-empty"><ShieldAlert/><h1>Data Inspector is restricted</h1><p>An administrator can grant Data Inspector access and assign the clients you need from User management.</p></main>
 
   return (
     <div style={{ padding: '32px', maxWidth: '1100px', margin: '0 auto' }}>

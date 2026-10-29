@@ -21,11 +21,27 @@ class ReportController extends Controller
 {
     public function index(Request $request)
     {
-        $data = $request->validate(['per_page' => 'nullable|integer|min:10|max:100']);
+        $data = $request->validate([
+            'client_id' => 'nullable|integer|exists:clients,id', 'ad_account_id' => 'nullable|integer|exists:ad_accounts,id',
+            'status' => 'nullable|in:pending,running,complete,failed,cancelled', 'platform' => 'nullable|in:meta,google',
+            'per_page' => 'nullable|integer|min:10|max:100',
+        ]);
         $clientIds = ClientAccess::clientsFor($request->user())->pluck('id');
+        if ($data['client_id'] ?? null) {
+            ClientAccess::authorize($request->user(), \App\Models\Client::findOrFail($data['client_id']));
+        }
+        if ($data['ad_account_id'] ?? null) {
+            $account = AdAccount::findOrFail($data['ad_account_id']);
+            ClientAccess::authorize($request->user(), $account->client_id);
+            abort_if(($data['client_id'] ?? null) && (int) $data['client_id'] !== (int) $account->client_id, 422, 'The selected account does not belong to this client.');
+        }
         $reports = Report::query()->where(fn ($q) => $q
             ->whereIn('client_id', $clientIds)
             ->orWhere(fn ($legacy) => $legacy->whereNull('client_id')->where('user_id', $request->user()->id)))
+            ->when($data['client_id'] ?? null, fn ($q, $id) => $q->where('client_id', $id))
+            ->when($data['ad_account_id'] ?? null, fn ($q, $id) => $q->where('ad_account_id', $id))
+            ->when($data['status'] ?? null, fn ($q, $status) => $q->where('status', $status))
+            ->when($data['platform'] ?? null, fn ($q, $platform) => $q->where('platform', $platform))
             ->with([
                 'metaAccount:id,label,account_name',
                 'googleAccount:id,label,customer_id,account_name',
@@ -51,10 +67,11 @@ class ReportController extends Controller
             'ad_account_id' => 'nullable|integer|exists:ad_accounts,id',
             'period' => 'nullable|string|in:last_7d,last_30d,last_90d',
         ]);
+        abort_unless($request->user()->canRunPerformanceAudits(), 403, 'You do not have permission to run performance audits.');
 
         if ($data['ad_account_id'] ?? null) {
             $account = AdAccount::with('client')->findOrFail($data['ad_account_id']);
-            ClientAccess::authorize($request->user(), $account->client, true);
+            ClientAccess::authorize($request->user(), $account->client);
             abort_unless($account->platform->value === $data['platform'], 422, 'Account platform does not match the requested audit.');
             $report = Report::create([
                 'user_id' => $request->user()->id, 'client_id' => $account->client_id, 'ad_account_id' => $account->id,
@@ -269,6 +286,7 @@ class ReportController extends Controller
     public function enableShare(Request $request, Report $report)
     {
         $this->authorizeReport($request, $report);
+        $this->authorizeReportMutation($request);
         if ($report->status !== 'complete') {
             return response()->json(['message' => 'Only completed reports can be shared.'], 422);
         }
@@ -287,6 +305,7 @@ class ReportController extends Controller
     public function disableShare(Request $request, Report $report)
     {
         $this->authorizeReport($request, $report);
+        $this->authorizeReportMutation($request);
         $report->update(['public_token' => null]);
 
         return response()->json(['message' => 'Share link revoked.']);
@@ -311,6 +330,7 @@ class ReportController extends Controller
     public function cancel(Request $request, Report $report)
     {
         $this->authorizeReport($request, $report);
+        $this->authorizeReportMutation($request);
 
         if (in_array($report->status, ['complete', 'failed', 'cancelled'], true)) {
             return response()->json([
@@ -342,6 +362,7 @@ class ReportController extends Controller
     public function destroy(Request $request, Report $report)
     {
         $this->authorizeReport($request, $report);
+        $this->authorizeReportMutation($request);
         $report->delete();
 
         return response()->json(['message' => 'Report deleted']);
@@ -354,5 +375,10 @@ class ReportController extends Controller
             : $report->user_id === $request->user()->id;
 
         abort_unless($allowed, 403);
+    }
+
+    private function authorizeReportMutation(Request $request): void
+    {
+        abort_unless($request->user()->canRunPerformanceAudits(), 403, 'You do not have permission to modify performance audits.');
     }
 }

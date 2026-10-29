@@ -2,14 +2,17 @@
 
 namespace Tests\Feature;
 
+use App\Jobs\GenerateReportSnapshotJob;
 use App\Models\AdAccount;
 use App\Models\AlertRule;
 use App\Models\Client;
 use App\Models\PlatformConnection;
 use App\Models\Report;
 use App\Models\ReportSchedule;
+use App\Models\ReportRun;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Queue;
 use Tests\TestCase;
 
 class QuickWinsApiTest extends TestCase
@@ -45,6 +48,35 @@ class QuickWinsApiTest extends TestCase
         $this->actingAs($marketer)->putJson('/api/report-schedules/'.$schedule->id, ['client_id' => $destination->id])->assertForbidden();
         $destination->users()->attach($marketer);
         $this->actingAs($marketer)->putJson('/api/report-schedules/'.$schedule->id, ['client_id' => $destination->id])->assertOk()->assertJsonPath('client_id', $destination->id);
+    }
+
+    public function test_performance_reports_support_client_and_account_scopes(): void
+    {
+        Queue::fake();
+        $admin = User::factory()->create(['role' => 'admin']);
+        $client = Client::create(['name' => 'Scoped', 'slug' => 'scoped', 'timezone' => 'UTC']);
+        $other = Client::create(['name' => 'Other', 'slug' => 'other', 'timezone' => 'UTC']);
+        $connection = PlatformConnection::create(['platform' => 'google', 'name' => 'MCC', 'scope' => 'agency', 'credentials' => [], 'status' => 'healthy']);
+        $account = AdAccount::create(['client_id' => $client->id, 'platform_connection_id' => $connection->id, 'platform' => 'google', 'external_id' => 'scope-1', 'name' => 'Scoped Ads', 'currency' => 'USD', 'timezone' => 'UTC']);
+        $otherAccount = AdAccount::create(['client_id' => $other->id, 'platform_connection_id' => $connection->id, 'platform' => 'google', 'external_id' => 'scope-2', 'name' => 'Other Ads', 'currency' => 'USD', 'timezone' => 'UTC']);
+
+        $payload = ['client_id' => $client->id, 'ad_account_id' => $account->id, 'frequency' => 'weekly', 'weekday' => 1, 'local_time' => '09:00'];
+        $this->actingAs($admin)->postJson('/api/report-schedules', $payload)->assertCreated()
+            ->assertJsonPath('scope_key', 'account:'.$account->id);
+        $this->postJson('/api/report-schedules', array_merge($payload, ['local_time' => '10:00']))->assertCreated();
+        $this->assertDatabaseCount('report_schedules', 1);
+
+        $this->postJson('/api/report-schedules', array_merge($payload, ['ad_account_id' => $otherAccount->id]))
+            ->assertUnprocessable()->assertJsonPath('message', 'The selected client, account, and campaign must belong to the same client.');
+
+        $this->postJson('/api/clients/'.$client->id.'/report-runs', ['preset' => 'last_7d', 'ad_account_id' => $account->id])
+            ->assertAccepted()->assertJsonPath('ad_account_id', $account->id);
+        $run = ReportRun::firstOrFail();
+        $this->assertSame($account->id, $run->ad_account_id);
+        Queue::assertPushed(GenerateReportSnapshotJob::class, fn ($job) => $job->reportRunId === $run->id);
+
+        $this->getJson('/api/report-schedules?client_id='.$client->id.'&ad_account_id='.$account->id)
+            ->assertOk()->assertJsonCount(1, 'schedules')->assertJsonCount(1, 'runs');
     }
 
     public function test_alert_rule_rejects_cross_client_scope_and_authorizes_its_target(): void

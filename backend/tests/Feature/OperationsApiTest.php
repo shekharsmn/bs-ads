@@ -9,6 +9,7 @@ use App\Models\MetricSnapshot;
 use App\Models\PlatformConnection;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Queue;
 use Tests\TestCase;
 
@@ -27,7 +28,7 @@ class OperationsApiTest extends TestCase
         $this->actingAs($viewer)->putJson('/api/clients/'.$assigned->id, ['name' => 'Nope'])->assertForbidden();
     }
 
-    public function test_metric_summary_never_blends_currencies(): void
+    public function test_account_performance_never_blends_currencies(): void
     {
         $admin = User::factory()->create(['role' => 'admin']);
         $client = Client::create(['name' => 'Acme', 'slug' => 'acme', 'currency' => 'INR']);
@@ -38,9 +39,9 @@ class OperationsApiTest extends TestCase
             MetricSnapshot::create(['ad_account_id' => $account->id, 'scope' => 'account', 'scope_key' => 'account:'.$account->id, 'metric_date' => '2026-10-15', 'currency' => $currency, 'spend' => $spend, 'collected_at' => now()]);
         }
 
-        $response = $this->actingAs($admin)->getJson('/api/metrics/summary?client_id='.$client->id.'&start_date=2026-10-01&end_date=2026-10-31')->assertOk();
-        $this->assertCount(2, $response->json('currencies'));
-        $this->assertEqualsCanonicalizing(['INR', 'USD'], collect($response->json('currencies'))->pluck('currency')->all());
+        $response = $this->actingAs($admin)->getJson('/api/performance/accounts')->assertOk();
+        $this->assertCount(2, $response->json('accounts'));
+        $this->assertEqualsCanonicalizing(['INR', 'USD'], collect($response->json('accounts'))->pluck('currency')->all());
     }
 
     public function test_secrets_are_encrypted_and_redacted(): void
@@ -52,6 +53,39 @@ class OperationsApiTest extends TestCase
         $this->assertStringNotContainsString('top-secret', $connection->getRawOriginal('credentials'));
         $this->actingAs($admin)->getJson('/api/clients/'.$client->id)->assertOk()->assertJsonMissing(['google_chat_webhook' => $client->google_chat_webhook])->assertJsonPath('google_chat_webhook_configured', true);
         $this->actingAs($admin)->getJson('/api/connections')->assertOk()->assertJsonMissing(['credentials' => ['access_token' => 'top-secret']]);
+    }
+
+    public function test_meta_connection_is_verified_before_it_is_saved(): void
+    {
+        Http::fake(['graph.facebook.com/*' => Http::response(['data' => [['id' => 'act_123']]])]);
+        $admin = User::factory()->create(['role' => 'admin']);
+
+        $this->actingAs($admin)->postJson('/api/connections', [
+            'platform' => 'meta', 'name' => 'Agency Meta', 'scope' => 'agency',
+            'credentials' => ['access_token' => 'valid-system-user-token'],
+        ])->assertCreated()->assertJsonPath('status', 'pending');
+
+        $this->assertDatabaseHas('platform_connections', ['platform' => 'meta', 'name' => 'Agency Meta']);
+        Http::assertSent(fn ($request) => str_starts_with($request->url(), 'https://graph.facebook.com/v24.0/me/adaccounts')
+            && $request['access_token'] === 'valid-system-user-token'
+            && $request['limit'] === 1);
+    }
+
+    public function test_rejected_meta_token_is_redacted_and_not_saved(): void
+    {
+        Http::fake(['graph.facebook.com/*' => Http::response([
+            'error' => ['message' => 'Malformed access token SECRET_TOKEN_VALUE', 'code' => 190],
+        ], 400)]);
+        $admin = User::factory()->create(['role' => 'admin']);
+
+        $response = $this->actingAs($admin)->postJson('/api/connections', [
+            'platform' => 'meta', 'name' => 'Broken Meta', 'scope' => 'agency',
+            'credentials' => ['access_token' => 'SECRET_TOKEN_VALUE'],
+        ])->assertUnprocessable()
+            ->assertJsonPath('message', 'Meta rejected this token. Confirm the System User, assigned ad accounts, and ads_read permission, then generate a new token.');
+
+        $this->assertStringNotContainsString('SECRET_TOKEN_VALUE', $response->getContent());
+        $this->assertDatabaseMissing('platform_connections', ['name' => 'Broken Meta']);
     }
 
     public function test_client_can_be_edited_without_exposing_or_replacing_saved_webhook(): void
@@ -140,6 +174,46 @@ class OperationsApiTest extends TestCase
 
         $this->assertDatabaseMissing('platform_connections', ['id' => $connection->id]);
         $this->assertDatabaseMissing('ad_accounts', ['id' => $account->id]);
+    }
+
+    public function test_only_admin_can_delete_an_assigned_ad_account(): void
+    {
+        $admin = User::factory()->create(['role' => 'admin']);
+        $viewer = User::factory()->create(['role' => 'viewer']);
+        $client = Client::create(['name' => 'Acme', 'slug' => 'acme']);
+        $client->users()->attach($viewer);
+        $connection = PlatformConnection::create(['platform' => 'meta', 'name' => 'Meta', 'scope' => 'agency', 'credentials' => [], 'status' => 'healthy']);
+        $account = AdAccount::create(['client_id' => $client->id, 'platform_connection_id' => $connection->id, 'platform' => 'meta', 'external_id' => 'act-delete', 'name' => 'Delete me', 'currency' => 'USD', 'timezone' => 'UTC']);
+
+        $this->actingAs($viewer)->deleteJson('/api/ad-accounts/'.$account->id)->assertForbidden();
+        $this->actingAs($admin)->deleteJson('/api/ad-accounts/'.$account->id)->assertNoContent();
+
+        $this->assertDatabaseMissing('ad_accounts', ['id' => $account->id]);
+        $this->assertDatabaseHas('platform_connections', ['id' => $connection->id]);
+    }
+
+    public function test_only_admin_can_delete_a_client_and_connections_are_retained(): void
+    {
+        $admin = User::factory()->create(['role' => 'admin']);
+        $marketer = User::factory()->create(['role' => 'marketer']);
+        $client = Client::create(['name' => 'Acme', 'slug' => 'acme']);
+        $client->users()->attach($marketer);
+        $connection = PlatformConnection::create([
+            'client_id' => $client->id,
+            'platform' => 'meta',
+            'name' => 'Acme Meta',
+            'scope' => 'client',
+            'credentials' => [],
+            'status' => 'healthy',
+        ]);
+        $account = AdAccount::create(['client_id' => $client->id, 'platform_connection_id' => $connection->id, 'platform' => 'meta', 'external_id' => 'act-client-delete', 'name' => 'Acme Ads', 'currency' => 'USD', 'timezone' => 'UTC']);
+
+        $this->actingAs($marketer)->deleteJson('/api/clients/'.$client->id)->assertForbidden();
+        $this->actingAs($admin)->deleteJson('/api/clients/'.$client->id)->assertNoContent();
+
+        $this->assertDatabaseMissing('clients', ['id' => $client->id]);
+        $this->assertDatabaseMissing('ad_accounts', ['id' => $account->id]);
+        $this->assertDatabaseHas('platform_connections', ['id' => $connection->id, 'client_id' => null]);
     }
 
     public function test_client_specific_connection_cannot_assign_an_account_to_another_client(): void

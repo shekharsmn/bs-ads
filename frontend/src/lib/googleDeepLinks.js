@@ -12,6 +12,29 @@ export function googleCampaignsUrl(customerId) {
   return `https://ads.google.com/aw/campaigns${googleCustomerParam(customerId)}`
 }
 
+function googleEntityUrl(path, customerId, identifiers = {}) {
+  const params = new URLSearchParams()
+  Object.entries(identifiers).forEach(([key, value]) => {
+    if (value != null && value !== '') params.set(key, String(value))
+  })
+  const customer = String(customerId ?? '').replace(/\D/g, '')
+  if (customer) params.set('__c', customer)
+  const query = params.toString()
+  return `https://ads.google.com/aw/${path}${query ? `?${query}` : ''}`
+}
+
+export function googleCampaignUrl(customerId, campaignId) {
+  return googleEntityUrl('campaigns', customerId, { campaignId })
+}
+
+export function googleAdGroupUrl(customerId, campaignId, adGroupId) {
+  return googleEntityUrl('adgroups', customerId, { campaignId, adGroupId })
+}
+
+export function googleAdUrl(customerId, campaignId, adGroupId, adId) {
+  return googleEntityUrl('ads', customerId, { campaignId, adGroupId, adId })
+}
+
 export function googleKeywordsUrl(customerId) {
   return `https://ads.google.com/aw/keywords${googleCustomerParam(customerId)}`
 }

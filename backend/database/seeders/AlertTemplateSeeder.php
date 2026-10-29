@@ -2,7 +2,6 @@
 
 namespace Database\Seeders;
 
-use App\Models\AlertRule;
 use App\Models\AlertTemplate;
 use Illuminate\Database\Seeder;
 
@@ -19,9 +18,10 @@ class AlertTemplateSeeder extends Seeder
             ['key' => 'connection-error', 'name' => 'Platform connection error', 'description' => 'Credentials or the platform API require attention.', 'metric' => 'spend', 'operator' => 'connection_error', 'threshold' => null, 'severity' => 'critical', 'window_days' => 1],
         ];
         foreach ($templates as $definition) {
-            $ruleFields = collect($definition)->only(['name', 'metric', 'operator', 'threshold', 'severity', 'window_days', 'minimum_spend', 'minimum_impressions'])->all();
-            $template = AlertTemplate::updateOrCreate(['key' => $definition['key']], collect($definition)->except(['window_days', 'minimum_spend', 'minimum_impressions'])->all());
-            AlertRule::updateOrCreate(['alert_template_id' => $template->id, 'client_id' => null, 'ad_account_id' => null, 'campaign_id' => null], $ruleFields + ['enabled' => true]);
+            AlertTemplate::updateOrCreate(
+                ['key' => $definition['key']],
+                collect($definition)->except(['window_days', 'minimum_spend', 'minimum_impressions'])->all()
+            );
         }
     }
 }
