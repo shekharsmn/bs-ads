@@ -47,6 +47,42 @@ The first verified user from the configured Workspace domain becomes Admin. Late
 
 ## Operations
 
+### Production deployments (existing BS Ads server)
+
+Run as root inside `/opt/bs-ads`. The production script uses the existing
+`.deployment/compose.yaml` and Dockerfiles; it does not provision a new server.
+
+```bash
+git pull --ff-only
+bash deploy-prod.sh
+```
+
+This builds the checked-out backend and frontend before pausing BS Ads, backs up
+the `bs_ads` database, applies pending migrations, refreshes alert templates and
+caches, and starts the updated services. Builds use a dedicated cached builder
+limited to one CPU and 768 MiB. The scraper is rebuilt only when its source changes
+(or when there is no previous deployment record).
+
+To apply `.env` changes or restart the currently deployed images without building
+or running migrations:
+
+```bash
+bash deploy-prod.sh restart
+```
+
+Both commands synchronize `backend/.env` into the private runtime copy, preserve
+persistent storage, and check web health and fresh worker/scheduler heartbeats.
+Only the named services in the `bs-ads` Compose project are managed. Caddy,
+MySQL, Docker itself, PM2, and other applications are not restarted or configured.
+
+The script blocks overlapping runs and refuses to build tracked, uncommitted
+source changes. Logs, database backups, and the previous Compose/environment
+configuration are kept in `.deployment/releases/`. On cutover failure it attempts
+to restart the previous images and cached configuration. **Database migrations
+are not automatically reversed**; a failed/incompatible migration may require
+manual recovery using the saved database backup. It never uses `migrate:fresh`,
+Compose `down`, volume deletion, or global cleanup commands.
+
 - Hourly heartbeat: `php artisan performance:heartbeat`
 - Force synchronous collection for diagnostics: `php artisan performance:heartbeat --sync`
 - Scheduled report dispatcher: `php artisan reports:dispatch-due`
