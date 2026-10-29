@@ -1,4 +1,4 @@
-import { useSearchParams } from 'react-router-dom'
+import { Link, useSearchParams } from 'react-router-dom'
 import { BarChart3, ShieldCheck } from 'lucide-react'
 import { api } from '../api/client'
 
@@ -19,6 +19,7 @@ export default function LoginPage() {
           <ShieldCheck size={18} color="#2563eb" /> Continue with Google Workspace
         </a>
         <p style={{ color: '#526681', fontSize: 12, marginTop: 16 }}>Access is restricted to the configured Workspace domain.</p>
+        <Link to="/privacy-policy" style={{ color: '#9aacc8', fontSize: 12, textUnderlineOffset: 3 }}>Privacy Policy</Link>
       </div>
     </main>
   )
