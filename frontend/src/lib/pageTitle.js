@@ -1,5 +1,6 @@
 const routeTitles = [
   [/^\/login\/?$/, 'Sign in'],
+  [/^\/privacy-policy\/?$/, 'Privacy Policy'],
   [/^\/command-center\/clients\/[^/]+\/ad-accounts\//, 'Account Performance'],
   [/^\/command-center\/?$/, 'Command Center'],
   [/^\/clients\/[^/]+\/?$/, 'Client Details'],

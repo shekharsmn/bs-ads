@@ -4,6 +4,7 @@ import { pageTitle } from './pageTitle'
 describe('pageTitle', () => {
   it.each([
     ['/login', 'Sign in · SharkAds'],
+    ['/privacy-policy', 'Privacy Policy · SharkAds'],
     ['/command-center', 'Command Center · SharkAds'],
     ['/reports/new', 'Account Audits · SharkAds'],
     ['/reports/42', 'Account Audit Report · SharkAds'],

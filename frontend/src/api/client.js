@@ -1,4 +1,5 @@
 import axios from 'axios'
+import { isPublicRoute } from '../lib/publicRoutes'
 
 const client = axios.create({
   baseURL: '/',
@@ -24,8 +25,7 @@ client.interceptors.request.use(async (config) => {
 client.interceptors.response.use(
   res => res,
   err => {
-    const isPublicShare = window.location.pathname === '/privacy-policy' || window.location.pathname.startsWith('/share/') || window.location.pathname.startsWith('/shared/')
-    if (err.response?.status === 401 && !isPublicShare && !window.location.pathname.startsWith('/login')) {
+    if (err.response?.status === 401 && !isPublicRoute(window.location.pathname) && !window.location.pathname.startsWith('/login')) {
       window.location.href = '/login'
     }
     return Promise.reject(err)

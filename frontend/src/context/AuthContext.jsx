@@ -1,27 +1,39 @@
 import { createContext, useContext, useState, useEffect } from 'react'
+import { useLocation } from 'react-router-dom'
 import { api } from '../api/client'
+import { isPublicRoute } from '../lib/publicRoutes'
 
 const AuthContext = createContext(null)
 
 export function AuthProvider({ children }) {
-  const isPublicShare = window.location.pathname === '/privacy-policy' || window.location.pathname.startsWith('/share/') || window.location.pathname.startsWith('/shared/')
+  const { pathname } = useLocation()
+  const publicRoute = isPublicRoute(pathname)
   const [user, setUser] = useState(null)
   const [permissions, setPermissions] = useState({})
   const [features, setFeatures] = useState({})
-  const [loading, setLoading] = useState(!isPublicShare)
+  const [hasCheckedAuth, setHasCheckedAuth] = useState(false)
 
   useEffect(() => {
-    if (isPublicShare) return
+    if (publicRoute || hasCheckedAuth) return
+
+    let cancelled = false
 
     api.me()
       .then(res => {
+        if (cancelled) return
         setUser(res.data.user)
         setPermissions(res.data.permissions || {})
         setFeatures(res.data.features || {})
       })
-      .catch(() => setUser(null))
-      .finally(() => setLoading(false))
-  }, [isPublicShare])
+      .catch(() => {
+        if (!cancelled) setUser(null)
+      })
+      .finally(() => {
+        if (!cancelled) setHasCheckedAuth(true)
+      })
+
+    return () => { cancelled = true }
+  }, [publicRoute, hasCheckedAuth])
 
   const logout = async () => {
     await api.logout()
@@ -31,7 +43,7 @@ export function AuthProvider({ children }) {
   }
 
   return (
-    <AuthContext.Provider value={{ user, permissions, features, loading, logout }}>
+    <AuthContext.Provider value={{ user, permissions, features, loading: !publicRoute && !hasCheckedAuth, logout }}>
       {children}
     </AuthContext.Provider>
   )
