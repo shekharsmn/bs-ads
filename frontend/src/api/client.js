@@ -77,6 +77,7 @@ export const api = {
   createAlertRule: (data) => client.post('/api/alert-rules', data),
   updateAlertRule: (id, data) => client.put(`/api/alert-rules/${id}`, data),
   deleteAlertRule: (id) => client.delete(`/api/alert-rules/${id}`),
+  deleteWorkspaceAlertRule: (id) => client.delete(`/api/workspace-alert-rules/${id}`),
   getReportSchedules: (params) => client.get('/api/report-schedules', { params }),
   getReportTemplates: (params) => client.get('/api/report-templates', { params }),
   createReportTemplate: (data) => client.post('/api/report-templates', data),

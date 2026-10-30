@@ -43,7 +43,7 @@ const operators = [
 
 const thresholdlessOperators = new Set(['no_spend', 'no_impressions', 'no_conversions_with_spend', 'connection_error'])
 const operatorMetrics = { no_spend: 'spend', no_impressions: 'impressions', no_conversions_with_spend: 'conversions', budget_under_pacing: 'spend', budget_over_pacing: 'spend', data_stale: 'spend', connection_error: 'spend' }
-const defaultRule = { name: '', metric: 'cpl', operator: 'above', threshold: 0, severity: 'warning', window_days: 1 }
+const defaultRule = { name: '', metric: 'cpl', operator: 'percentage_increase', threshold: 25, severity: 'warning', window_days: 7, minimum_spend: null, minimum_impressions: null, enabled: true }
 const defaultTemplate = { key: '', name: '', description: '', metric: 'cpl', operator: 'percentage_increase', threshold: 25, severity: 'warning', active: true }
 const metric = value => metrics.find(item => item.value === value) || metrics[0]
 const operator = value => operators.find(item => item.value === value) || operators[0]
@@ -76,21 +76,37 @@ export default function AlertRulesPage() {
   const qc = useQueryClient()
   const [search, setSearch] = useSearchParams()
   const [policyOpen, setPolicyOpen] = useState(false)
+  const [editingPolicy, setEditingPolicy] = useState(null)
   const [templateOpen, setTemplateOpen] = useState(false)
   const [editingTemplate, setEditingTemplate] = useState(null)
   const [pendingRemoval, setPendingRemoval] = useState(null)
   const [form, setForm] = useState(defaultRule)
   const [templateForm, setTemplateForm] = useState(defaultTemplate)
   const requestedView = search.get('view') || 'templates'
-  const view = requestedView === 'overrides' ? 'policies' : requestedView
+  const view = requestedView === 'overrides' ? 'policies' : requestedView === 'workspace' && user?.role !== 'admin' ? 'templates' : requestedView
   const clientId = search.get('client_id') || ''
   const accountId = search.get('ad_account_id') || ''
   const filters = { client_id: clientId || undefined, ad_account_id: accountId || undefined }
-  const rules = useQuery({ queryKey: ['rules', filters], queryFn: () => api.getAlertRules(filters).then(response => response.data), enabled: view === 'policies' })
+  const ruleFilters = view === 'workspace' ? { scope: 'workspace' } : filters
+  const rules = useQuery({ queryKey: ['rules', ruleFilters], queryFn: () => api.getAlertRules(ruleFilters).then(response => response.data), enabled: view === 'policies' || view === 'workspace' })
   const templates = useQuery({ queryKey: ['alert-templates'], queryFn: () => api.getAlertTemplates().then(response => response.data) })
   const setFilter = (key, value) => setSearch(current => { const next = new URLSearchParams(current); value ? next.set(key, value) : next.delete(key); return next }, { replace: true })
   const setScope = (nextClientId, nextAccountId) => { const next = new URLSearchParams(search); nextClientId ? next.set('client_id', nextClientId) : next.delete('client_id'); nextAccountId ? next.set('ad_account_id', nextAccountId) : next.delete('ad_account_id'); setSearch(next, { replace: true }) }
-  const create = useMutation({ mutationFn: () => api.createAlertRule({ ...form, client_id: clientId ? Number(clientId) : null, ad_account_id: accountId ? Number(accountId) : null }), onSuccess: () => { qc.invalidateQueries({ queryKey: ['rules'] }); setPolicyOpen(false); setForm(defaultRule) } })
+  const savePolicy = useMutation({
+    mutationFn: () => {
+      const payload = { ...form, client_id: view === 'workspace' ? null : clientId ? Number(clientId) : null, ad_account_id: view === 'workspace' ? null : accountId ? Number(accountId) : null, campaign_id: null }
+      return editingPolicy ? api.updateAlertRule(editingPolicy.id, payload) : api.createAlertRule(payload)
+    },
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['rules'] }); setPolicyOpen(false); setEditingPolicy(null); setForm(defaultRule); toast.success(editingPolicy ? 'Policy updated.' : 'Policy created.') },
+    onError: error => toast.error(error.response?.data?.message || 'Policy could not be saved.'),
+  })
+  const openPolicy = policy => {
+    setEditingPolicy(policy || null)
+    setForm(policy ? { name: policy.name, metric: policy.metric, operator: policy.operator, threshold: policy.threshold, severity: policy.severity, window_days: policy.window_days || 1, minimum_spend: policy.minimum_spend, minimum_impressions: policy.minimum_impressions, enabled: policy.enabled, alert_template_id: policy.alert_template_id } : defaultRule)
+    savePolicy.reset()
+    setPolicyOpen(true)
+  }
+  const closePolicy = () => { if (savePolicy.isPending) return; setPolicyOpen(false); setEditingPolicy(null); setForm(defaultRule); savePolicy.reset() }
   const saveTemplate = useMutation({
     mutationFn: () => editingTemplate ? api.updateAlertTemplate(editingTemplate.id, templateForm) : api.createAlertTemplate(templateForm),
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['alert-templates'] }); setTemplateOpen(false); setEditingTemplate(null); setTemplateForm(defaultTemplate); toast.success(editingTemplate ? 'Alert template updated.' : 'Alert template created.') },
@@ -103,13 +119,14 @@ export default function AlertRulesPage() {
   }
   const closeTemplate = () => { if (saveTemplate.isPending) return; setTemplateOpen(false); setEditingTemplate(null); setTemplateForm(defaultTemplate); saveTemplate.reset() }
   const removePolicy = useMutation({ mutationFn: id => api.deleteAlertRule(id), onSuccess: () => { qc.invalidateQueries({ queryKey: ['rules'] }); setPendingRemoval(null); toast.success('Scoped policy removed.') }, onError: error => toast.error(error.response?.data?.message || 'Policy could not be removed.') })
+  const removeWorkspacePolicy = useMutation({ mutationFn: id => api.deleteWorkspaceAlertRule(id), onSuccess: () => { qc.invalidateQueries({ queryKey: ['rules'] }); setPendingRemoval(null); toast.success('Workspace policy deleted.') }, onError: error => toast.error(error.response?.data?.message || 'Workspace policy could not be deleted.') })
   const removeTemplate = useMutation({ mutationFn: id => api.deleteAlertTemplate(id), onSuccess: () => { qc.invalidateQueries({ queryKey: ['alert-templates'] }); setPendingRemoval(null); toast.success('Alert template deleted.') }, onError: error => toast.error(error.response?.data?.message || 'Template could not be deleted.') })
   const canManage = user?.role !== 'viewer'
-  const removing = removePolicy.isPending || removeTemplate.isPending
+  const removing = removePolicy.isPending || removeWorkspacePolicy.isPending || removeTemplate.isPending
 
   return <Page title="Alert policies & templates" subtitle="Templates are reusable blueprints; scoped policies are the live rules that evaluate performance.">
     <AsyncStateNotice queries={[rules, templates]}/>
-    <nav className="report-view-tabs" aria-label="Alert policy views"><button className={view === 'templates' ? 'active' : ''} onClick={() => setFilter('view', 'templates')}>Workspace templates</button><button className={view === 'policies' ? 'active' : ''} onClick={() => setFilter('view', 'policies')}>Scoped policies</button></nav>
+    <nav className="report-view-tabs" aria-label="Alert policy views"><button className={view === 'templates' ? 'active' : ''} onClick={() => setFilter('view', 'templates')}>Workspace templates</button>{user?.role === 'admin' && <button className={view === 'workspace' ? 'active' : ''} onClick={() => setFilter('view', 'workspace')}>Workspace policies</button>}<button className={view === 'policies' ? 'active' : ''} onClick={() => setFilter('view', 'policies')}>Scoped policies</button></nav>
 
     {view === 'templates' && <>
       <div className="template-kind-note"><Info size={15}/><div><strong>Templates do not generate alerts by themselves.</strong><span>They provide reusable starting settings. Create a scoped policy to apply a template to a client or ad account.</span></div></div>
@@ -121,15 +138,23 @@ export default function AlertRulesPage() {
       </article>)}</div>
     </>}
 
+    {view === 'workspace' && <>
+      <div className="template-kind-note workspace-policy-note"><Info size={15}/><div><strong>Workspace policies are live defaults for every client.</strong><span>More-specific client, account, or campaign policies override a matching workspace policy. Changes here can affect the entire workspace.</span></div></div>
+      <div className="ops-toolbar"><button className="ops-primary" onClick={() => openPolicy()}><Plus size={14}/> Add workspace policy</button></div>
+      {policyOpen && <section className="workspace-policy-editor"><header><div><strong>{editingPolicy ? 'Edit workspace policy' : 'New workspace policy'}</strong><small>Define the live rule, comparison window, and data guardrails used across all clients.</small></div><button aria-label="Close policy editor" onClick={closePolicy}><X size={14}/></button></header><PolicyForm value={form} onChange={setForm} templates={templates.data || []} onSubmit={() => savePolicy.mutate()} onCancel={closePolicy} pending={savePolicy.isPending}/></section>}
+      <div className="ops-list">{(rules.data || []).map(rule => <div className="ops-list-row" key={rule.id}><i className="rule-dot" data-severity={rule.severity}/><div><strong>{rule.name}</strong><small>{metric(rule.metric).label} · {operator(rule.operator).label} {rule.threshold ?? ''} · {rule.window_days} day window</small></div><span>{rule.enabled ? 'Active' : 'Paused'}</span><div className="workspace-policy-actions"><button aria-label={`Edit ${rule.name}`} onClick={() => openPolicy(rule)}><Pencil size={13}/> Edit</button><button className="policy-remove-button" aria-label={`Delete ${rule.name}`} onClick={() => setPendingRemoval({ type: 'workspace-policy', item: rule })}><Trash2 size={13}/> Delete</button></div></div>)}</div>
+      {!rules.isPending && !(rules.data || []).length && <p className="workspace-policy-empty">No workspace-wide policies are defined. Client and account policies continue to work independently.</p>}
+    </>}
+
     {view === 'policies' && <>
       <ScopeFilterBar clientId={clientId} accountId={accountId} onScopeChange={setScope} onAccountChange={value => setFilter('ad_account_id', value)}/>
       {clientId && <div className="template-kind-note policy-note"><Info size={15}/><div><strong>These are live policies available to the selected client.</strong><span>Client and account policies can be removed here. Workspace-wide policies are inherited and cannot be removed from a client.</span></div></div>}
-      <div className="ops-toolbar">{canManage && clientId && <button className="ops-primary" onClick={() => setPolicyOpen(value => !value)}><Plus size={14}/> Add policy</button>}</div>
-      {policyOpen && canManage && <PolicyForm value={form} onChange={setForm} templates={templates.data || []} onSubmit={() => create.mutate()} pending={create.isPending}/>}<div className="ops-list">{(rules.data || []).map(rule => <div className="ops-list-row" key={rule.id}><i className="rule-dot" data-severity={rule.severity}/><div><strong>{rule.name}</strong><small>{metric(rule.metric).label} · {operator(rule.operator).label} {rule.threshold ?? ''} · {rule.ad_account?.name || rule.client?.name || 'Workspace-wide'}</small></div><span>{rule.client_id ? (rule.enabled ? 'Active' : 'Paused') : 'Inherited'}</span>{canManage && rule.client_id && <button className="policy-remove-button" aria-label={`Remove ${rule.name}`} onClick={() => setPendingRemoval({ type: 'policy', item: rule })}><Trash2 size={13}/> Remove</button>}</div>)}</div>
+      <div className="ops-toolbar">{canManage && clientId && <button className="ops-primary" onClick={() => openPolicy()}><Plus size={14}/> Add policy</button>}</div>
+      {policyOpen && canManage && clientId && <PolicyForm value={form} onChange={setForm} templates={templates.data || []} onSubmit={() => savePolicy.mutate()} onCancel={closePolicy} pending={savePolicy.isPending}/>}<div className="ops-list">{(rules.data || []).map(rule => <div className="ops-list-row" key={rule.id}><i className="rule-dot" data-severity={rule.severity}/><div><strong>{rule.name}</strong><small>{metric(rule.metric).label} · {operator(rule.operator).label} {rule.threshold ?? ''} · {rule.ad_account?.name || rule.client?.name || 'Workspace-wide'}</small></div><span>{rule.client_id ? (rule.enabled ? 'Active' : 'Paused') : 'Inherited'}</span>{canManage && rule.client_id && <button className="policy-remove-button" aria-label={`Remove ${rule.name}`} onClick={() => setPendingRemoval({ type: 'policy', item: rule })}><Trash2 size={13}/> Remove</button>}</div>)}</div>
     </>}
 
     <TemplateDialog editing={Boolean(editingTemplate)} open={templateOpen} value={templateForm} onChange={setTemplateForm} onClose={closeTemplate} onSubmit={() => saveTemplate.mutate()} pending={saveTemplate.isPending} error={saveTemplate.error}/>
-    <ConfirmDialog open={Boolean(pendingRemoval)} title={pendingRemoval?.type === 'template' ? 'Delete alert template?' : 'Remove scoped policy?'} description={pendingRemoval?.type === 'template' ? `Existing policies created from “${pendingRemoval.item.name}” will continue running with their copied settings. The template will no longer be available for new policies.` : `Remove “${pendingRemoval?.item?.name}” from this client? Future evaluations will stop, while existing incident history remains available.`} confirmLabel={pendingRemoval?.type === 'template' ? 'Delete template' : 'Remove policy'} tone="danger" busy={removing} onClose={() => !removing && setPendingRemoval(null)} onConfirm={() => pendingRemoval?.type === 'template' ? removeTemplate.mutate(pendingRemoval.item.id) : removePolicy.mutate(pendingRemoval.item.id)}/>
+    <ConfirmDialog open={Boolean(pendingRemoval)} title={pendingRemoval?.type === 'template' ? 'Delete alert template?' : pendingRemoval?.type === 'workspace-policy' ? 'Delete workspace policy?' : 'Remove scoped policy?'} description={pendingRemoval?.type === 'template' ? `Existing policies created from “${pendingRemoval.item.name}” will continue running with their copied settings. The template will no longer be available for new policies.` : pendingRemoval?.type === 'workspace-policy' ? `Delete “${pendingRemoval.item.name}” for the entire workspace? It will stop future evaluations wherever a more-specific policy does not override it. Existing incident history remains available.` : `Remove “${pendingRemoval?.item?.name}” from this client? Future evaluations will stop, while existing incident history remains available.`} confirmLabel={pendingRemoval?.type === 'template' ? 'Delete template' : pendingRemoval?.type === 'workspace-policy' ? 'Delete workspace policy' : 'Remove policy'} tone="danger" busy={removing} onClose={() => !removing && setPendingRemoval(null)} onConfirm={() => pendingRemoval?.type === 'template' ? removeTemplate.mutate(pendingRemoval.item.id) : pendingRemoval?.type === 'workspace-policy' ? removeWorkspacePolicy.mutate(pendingRemoval.item.id) : removePolicy.mutate(pendingRemoval.item.id)}/>
   </Page>
 }
 
@@ -205,14 +230,21 @@ function Field({ label, help, children }) {
   return <label className="template-field"><span>{label}</span>{children}<small>{help}</small></label>
 }
 
-function PolicyForm({ value, onChange, templates = [], onSubmit, pending }) {
+function PolicyForm({ value, onChange, templates = [], onSubmit, onCancel, pending }) {
+  const needsThreshold = !thresholdlessOperators.has(value.operator)
+  const forcedMetric = operatorMetrics[value.operator]
+  const changeOperator = nextOperator => onChange({ ...value, operator: nextOperator, metric: operatorMetrics[nextOperator] || value.metric, threshold: thresholdlessOperators.has(nextOperator) ? null : value.threshold ?? 25 })
   return <form className="ops-form compact" onSubmit={event => { event.preventDefault(); onSubmit() }}>
-    <label><span>Start from template</span><select onChange={event => { const selected = templates.find(item => String(item.id) === event.target.value); if (selected) onChange({ ...value, name: selected.name, metric: selected.metric, operator: selected.operator, threshold: selected.threshold ?? '', severity: selected.severity, alert_template_id: selected.id }) }}><option value="">Custom</option>{templates.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
-    <label><span>Name</span><input required value={value.name} onChange={event => onChange({ ...value, name: event.target.value })}/></label>
-    <label><span>Metric</span><select value={value.metric} onChange={event => onChange({ ...value, metric: event.target.value })}>{metrics.map(item => <option value={item.value} key={item.value}>{item.label}</option>)}</select></label>
-    <label><span>Operator</span><select value={value.operator} onChange={event => onChange({ ...value, operator: event.target.value })}>{operators.map(item => <option value={item.value} key={item.value}>{item.label}</option>)}</select></label>
-    <label><span>Threshold</span><input type="number" value={value.threshold ?? ''} onChange={event => onChange({ ...value, threshold: event.target.value === '' ? null : Number(event.target.value) })}/></label>
-    <label><span>Severity</span><select value={value.severity} onChange={event => onChange({ ...value, severity: event.target.value })}><option value="info">Info</option><option value="warning">Warning</option><option value="critical">Critical</option></select></label>
-    <button className="ops-primary" disabled={pending}>{pending ? 'Saving…' : 'Save policy'}</button>
+    <label title="Start with reusable metric, condition, threshold, and severity settings."><span>Start from template</span><select value={value.alert_template_id || ''} onChange={event => { const selected = templates.find(item => String(item.id) === event.target.value); if (selected) onChange({ ...value, name: selected.name, metric: selected.metric, operator: selected.operator, threshold: selected.threshold ?? '', severity: selected.severity, alert_template_id: selected.id }); else onChange({ ...value, alert_template_id: null }) }}><option value="">Custom</option>{templates.filter(item => item.active).map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
+    <label title="A clear operational name shown in the alert inbox."><span>Policy name</span><input required value={value.name} onChange={event => onChange({ ...value, name: event.target.value })} placeholder="e.g. Workspace CPL increased"/></label>
+    <label title={metric(value.metric).help}><span>Metric</span><select disabled={Boolean(forcedMetric)} value={value.metric} onChange={event => onChange({ ...value, metric: event.target.value })}>{metrics.map(item => <option value={item.value} key={item.value}>{item.label}</option>)}</select></label>
+    <label title={operator(value.operator).help}><span>Condition</span><select value={value.operator} onChange={event => changeOperator(event.target.value)}>{operators.map(item => <option value={item.value} key={item.value}>{item.label}</option>)}</select></label>
+    <label title={needsThreshold ? `Trigger point in ${thresholdUnit(value.operator, value.metric)}.` : 'This condition does not use a threshold.'}><span>Threshold {needsThreshold ? `(${thresholdUnit(value.operator, value.metric)})` : ''}</span><input required={needsThreshold} disabled={!needsThreshold} min="0" step="any" type="number" value={value.threshold ?? ''} onChange={event => onChange({ ...value, threshold: event.target.value === '' ? null : Number(event.target.value) })}/></label>
+    <label title="Number of calendar days in the observed period. Percentage comparisons use the equal-length preceding period as baseline."><span>Window (days)</span><input required min="1" max="90" type="number" value={value.window_days} onChange={event => onChange({ ...value, window_days: Number(event.target.value) })}/></label>
+    <label title="Optional guardrail. The policy does not trigger until this much spend is recorded."><span>Minimum spend</span><input min="0" step="any" type="number" value={value.minimum_spend ?? ''} placeholder="Optional" onChange={event => onChange({ ...value, minimum_spend: event.target.value === '' ? null : Number(event.target.value) })}/></label>
+    <label title="Optional guardrail. The policy does not trigger until this many impressions are recorded."><span>Minimum impressions</span><input min="0" step="1" type="number" value={value.minimum_impressions ?? ''} placeholder="Optional" onChange={event => onChange({ ...value, minimum_impressions: event.target.value === '' ? null : Number(event.target.value) })}/></label>
+    <label title="Controls triage priority in the alert inbox."><span>Severity</span><select value={value.severity} onChange={event => onChange({ ...value, severity: event.target.value })}><option value="info">Info</option><option value="warning">Warning</option><option value="critical">Critical</option></select></label>
+    <label className="ops-check"><input type="checkbox" checked={value.enabled} onChange={event => onChange({ ...value, enabled: event.target.checked })}/><span>Policy enabled</span></label>
+    <div className="ops-form-actions"><button type="button" onClick={onCancel} disabled={pending}>Cancel</button><button className="ops-primary" disabled={pending}>{pending ? 'Saving…' : 'Save policy'}</button></div>
   </form>
 }

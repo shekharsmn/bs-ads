@@ -110,6 +110,34 @@ class QuickWinsApiTest extends TestCase
         $this->assertDatabaseMissing('alert_rules', ['id' => $clientPolicy->id]);
     }
 
+    public function test_admin_can_manage_workspace_policies_through_the_explicit_workspace_scope(): void
+    {
+        $admin = User::factory()->create(['role' => 'admin']);
+        $marketer = User::factory()->create(['role' => 'marketer']);
+        $client = Client::create(['name' => 'Scoped', 'slug' => 'workspace-policy-management']);
+        $workspacePolicy = AlertRule::create(['name' => 'Workspace CPL', 'metric' => 'cpl', 'operator' => 'percentage_increase', 'threshold' => 25, 'severity' => 'warning', 'window_days' => 7]);
+        $clientPolicy = AlertRule::create(['client_id' => $client->id, 'name' => 'Client CPL', 'metric' => 'cpl', 'operator' => 'above', 'threshold' => 120, 'severity' => 'warning']);
+
+        $this->actingAs($marketer)->getJson('/api/alert-rules?scope=workspace')->assertForbidden();
+        $this->actingAs($admin)->getJson('/api/alert-rules?scope=workspace')
+            ->assertOk()
+            ->assertJsonCount(1)
+            ->assertJsonPath('0.id', $workspacePolicy->id);
+
+        $this->actingAs($admin)->putJson('/api/alert-rules/'.$workspacePolicy->id, ['window_days' => 14, 'threshold' => 30])
+            ->assertOk()
+            ->assertJsonPath('window_days', 14);
+
+        $this->actingAs($admin)->deleteJson('/api/workspace-alert-rules/'.$clientPolicy->id)
+            ->assertUnprocessable()
+            ->assertJsonPath('message', 'Only workspace-wide policies can be deleted from workspace policy management.');
+        $this->assertDatabaseHas('alert_rules', ['id' => $clientPolicy->id]);
+
+        $this->actingAs($admin)->deleteJson('/api/workspace-alert-rules/'.$workspacePolicy->id)->assertNoContent();
+        $this->assertDatabaseMissing('alert_rules', ['id' => $workspacePolicy->id]);
+        $this->assertDatabaseHas('alert_rules', ['client_id' => $client->id, 'name' => 'Client CPL']);
+    }
+
     public function test_public_reports_are_not_cacheable_and_are_rate_limited(): void
     {
         $owner = User::factory()->create();

@@ -12,10 +12,12 @@ vi.mock('../api/client', () => ({
     getAlertRules: vi.fn(),
     getAlertTemplates: vi.fn(),
     createAlertRule: vi.fn(),
+    updateAlertRule: vi.fn(),
     createAlertTemplate: vi.fn(),
     updateAlertTemplate: vi.fn(),
     deleteAlertTemplate: vi.fn(),
     deleteAlertRule: vi.fn(),
+    deleteWorkspaceAlertRule: vi.fn(),
   },
 }))
 vi.mock('../context/AuthContext', () => ({ useAuth: () => ({ user: { id: 1, role: 'admin' } }) }))
@@ -26,10 +28,13 @@ beforeEach(() => {
   api.getClients.mockResolvedValue({ data: [{ id: 2, name: 'Acme', ad_accounts: [{ id: 9, name: 'Acme Meta' }] }] })
   api.getAlertRules.mockResolvedValue({ data: [] })
   api.getAlertTemplates.mockResolvedValue({ data: [] })
+  api.createAlertRule.mockResolvedValue({ data: { id: 1 } })
+  api.updateAlertRule.mockResolvedValue({ data: { id: 1 } })
   api.createAlertTemplate.mockResolvedValue({ data: { id: 1 } })
   api.updateAlertTemplate.mockResolvedValue({ data: { id: 1 } })
   api.deleteAlertTemplate.mockResolvedValue({})
   api.deleteAlertRule.mockResolvedValue({})
+  api.deleteWorkspaceAlertRule.mockResolvedValue({})
 })
 
 function LocationProbe() {
@@ -121,4 +126,43 @@ it('removes a client-scoped policy from the selected client', async () => {
 
   await waitFor(() => expect(api.deleteAlertRule).toHaveBeenCalledWith(11))
   expect(await screen.findByText('Scoped policy removed.')).toBeInTheDocument()
+})
+
+it('creates, edits, and explicitly deletes an admin workspace policy', async () => {
+  const workspacePolicy = { id: 17, client_id: null, ad_account_id: null, campaign_id: null, alert_template_id: null, name: 'Workspace CPL increased', metric: 'cpl', operator: 'percentage_increase', threshold: '25.000000', severity: 'warning', window_days: 7, minimum_spend: null, minimum_impressions: null, enabled: true }
+  api.getAlertRules.mockResolvedValue({ data: [workspacePolicy] })
+  renderPage('/alert-rules?view=workspace')
+
+  expect(await screen.findByText('Workspace policies are live defaults for every client.')).toBeInTheDocument()
+  await waitFor(() => expect(api.getAlertRules).toHaveBeenCalledWith({ scope: 'workspace' }))
+
+  fireEvent.click(screen.getByRole('button', { name: 'Add workspace policy' }))
+  fireEvent.change(screen.getByLabelText('Policy name'), { target: { value: 'Workspace spend stopped' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Save policy' }))
+
+  await waitFor(() => expect(api.createAlertRule).toHaveBeenCalledWith(expect.objectContaining({
+    name: 'Workspace spend stopped',
+    client_id: null,
+    ad_account_id: null,
+    campaign_id: null,
+    window_days: 7,
+  })))
+
+  fireEvent.click(await screen.findByRole('button', { name: 'Edit Workspace CPL increased' }))
+  fireEvent.change(screen.getByLabelText('Window (days)'), { target: { value: '14' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Save policy' }))
+
+  await waitFor(() => expect(api.updateAlertRule).toHaveBeenCalledWith(17, expect.objectContaining({
+    window_days: 14,
+    client_id: null,
+    ad_account_id: null,
+    campaign_id: null,
+  })))
+
+  fireEvent.click(await screen.findByRole('button', { name: 'Delete Workspace CPL increased' }))
+  expect(screen.getByRole('alertdialog', { name: 'Delete workspace policy?' })).toHaveTextContent('for the entire workspace')
+  fireEvent.click(screen.getByRole('button', { name: 'Delete workspace policy' }))
+
+  await waitFor(() => expect(api.deleteWorkspaceAlertRule).toHaveBeenCalledWith(17))
+  expect(api.deleteAlertRule).not.toHaveBeenCalledWith(17)
 })

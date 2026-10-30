@@ -112,6 +112,7 @@ Route::middleware(['auth:sanctum', 'active', 'audit.mutations'])->group(function
     Route::post('/alert-rules', [AlertRuleController::class, 'store'])->middleware('role:admin,marketer');
     Route::put('/alert-rules/{alertRule}', [AlertRuleController::class, 'update'])->middleware('role:admin,marketer');
     Route::delete('/alert-rules/{alertRule}', [AlertRuleController::class, 'destroy'])->middleware('role:admin,marketer');
+    Route::delete('/workspace-alert-rules/{alertRule}', [AlertRuleController::class, 'destroyWorkspace'])->middleware('role:admin');
     Route::get('/alerts', [AlertController::class, 'index']);
     Route::get('/alerts/{alert}', [AlertController::class, 'show']);
     Route::post('/alerts/bulk-actions', [AlertController::class, 'bulkAction'])->middleware('role:admin,marketer');
