@@ -26,7 +26,9 @@ class AlertEngine
         $rules = $this->effectiveRules($account, $campaign);
         foreach ($rules as $rule) {
             $days = max(1, $rule->window_days);
-            $end = now($account->timezone)->startOfDay();
+            // Platform metrics for the account's current local date are still changing.
+            // Anchor alert windows to yesterday so every included date is complete.
+            $end = now($account->timezone)->subDay()->startOfDay();
             $currentStart = in_array($rule->operator, ['budget_under_pacing', 'budget_over_pacing'], true)
                 ? $end->copy()->startOfMonth()
                 : $end->copy()->subDays($days - 1);
@@ -40,8 +42,8 @@ class AlertEngine
                 'minimum_spend' => $rule->minimum_spend,
                 'minimum_impressions' => $rule->minimum_impressions,
                 'monthly_budget' => $account->monthly_budget,
-                'day_of_month' => now($account->timezone)->day,
-                'days_in_month' => now($account->timezone)->daysInMonth,
+                'day_of_month' => $end->day,
+                'days_in_month' => $end->daysInMonth,
                 'freshness_hours' => $latest ? now()->diffInHours($latest) : INF,
                 'connection_error' => $account->connection->status->value === 'error',
             ]);
@@ -59,10 +61,14 @@ class AlertEngine
     private function effectiveRules(AdAccount $account, ?Campaign $campaign): Collection
     {
         $query = AlertRule::query()->where('enabled', true)->where(function ($q) use ($account, $campaign) {
-            $q->where(function ($global) { $global->whereNull('client_id')->whereNull('ad_account_id')->whereNull('campaign_id'); })
+            $q->where(function ($global) {
+                $global->whereNull('client_id')->whereNull('ad_account_id')->whereNull('campaign_id');
+            })
                 ->orWhere(fn ($client) => $client->where('client_id', $account->client_id)->whereNull('ad_account_id')->whereNull('campaign_id'))
                 ->orWhere(fn ($aq) => $aq->where('ad_account_id', $account->id)->whereNull('campaign_id'));
-            if ($campaign) $q->orWhere('campaign_id', $campaign->id);
+            if ($campaign) {
+                $q->orWhere('campaign_id', $campaign->id);
+            }
         })->get();
 
         return $query->sortBy(fn (AlertRule $rule) => $rule->campaign_id ? 4 : ($rule->ad_account_id ? 3 : ($rule->client_id ? 2 : 1)))
@@ -107,7 +113,10 @@ class AlertEngine
     private function aggregate(Collection $rows): array
     {
         $base = [];
-        foreach (['spend', 'impressions', 'reach', 'clicks', 'conversions', 'leads', 'purchases', 'conversion_value'] as $key) $base[$key] = (float) $rows->sum($key);
+        foreach (['spend', 'impressions', 'reach', 'clicks', 'conversions', 'leads', 'purchases', 'conversion_value'] as $key) {
+            $base[$key] = (float) $rows->sum($key);
+        }
+
         return MetricCalculator::derived($base);
     }
 }
