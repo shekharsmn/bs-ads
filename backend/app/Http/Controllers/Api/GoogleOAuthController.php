@@ -33,13 +33,19 @@ class GoogleOAuthController extends Controller
                 'integer',
                 'exists:clients,id',
             ],
+            'connection_id' => 'nullable|integer|exists:platform_connections,id',
         ]);
+
+        $connection = isset($data['connection_id'])
+            ? PlatformConnection::whereKey($data['connection_id'])->where('platform', 'google')->firstOrFail()
+            : null;
 
         return $this->startOAuth($request->user()->id, [
             'purpose' => 'platform_connection',
-            'name' => ($data['name'] ?? null) ?: 'Google Ads',
-            'scope' => $data['scope'],
-            'client_id' => $data['scope'] === 'client' ? (int) $data['client_id'] : null,
+            'connection_id' => $connection?->id,
+            'name' => ($data['name'] ?? null) ?: $connection?->name ?: 'Google Ads',
+            'scope' => $data['scope'] ?? $connection?->scope ?? 'agency',
+            'client_id' => ($data['scope'] ?? $connection?->scope) === 'client' ? (int) ($data['client_id'] ?? $connection?->client_id) : null,
         ]);
     }
 
@@ -110,14 +116,18 @@ class GoogleOAuthController extends Controller
                 return redirect()->away($completionUrl.'?error='.urlencode('Your admin access is no longer active.'));
             }
 
-            $connection = PlatformConnection::create([
+            $attributes = [
                 'client_id' => $pendingState['client_id'] ?? null,
-                'platform' => 'google',
                 'name' => $pendingState['name'] ?? 'Google Ads',
                 'scope' => $pendingState['scope'] ?? 'agency',
                 'credentials' => ['refresh_token' => $refreshToken],
                 'status' => 'pending',
-            ]);
+                'last_error' => null,
+            ];
+            $connection = isset($pendingState['connection_id'])
+                ? PlatformConnection::whereKey($pendingState['connection_id'])->where('platform', 'google')->firstOrFail()
+                : new PlatformConnection(['platform' => 'google']);
+            $connection->fill($attributes)->save();
 
             return redirect()->away($completionUrl.'?connected=google&connection_id='.$connection->id);
         }

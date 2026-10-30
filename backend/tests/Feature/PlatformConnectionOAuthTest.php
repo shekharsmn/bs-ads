@@ -43,6 +43,33 @@ class PlatformConnectionOAuthTest extends TestCase
         $this->actingAs($viewer)->get('/api/connections/google/redirect?scope=agency')->assertForbidden();
     }
 
+    public function test_google_oauth_reconnect_updates_the_existing_connection(): void
+    {
+        config()->set('google_ads.developer_token', 'developer-token');
+        config()->set('google_ads.client_id', 'client-id');
+        config()->set('google_ads.client_secret', 'client-secret');
+        config()->set('google_ads.oauth_redirect_uri', 'http://frontend.test/api/oauth/google/callback');
+        config()->set('services.google_workspace.frontend_url', 'http://frontend.test');
+        Http::fake(['https://oauth2.googleapis.com/token' => Http::response(['refresh_token' => 'new-refresh-secret'])]);
+        $admin = User::factory()->create(['role' => 'admin']);
+        $connection = PlatformConnection::create([
+            'platform' => 'google', 'name' => 'Agency MCC', 'scope' => 'agency',
+            'credentials' => ['refresh_token' => 'old-refresh-secret'], 'status' => 'error', 'last_error' => 'Expired',
+        ]);
+
+        $redirect = $this->actingAs($admin)->get('/api/connections/google/redirect?scope=agency&connection_id='.$connection->id)->assertRedirect();
+        parse_str((string) parse_url($redirect->headers->get('Location'), PHP_URL_QUERY), $query);
+
+        $this->get('/api/oauth/google/callback?state='.$query['state'].'&code=oauth-code')
+            ->assertRedirectContains('connection_id='.$connection->id);
+
+        $this->assertSame(1, PlatformConnection::count());
+        $connection->refresh();
+        $this->assertSame('new-refresh-secret', $connection->credentials['refresh_token']);
+        $this->assertSame('pending', $connection->status->value);
+        $this->assertNull($connection->last_error);
+    }
+
     public function test_google_oauth_failure_redirect_does_not_expose_provider_response_content(): void
     {
         config()->set('google_ads.developer_token', 'developer-token');

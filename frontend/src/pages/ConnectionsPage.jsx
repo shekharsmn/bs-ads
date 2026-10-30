@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useSearchParams } from 'react-router-dom'
-import { ArrowLeft, ArrowRight, BookOpen, Cable, Check, ChevronDown, Eye, EyeOff, ExternalLink, KeyRound, Plus, RefreshCw, Search, ShieldCheck, Trash2, X } from 'lucide-react'
+import { ArrowLeft, ArrowRight, BookOpen, Cable, Check, ChevronDown, Eye, EyeOff, ExternalLink, KeyRound, Pencil, Plus, RefreshCw, RotateCcw, Search, ShieldCheck, Trash2, X } from 'lucide-react'
 import { api } from '../api/client'
 import ConfirmDialog from '../components/ui/ConfirmDialog'
 import { AsyncStateNotice } from '../components/ui/AsyncState'
@@ -36,6 +36,9 @@ export default function ConnectionsPage() {
   const [selection, setSelection] = useState({})
   const [busyConnectionId, setBusyConnectionId] = useState(null)
   const [pendingDelete, setPendingDelete] = useState(null)
+  const [editingConnection, setEditingConnection] = useState(null)
+  const [editMode, setEditMode] = useState('edit')
+  const [editForm, setEditForm] = useState({ name: '', scope: 'agency', client_id: '', access_token: '', app_id: '', app_secret: '' })
   const [error, setError] = useState('')
   const [warning, setWarning] = useState('')
 
@@ -135,6 +138,7 @@ export default function ConnectionsPage() {
     mutationFn: connection => api.deleteConnection(connection.id),
     onSuccess: async (_, connection) => {
       setPendingDelete(null)
+      if (editingConnection?.id === connection.id) setEditingConnection(null)
       setError('')
       setWarning('')
       setDiscovered(current => {
@@ -147,6 +151,48 @@ export default function ConnectionsPage() {
     },
     onError: requestError => setError(requestError.response?.data?.message || 'Unable to remove the connection.'),
   })
+
+  const update = useMutation({
+    mutationFn: ({ connection, data }) => api.updateConnection(connection.id, data),
+    onSuccess: async (response, { reconnect: shouldDiscover }) => {
+      setEditingConnection(null)
+      setError('')
+      await qc.invalidateQueries({ queryKey: ['connections'] })
+      if (shouldDiscover) await discover(response.data)
+    },
+    onError: requestError => setError(requestError.response?.data?.message || 'Unable to update the connection.'),
+  })
+
+  const openConnectionEditor = (connection, mode = 'edit') => {
+    setEditingConnection(connection)
+    setEditMode(mode)
+    setEditForm({ name: connection.name, scope: connection.scope, client_id: connection.client_id || '', access_token: '', app_id: '', app_secret: '' })
+    setShowToken(false)
+    setError('')
+  }
+
+  const reconnect = connection => {
+    if (connection.platform === 'google') {
+      window.location.href = api.googleConnectionUrl({ connection_id: connection.id, name: connection.name, scope: connection.scope, client_id: connection.client_id })
+      return
+    }
+    openConnectionEditor(connection, 'reconnect')
+  }
+
+  const saveConnection = event => {
+    event.preventDefault()
+    if (editForm.scope === 'client' && !editForm.client_id) {
+      setError('Choose the client that owns this connection.')
+      return
+    }
+    if (editMode === 'reconnect' && editForm.access_token.trim().length < 20) {
+      setError('Paste the complete Meta System User access token before reconnecting.')
+      return
+    }
+    const data = { name: editForm.name, scope: editForm.scope, client_id: editForm.scope === 'client' ? Number(editForm.client_id) : null }
+    if (editMode === 'reconnect') data.credentials = { access_token: editForm.access_token, app_id: editForm.app_id || null, app_secret: editForm.app_secret || null }
+    update.mutate({ connection: editingConnection, data, reconnect: editMode === 'reconnect' })
+  }
 
   const connect = event => {
     event.preventDefault()
@@ -264,7 +310,7 @@ export default function ConnectionsPage() {
       </div>
     </form>}
 
-    {!showConnect && error && <div className="connection-error">{error}</div>}
+    {!showConnect && !editingConnection && error && <div className="connection-error">{error}</div>}
     {warning && <div className="connection-warning">{warning}</div>}
 
     <div className="connection-list">{(connections.data || []).map(connection => {
@@ -277,8 +323,20 @@ export default function ConnectionsPage() {
           <div><strong>{connection.name}</strong><small>{connection.platform === 'google' ? 'Google Ads' : 'Meta Ads'} · {connection.scope === 'agency' ? 'agency access' : connection.client?.name || 'client access'}{connection.last_synced_at ? ` · checked ${new Date(connection.last_synced_at).toLocaleString()}` : ' · not checked yet'}</small>{connection.status === 'error' && <em className="connection-guidance">Access needs attention. Re-authorize if discovery continues to fail.</em>}</div>
           <span className={`connection-health ${connection.status}`}>{connection.status}</span>
           <span>{connection.ad_accounts_count} assigned</span>
-          {user?.role === 'admin' && <div className="connection-row-actions"><button className="connection-manage" onClick={() => isOpen && accounts ? setActiveConnectionId(null) : discover(connection)} disabled={busyConnectionId === connection.id || remove.isPending}>{busyConnectionId === connection.id ? <RefreshCw className="spin" size={14}/> : accounts && isOpen ? <ChevronDown size={14}/> : connection.status === 'error' ? <RefreshCw size={14}/> : <Search size={14}/>} {busyConnectionId === connection.id ? 'Discovering…' : isOpen ? 'Close' : connection.status === 'error' ? 'Retry connection' : 'Discover accounts'}</button><button className="connection-remove" aria-label={`Remove ${connection.name}`} title="Remove connection" onClick={() => setPendingDelete(connection)} disabled={remove.isPending}><Trash2 size={14}/></button></div>}
+          {user?.role === 'admin' && <div className="connection-row-actions"><button className="connection-manage" onClick={() => isOpen && accounts ? setActiveConnectionId(null) : discover(connection)} disabled={busyConnectionId === connection.id || remove.isPending}>{busyConnectionId === connection.id ? <RefreshCw className="spin" size={14}/> : accounts && isOpen ? <ChevronDown size={14}/> : <Search size={14}/>} {busyConnectionId === connection.id ? 'Discovering…' : isOpen ? 'Close' : 'Accounts'}</button><button className="connection-icon-action" aria-label={`Edit ${connection.name}`} title="Edit connection" onClick={() => openConnectionEditor(connection)} disabled={update.isPending}><Pencil size={14}/></button><button className="connection-icon-action" aria-label={`Reconnect ${connection.name}`} title="Reconnect" onClick={() => reconnect(connection)} disabled={update.isPending}><RotateCcw size={14}/></button><button className="connection-remove" aria-label={`Remove ${connection.name}`} title="Remove connection" onClick={() => setPendingDelete(connection)} disabled={remove.isPending}><Trash2 size={14}/></button></div>}
         </div>
+
+        {editingConnection?.id === connection.id && <form className="connection-editor" onSubmit={saveConnection}>
+          <div className="connection-editor-head"><div><strong>{editMode === 'reconnect' ? `Reconnect ${connection.name}` : `Edit ${connection.name}`}</strong><small>{editMode === 'reconnect' ? 'Enter a fresh Meta token. Existing assigned accounts will be kept.' : 'Update the label or who can use this connection.'}</small></div><button type="button" aria-label="Close connection editor" onClick={() => { setEditingConnection(null); setError('') }}><X size={15}/></button></div>
+          <div className="connection-fields three">
+            <Field label="Connection name"><input required value={editForm.name} onChange={event => setEditForm({ ...editForm, name: event.target.value })}/></Field>
+            <Field label="Use connection for"><select value={editForm.scope} onChange={event => setEditForm({ ...editForm, scope: event.target.value, client_id: event.target.value === 'agency' ? '' : editForm.client_id })}><option value="agency">Multiple clients (agency)</option><option value="client">One client only</option></select></Field>
+            {editForm.scope === 'client' && <Field label="Client"><select required value={editForm.client_id} onChange={event => setEditForm({ ...editForm, client_id: event.target.value })}><option value="">Choose client</option>{clientList.map(client => <option key={client.id} value={client.id}>{client.name}</option>)}</select></Field>}
+          </div>
+          {editMode === 'reconnect' && <div className="connection-fields three connection-reconnect-fields"><Field label="New System User access token" hint="Required · verified before the old token is replaced"><div className="connection-secret-input"><input required type={showToken ? 'text' : 'password'} autoComplete="off" value={editForm.access_token} onChange={event => setEditForm({ ...editForm, access_token: event.target.value.trim() })}/><button type="button" aria-label={showToken ? 'Hide access token' : 'Show access token'} onClick={() => setShowToken(current => !current)}>{showToken ? <EyeOff size={15}/> : <Eye size={15}/>}</button></div></Field><Field label="App ID" hint="Optional"><input value={editForm.app_id} onChange={event => setEditForm({ ...editForm, app_id: event.target.value })}/></Field><Field label="App secret" hint="Optional"><input type="password" autoComplete="new-password" value={editForm.app_secret} onChange={event => setEditForm({ ...editForm, app_secret: event.target.value })}/></Field></div>}
+          {error && <div className="connection-error" role="alert">{error}</div>}
+          <div className="connection-editor-actions"><button type="button" onClick={() => { setEditingConnection(null); setError('') }}>Cancel</button><button type="submit" className="ops-primary" disabled={update.isPending}><Check size={14}/>{update.isPending ? 'Saving…' : editMode === 'reconnect' ? 'Verify and reconnect' : 'Save changes'}</button></div>
+        </form>}
 
         {connection.ad_accounts?.length > 0 && <div className="assigned-strip">{connection.ad_accounts.map(account => <span key={account.id}><i data-platform={connection.platform}/>{account.name}<small>{account.client?.name}</small></span>)}</div>}
 

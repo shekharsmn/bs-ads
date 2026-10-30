@@ -52,6 +52,7 @@ export const api = {
   testClientChat: (id) => client.post(`/api/clients/${id}/google-chat/test`),
   getConnections: (params) => client.get('/api/connections', { params }),
   createConnection: (data) => client.post('/api/connections', data),
+  updateConnection: (id, data) => client.put(`/api/connections/${id}`, data),
   deleteConnection: (id) => client.delete(`/api/connections/${id}`),
   // Manager-account discovery can require several Google Ads hierarchy calls.
   discoverAccounts: (id) => client.post(`/api/connections/${id}/discover`, undefined, { timeout: 60_000 }),

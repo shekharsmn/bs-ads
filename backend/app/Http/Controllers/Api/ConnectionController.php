@@ -12,6 +12,7 @@ use App\Services\GoogleAdsAccountDiscovery;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Validation\Rule;
 use RuntimeException;
 use Throwable;
 
@@ -72,7 +73,33 @@ class ConnectionController extends Controller
     public function update(Request $request, PlatformConnection $connection)
     {
         abort_unless($request->user()->isAdmin(), 403);
-        $data = $request->validate(['name' => 'sometimes|string|max:255', 'credentials' => 'sometimes|array', 'manager_external_id' => 'nullable|string|max:100', 'status' => 'sometimes|in:pending,healthy,error,disconnected']);
+        $data = $request->validate([
+            'name' => 'sometimes|string|max:255',
+            'scope' => 'sometimes|in:agency,client',
+            'client_id' => [Rule::requiredIf($request->input('scope', $connection->scope) === 'client'), 'nullable', 'integer', 'exists:clients,id'],
+            'credentials' => 'sometimes|array',
+            'credentials.access_token' => 'sometimes|required|string',
+            'credentials.app_id' => 'nullable|string|max:255',
+            'credentials.app_secret' => 'nullable|string|max:255',
+            'manager_external_id' => 'nullable|string|max:100',
+            'status' => 'sometimes|in:pending,healthy,error,disconnected',
+        ]);
+
+        $scope = $data['scope'] ?? $connection->scope;
+        $clientId = $scope === 'client' ? (int) ($data['client_id'] ?? $connection->client_id) : null;
+        if ($scope === 'client' && $connection->adAccounts()->where('client_id', '!=', $clientId)->exists()) {
+            abort(422, 'Move or remove accounts assigned to other clients before limiting this connection to one client.');
+        }
+
+        $data['client_id'] = $clientId;
+        if (array_key_exists('credentials', $data)) {
+            abort_unless($connection->platform->value === 'meta', 422, 'Google credentials must be updated by reconnecting with Google.');
+            $credentials = array_filter($data['credentials'], fn ($value) => $value !== null && $value !== '');
+            $this->verifyMetaCredentials($credentials);
+            $data['credentials'] = array_merge($connection->credentials ?? [], $credentials);
+            $data['status'] = 'pending';
+            $data['last_error'] = null;
+        }
         $connection->update($data);
 
         return $connection->fresh();

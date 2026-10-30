@@ -88,6 +88,60 @@ class OperationsApiTest extends TestCase
         $this->assertDatabaseMissing('platform_connections', ['name' => 'Broken Meta']);
     }
 
+    public function test_admin_can_edit_connection_details_without_replacing_credentials(): void
+    {
+        $admin = User::factory()->create(['role' => 'admin']);
+        $client = Client::create(['name' => 'Acme', 'slug' => 'acme']);
+        $connection = PlatformConnection::create([
+            'platform' => 'meta', 'name' => 'Old name', 'scope' => 'agency',
+            'credentials' => ['access_token' => 'existing-secret'], 'status' => 'healthy',
+        ]);
+
+        $this->actingAs($admin)->putJson('/api/connections/'.$connection->id, [
+            'name' => 'Acme Meta', 'scope' => 'client', 'client_id' => $client->id,
+        ])->assertOk()
+            ->assertJsonPath('name', 'Acme Meta')
+            ->assertJsonPath('scope', 'client')
+            ->assertJsonPath('client_id', $client->id)
+            ->assertJsonMissingPath('credentials');
+
+        $this->assertSame('existing-secret', $connection->fresh()->credentials['access_token']);
+    }
+
+    public function test_meta_connection_can_be_reconnected_only_after_the_new_token_is_verified(): void
+    {
+        Http::fake(['graph.facebook.com/*' => Http::response(['data' => [['id' => 'act_123']]])]);
+        $admin = User::factory()->create(['role' => 'admin']);
+        $connection = PlatformConnection::create([
+            'platform' => 'meta', 'name' => 'Meta', 'scope' => 'agency',
+            'credentials' => ['access_token' => 'old-secret', 'app_id' => 'kept-app'],
+            'status' => 'error', 'last_error' => 'Expired token',
+        ]);
+
+        $this->actingAs($admin)->putJson('/api/connections/'.$connection->id, [
+            'credentials' => ['access_token' => 'new-system-user-token'],
+        ])->assertOk()->assertJsonPath('status', 'pending');
+
+        $connection->refresh();
+        $this->assertSame('new-system-user-token', $connection->credentials['access_token']);
+        $this->assertSame('kept-app', $connection->credentials['app_id']);
+        $this->assertNull($connection->last_error);
+    }
+
+    public function test_connection_cannot_be_limited_to_a_client_while_other_clients_have_assigned_accounts(): void
+    {
+        $admin = User::factory()->create(['role' => 'admin']);
+        $first = Client::create(['name' => 'First', 'slug' => 'first']);
+        $second = Client::create(['name' => 'Second', 'slug' => 'second']);
+        $connection = PlatformConnection::create(['platform' => 'google', 'name' => 'MCC', 'scope' => 'agency', 'credentials' => ['refresh_token' => 'secret']]);
+        AdAccount::create(['client_id' => $second->id, 'platform_connection_id' => $connection->id, 'platform' => 'google', 'external_id' => '123', 'name' => 'Second Ads', 'currency' => 'USD', 'timezone' => 'UTC']);
+
+        $this->actingAs($admin)->putJson('/api/connections/'.$connection->id, [
+            'scope' => 'client', 'client_id' => $first->id,
+        ])->assertUnprocessable()
+            ->assertJsonPath('message', 'Move or remove accounts assigned to other clients before limiting this connection to one client.');
+    }
+
     public function test_client_can_be_edited_without_exposing_or_replacing_saved_webhook(): void
     {
         $admin = User::factory()->create(['role' => 'admin']);
