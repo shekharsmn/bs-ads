@@ -13,6 +13,7 @@ class AlertRuleEvaluator
         $base = array_key_exists($metric, $baseline) && $baseline[$metric] !== null ? (float) $baseline[$metric] : null;
         $spend = (float) ($current['spend'] ?? 0);
         $breached = false;
+        $comparison = null;
         $reason = '';
 
         switch (AlertOperator::from($operator)) {
@@ -27,13 +28,13 @@ class AlertRuleEvaluator
             case AlertOperator::PercentageDrop:
                 $change = ($base !== null && $base != 0.0 && $observed !== null) ? (($base - $observed) / abs($base)) * 100 : null;
                 $breached = $change !== null && $threshold !== null && $change >= $threshold;
-                $observed = $change;
+                $comparison = $change;
                 $reason = "$metric deteriorated versus the preceding baseline";
                 break;
             case AlertOperator::PercentageIncrease:
                 $change = ($base !== null && $base != 0.0 && $observed !== null) ? (($observed - $base) / abs($base)) * 100 : null;
                 $breached = $change !== null && $threshold !== null && $change >= $threshold;
-                $observed = $change;
+                $comparison = $change;
                 $reason = "$metric increased versus the preceding baseline";
                 break;
             case AlertOperator::NoSpend:
@@ -82,6 +83,7 @@ class AlertRuleEvaluator
             'observed' => $observed,
             'baseline' => $base,
             'threshold' => $threshold,
+            'comparison' => $comparison,
             'observed_spend' => $spend,
             'baseline_spend' => (float) ($baseline['spend'] ?? 0),
             'reason' => $reason,

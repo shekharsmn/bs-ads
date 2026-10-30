@@ -16,11 +16,75 @@ function formatMoney(value, currency = 'USD') {
   try { return new Intl.NumberFormat(undefined, { style: 'currency', currency, maximumFractionDigits: 2 }).format(Number(value)) } catch { return `${currency} ${Number(value).toFixed(2)}` }
 }
 
+function formatNumber(value, maximumFractionDigits = 2) {
+  if (value === null || value === undefined) return '—'
+  return new Intl.NumberFormat(undefined, { maximumFractionDigits }).format(Number(value))
+}
+
+function formatPercent(value) {
+  return value === null || value === undefined ? '—' : `${formatNumber(value)}%`
+}
+
+const MONEY_METRICS = new Set(['spend', 'conversion_value', 'cpc', 'cpm', 'cpa', 'cpl'])
+const PERCENT_METRICS = new Set(['ctr', 'conversion_rate'])
+const METRIC_LABELS = { cpc: 'CPC', cpm: 'CPM', cpa: 'CPA', cpl: 'CPL', ctr: 'CTR', roas: 'ROAS', conversion_rate: 'conversion rate', conversion_value: 'conversion value' }
+
+function metricLabel(metric) {
+  return METRIC_LABELS[metric] || String(metric || 'value').replaceAll('_', ' ')
+}
+
+function formatMetric(value, metric, currency) {
+  if (MONEY_METRICS.has(metric)) return formatMoney(value, currency)
+  if (PERCENT_METRICS.has(metric)) return formatPercent(value)
+  if (metric === 'roas') return value === null || value === undefined ? '—' : `${formatNumber(value)}×`
+  return formatNumber(value)
+}
+
+function formatDateTime(value, timezone) {
+  if (!value) return '—'
+  const options = { day: 'numeric', month: 'short', year: 'numeric', hour: 'numeric', minute: '2-digit', timeZoneName: 'short', ...(timezone ? { timeZone: timezone } : {}) }
+  return new Intl.DateTimeFormat(undefined, options).format(new Date(value))
+}
+
 function formatPeriod(start, end, timezone) {
   if (!start || !end) return '—'
-  const options = { dateStyle: 'medium', timeStyle: 'short', ...(timezone ? { timeZone: timezone } : {}) }
-  const formatter = new Intl.DateTimeFormat(undefined, options)
-  return `${formatter.format(new Date(start))} – ${formatter.format(new Date(end))}`
+  return `${formatDateTime(start, timezone)} – ${formatDateTime(end, timezone)}`
+}
+
+function IncidentMetrics({ alert }) {
+  const metric = alert.rule?.metric || 'value'
+  const operator = alert.rule?.operator
+  const currency = alert.currency || alert.ad_account?.currency
+  const percentageComparison = operator === 'percentage_drop' || operator === 'percentage_increase'
+  const legacyPercentageAlert = percentageComparison && (alert.comparison_value === null || alert.comparison_value === undefined)
+  const comparisonValue = alert.comparison_value ?? (legacyPercentageAlert ? alert.observed_value : null)
+  const legacyObservedValue = legacyPercentageAlert && alert.baseline_value !== null && alert.baseline_value !== undefined
+    ? Number(alert.baseline_value) * (1 + (operator === 'percentage_drop' ? -1 : 1) * Number(comparisonValue) / 100)
+    : null
+  const threshold = percentageComparison || operator === 'budget_under_pacing' || operator === 'budget_over_pacing'
+    ? formatPercent(alert.threshold_value)
+    : operator === 'data_stale'
+      ? `${formatNumber(alert.threshold_value)} hours`
+      : formatMetric(alert.threshold_value, metric, currency)
+  const observed = legacyPercentageAlert
+    ? formatMetric(legacyObservedValue, metric, currency)
+    : operator === 'budget_under_pacing' || operator === 'budget_over_pacing'
+      ? formatPercent(alert.observed_value)
+      : operator === 'data_stale'
+        ? `${formatNumber(alert.observed_value)} hours`
+        : operator === 'connection_error'
+          ? Number(alert.observed_value) === 1 ? 'Connection error' : 'Healthy'
+          : formatMetric(alert.observed_value, metric, currency)
+  const comparisonLabel = operator === 'percentage_drop' ? 'Drop vs baseline' : 'Increase vs baseline'
+
+  return <dl className="alert-metric-grid">
+    <div><dt>Observed {metricLabel(metric)}</dt><dd>{observed}</dd></div>
+    <div><dt>Baseline {metricLabel(metric)}</dt><dd>{formatMetric(alert.baseline_value, metric, currency)}</dd></div>
+    {percentageComparison && <div><dt>{comparisonLabel}</dt><dd>{formatPercent(comparisonValue)}</dd></div>}
+    <div><dt>Threshold</dt><dd>{threshold}</dd></div>
+    <div><dt>Observed spend</dt><dd>{formatMoney(alert.observed_spend, currency)}</dd></div>
+    <div><dt>Baseline spend</dt><dd>{formatMoney(alert.baseline_spend, currency)}</dd></div>
+  </dl>
 }
 
 function RelatedLinks({ alert }) {
@@ -89,7 +153,7 @@ export default function AlertInboxPage() {
       {!rows.length && <div className="alert-empty">No incidents match this view.</div>}
       {alerts.data?.last_page > 1 && <nav className="alert-pagination"><button disabled={page <= 1} onClick={() => setFilter('page', String(page - 1))}><ChevronLeft size={13}/></button><span>{page} / {alerts.data.last_page}</span><button disabled={page >= alerts.data.last_page} onClick={() => setFilter('page', String(page + 1))}><ChevronRight size={13}/></button></nav>}
     </section>
-    <aside className="ops-inspector">{id && <button className="alert-detail-back" onClick={() => navigate(`/alerts?${search}`)}><ChevronLeft size={13}/> Back to inbox</button>}{detail.data ? <><p className="ops-eyebrow">{detail.data.severity} · {detail.data.status}</p><h2>{detail.data.title}</h2><p>{detail.data.summary}</p><RelatedLinks alert={detail.data}/><dl className="alert-metric-grid"><div><dt>Observed {detail.data.rule?.metric || 'value'}</dt><dd>{detail.data.observed_value ?? '—'}</dd></div><div><dt>Baseline {detail.data.rule?.metric || 'value'}</dt><dd>{detail.data.baseline_value ?? '—'}</dd></div><div><dt>Threshold</dt><dd>{detail.data.threshold_value ?? '—'}</dd></div><div><dt>Observed spend</dt><dd>{formatMoney(detail.data.observed_spend, detail.data.currency || detail.data.ad_account?.currency)}</dd></div><div><dt>Baseline spend</dt><dd>{formatMoney(detail.data.baseline_spend, detail.data.currency || detail.data.ad_account?.currency)}</dd></div></dl><section className="alert-periods"><h3>Measurement windows</h3><dl><div><dt>Observed</dt><dd>{formatPeriod(detail.data.observed_period_start, detail.data.observed_period_end, detail.data.ad_account?.timezone)}</dd></div><div><dt>Baseline</dt><dd>{formatPeriod(detail.data.baseline_period_start, detail.data.baseline_period_end, detail.data.ad_account?.timezone)}</dd></div></dl></section>{operate && <div className="ops-actions"><button onClick={() => action.mutate({ action: 'acknowledge', data: {} })}><Check size={14}/> Acknowledge</button><button onClick={() => setNoteOpen(true)}><MessageSquare size={14}/> Note</button><button onClick={() => action.mutate({ action: 'snooze', data: { snoozed_until: new Date(Date.now() + 6 * 3600000).toISOString() } })}><Clock size={14}/> Snooze 6h</button><button onClick={() => action.mutate({ action: 'resolve', data: { note: 'Manually resolved' } })}><UserCheck size={14}/> Resolve</button></div>}<h3>Activity</h3><ol className="ops-timeline">{detail.data.events?.map(event => <li key={event.id}><strong>{event.type}</strong><span>{event.actor?.name || 'System'} · {new Date(event.created_at).toLocaleString()}</span>{event.note && <p>{event.note}</p>}</li>)}</ol></> : <div className="alert-empty">Select an incident to inspect its history.</div>}</aside></div>
+    <aside className="ops-inspector">{id && <button className="alert-detail-back" onClick={() => navigate(`/alerts?${search}`)}><ChevronLeft size={13}/> Back to inbox</button>}{detail.data ? <><p className="ops-eyebrow">{detail.data.severity} · {detail.data.status}</p><h2>{detail.data.title}</h2><p>{detail.data.summary}</p><RelatedLinks alert={detail.data}/><IncidentMetrics alert={detail.data}/><section className="alert-periods"><h3>Measurement windows</h3><dl><div><dt>Observed</dt><dd>{formatPeriod(detail.data.observed_period_start, detail.data.observed_period_end, detail.data.ad_account?.timezone)}</dd></div><div><dt>Baseline</dt><dd>{formatPeriod(detail.data.baseline_period_start, detail.data.baseline_period_end, detail.data.ad_account?.timezone)}</dd></div></dl></section>{operate && <div className="ops-actions"><button onClick={() => action.mutate({ action: 'acknowledge', data: {} })}><Check size={14}/> Acknowledge</button><button onClick={() => setNoteOpen(true)}><MessageSquare size={14}/> Note</button><button onClick={() => action.mutate({ action: 'snooze', data: { snoozed_until: new Date(Date.now() + 6 * 3600000).toISOString() } })}><Clock size={14}/> Snooze 6h</button><button onClick={() => action.mutate({ action: 'resolve', data: { note: 'Manually resolved' } })}><UserCheck size={14}/> Resolve</button></div>}<h3>Activity</h3><ol className="ops-timeline">{detail.data.events?.map(event => <li key={event.id}><strong>{event.type}</strong><span>{event.actor?.name || 'System'} · {formatDateTime(event.created_at, detail.data.ad_account?.timezone)}</span>{event.note && <p>{event.note}</p>}</li>)}</ol></> : <div className="alert-empty">Select an incident to inspect its history.</div>}</aside></div>
     <ConfirmDialog open={noteOpen} title="Add incident note" description={<textarea className="dialog-textarea" autoFocus rows="4" value={note} onChange={event => setNote(event.target.value)} placeholder="Add context for the next person…"/>} confirmLabel="Add note" tone="primary" busy={action.isPending} onClose={() => setNoteOpen(false)} onConfirm={() => { if (!note.trim()) return; action.mutate({ action: 'note', data: { note: note.trim() } }); setNote(''); setNoteOpen(false) }}/>
   </Page>
 }

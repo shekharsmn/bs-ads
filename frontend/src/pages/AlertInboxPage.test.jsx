@@ -25,11 +25,11 @@ beforeEach(() => {
   api.getAlert.mockResolvedValue({
     data: {
       id: 'incident-1', client_id: 4, ad_account_id: 8, campaign_id: 12, ad_group_id: 15, ad_id: 19,
-      severity: 'critical', status: 'open', title: 'Spend without conversions', summary: 'Spend was recorded without conversions',
-      currency: 'INR', observed_spend: '250.000000', baseline_spend: '175.000000', observed_value: '0.000000', baseline_value: '3.000000', threshold_value: null,
+      severity: 'warning', status: 'resolved', title: 'Cost per lead increased', summary: 'cpl increased versus the preceding baseline',
+      currency: 'INR', observed_spend: '250.000000', baseline_spend: '175.000000', observed_value: '41.510842', baseline_value: '1327.597920', threshold_value: '25.000000', comparison_value: null,
       observed_period_start: '2026-10-29T18:30:00Z', observed_period_end: '2026-10-30T18:29:59Z', baseline_period_start: '2026-10-28T18:30:00Z', baseline_period_end: '2026-10-29T18:29:59Z',
       client: { id: 4, name: 'Acme' }, ad_account: { id: 8, name: 'Acme Meta', platform: 'meta', currency: 'INR', timezone: 'Asia/Kolkata' },
-      campaign: { id: 12, name: 'Launch' }, ad_group: { id: 15, name: 'Prospecting' }, ad: { id: 19, name: 'Creative A' }, rule: { metric: 'conversions' }, events: [],
+      campaign: { id: 12, name: 'Launch' }, ad_group: { id: 15, name: 'Prospecting' }, ad: { id: 19, name: 'Creative A' }, rule: { metric: 'cpl', operator: 'percentage_increase' }, events: [{ id: 1, type: 'triggered', created_at: '2026-10-30T12:00:57Z' }],
     },
   })
 })
@@ -38,10 +38,15 @@ it('shows spend, dated windows, and linked alert hierarchy', async () => {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   render(<QueryClientProvider client={queryClient}><ToastProvider><MemoryRouter initialEntries={['/alerts/incident-1?client_id=4']}><Routes><Route path="/alerts/:id" element={<AlertInboxPage/>}/></Routes></MemoryRouter></ToastProvider></QueryClientProvider>)
 
-  expect(await screen.findByText('Spend without conversions')).toBeInTheDocument()
+  expect(await screen.findByText('Cost per lead increased')).toBeInTheDocument()
   expect(screen.getByText(/₹250\.00/)).toBeInTheDocument()
   expect(screen.getByText(/₹175\.00/)).toBeInTheDocument()
-  expect(screen.getByText(/(?:Oct 30,|30 Oct) 2026/)).toBeInTheDocument()
+  expect(screen.getByText(/₹1,878\.69/)).toBeInTheDocument()
+  expect(screen.getByText(/₹1,327\.60/)).toBeInTheDocument()
+  expect(screen.getByText('41.51%')).toBeInTheDocument()
+  expect(screen.getByText('25%')).toBeInTheDocument()
+  expect(screen.queryByText('41.510842')).not.toBeInTheDocument()
+  expect(screen.getAllByText(/(?:Oct 30,|30 Oct) 2026/).length).toBeGreaterThan(0)
   expect(screen.getByRole('link', { name: /Client\s*Acme/ })).toHaveAttribute('href', '/clients/4')
   expect(screen.getByRole('link', { name: /Campaign\s*Launch/ })).toHaveAttribute('href', '/command-center/clients/4/ad-accounts/8/campaigns/12')
   expect(screen.getByRole('link', { name: /Ad set\s*Prospecting/ })).toHaveAttribute('href', '/command-center/clients/4/ad-accounts/8/campaigns/12/ad-groups/15')

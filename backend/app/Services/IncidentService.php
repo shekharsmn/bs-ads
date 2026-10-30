@@ -30,6 +30,7 @@ class IncidentService
                 'observed_value' => $result['observed'],
                 'baseline_value' => $result['baseline'],
                 'threshold_value' => $result['threshold'],
+                'comparison_value' => $result['comparison'] ?? null,
                 'observed_period_start' => $result['observed_period_start'] ?? null,
                 'observed_period_end' => $result['observed_period_end'] ?? null,
                 'baseline_period_start' => $result['baseline_period_start'] ?? null,

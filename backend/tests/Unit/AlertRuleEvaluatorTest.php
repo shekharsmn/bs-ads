@@ -47,4 +47,21 @@ class AlertRuleEvaluatorTest extends TestCase
         $this->assertSame(250.0, $result['observed_spend']);
         $this->assertSame(175.0, $result['baseline_spend']);
     }
+
+    public function test_percentage_increase_preserves_metric_values_and_records_change_separately(): void
+    {
+        $result = (new AlertRuleEvaluator)->evaluate(
+            'percentage_increase',
+            25,
+            ['cpl' => 1878.6949949665],
+            ['cpl' => 1327.597920],
+            ['metric' => 'cpl'],
+        );
+
+        $this->assertTrue($result['breached']);
+        $this->assertSame(1878.6949949665, $result['observed']);
+        $this->assertSame(1327.597920, $result['baseline']);
+        $this->assertEqualsWithDelta(41.510842, $result['comparison'], 0.000001);
+        $this->assertSame(25.0, $result['threshold']);
+    }
 }

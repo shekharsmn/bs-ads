@@ -51,8 +51,8 @@ class AlertEngineTest extends TestCase
         $engine->evaluateAccount($account->fresh(['connection']));
 
         $incident = \App\Models\AlertIncident::firstOrFail();
-        $this->assertSame('250.000000', $incident->observed_spend);
-        $this->assertSame('0.000000', $incident->baseline_spend);
+        $this->assertSame(250.0, (float) $incident->observed_spend);
+        $this->assertSame(0.0, (float) $incident->baseline_spend);
         $this->assertSame('INR', $incident->currency);
         $this->assertNotNull($incident->observed_period_start);
         $this->assertNotNull($incident->observed_period_end);
