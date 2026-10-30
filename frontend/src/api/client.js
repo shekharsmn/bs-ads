@@ -71,6 +71,8 @@ export const api = {
   bulkAlertAction: (ids, action, data = {}) => client.post('/api/alerts/bulk-actions', { ids, action, ...data }),
   getAlertTemplates: () => client.get('/api/alert-templates'),
   createAlertTemplate: (data) => client.post('/api/alert-templates', data),
+  updateAlertTemplate: (id, data) => client.put(`/api/alert-templates/${id}`, data),
+  deleteAlertTemplate: (id) => client.delete(`/api/alert-templates/${id}`),
   getAlertRules: (params) => client.get('/api/alert-rules', { params }),
   createAlertRule: (data) => client.post('/api/alert-rules', data),
   updateAlertRule: (id, data) => client.put(`/api/alert-rules/${id}`, data),

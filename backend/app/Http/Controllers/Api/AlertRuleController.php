@@ -29,6 +29,22 @@ class AlertRuleController extends Controller
         return response()->json(AlertTemplate::create($this->validateRule($request, true)), 201);
     }
 
+    public function updateTemplate(Request $request, AlertTemplate $alertTemplate)
+    {
+        abort_unless($request->user()->isAdmin(), 403);
+        $alertTemplate->update($this->validateRule($request, true, false, $alertTemplate->id));
+
+        return $alertTemplate->fresh();
+    }
+
+    public function destroyTemplate(Request $request, AlertTemplate $alertTemplate)
+    {
+        abort_unless($request->user()->isAdmin(), 403);
+        $alertTemplate->delete();
+
+        return response()->noContent();
+    }
+
     public function index(Request $request)
     {
         $data = $request->validate(['client_id' => 'nullable|exists:clients,id', 'ad_account_id' => 'nullable|exists:ad_accounts,id']);
@@ -70,7 +86,7 @@ class AlertRuleController extends Controller
         return response()->noContent();
     }
 
-    private function validateRule(Request $request, bool $template = false, bool $partial = false): array
+    private function validateRule(Request $request, bool $template = false, bool $partial = false, ?int $ignoreTemplateId = null): array
     {
         $sometimes = $partial ? 'sometimes|' : '';
         $base = [
@@ -79,7 +95,9 @@ class AlertRuleController extends Controller
             'severity' => [$partial ? 'sometimes' : 'required', new Enum(Severity::class)], 'config' => 'nullable|array',
         ];
         if ($template) {
-            return $request->validate($base + ['key' => 'required|string|max:100|unique:alert_templates,key', 'description' => 'nullable|string', 'active' => 'sometimes|boolean']);
+            $uniqueKey = 'unique:alert_templates,key'.($ignoreTemplateId ? ','.$ignoreTemplateId : '');
+
+            return $request->validate($base + ['key' => ['required', 'string', 'max:100', 'regex:/^[a-z0-9_-]+$/', $uniqueKey], 'description' => 'nullable|string', 'active' => 'sometimes|boolean']);
         }
 
         return $request->validate($base + [

@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useSearchParams } from 'react-router-dom'
-import { BellRing, Check, Info, Plus, Trash2, X } from 'lucide-react'
+import { BellRing, Check, Info, Pencil, Plus, Trash2, X } from 'lucide-react'
 import { api } from '../api/client'
 import { AsyncStateNotice } from '../components/ui/AsyncState'
+import ConfirmDialog from '../components/ui/ConfirmDialog'
 import ScopeFilterBar from '../components/ScopeFilterBar'
 import { useAuth } from '../context/AuthContext'
 import { useToast } from '../context/ToastContext'
@@ -76,6 +77,8 @@ export default function AlertRulesPage() {
   const [search, setSearch] = useSearchParams()
   const [policyOpen, setPolicyOpen] = useState(false)
   const [templateOpen, setTemplateOpen] = useState(false)
+  const [editingTemplate, setEditingTemplate] = useState(null)
+  const [pendingRemoval, setPendingRemoval] = useState(null)
   const [form, setForm] = useState(defaultRule)
   const [templateForm, setTemplateForm] = useState(defaultTemplate)
   const requestedView = search.get('view') || 'templates'
@@ -88,27 +91,49 @@ export default function AlertRulesPage() {
   const setFilter = (key, value) => setSearch(current => { const next = new URLSearchParams(current); value ? next.set(key, value) : next.delete(key); return next }, { replace: true })
   const setScope = (nextClientId, nextAccountId) => { const next = new URLSearchParams(search); nextClientId ? next.set('client_id', nextClientId) : next.delete('client_id'); nextAccountId ? next.set('ad_account_id', nextAccountId) : next.delete('ad_account_id'); setSearch(next, { replace: true }) }
   const create = useMutation({ mutationFn: () => api.createAlertRule({ ...form, client_id: clientId ? Number(clientId) : null, ad_account_id: accountId ? Number(accountId) : null }), onSuccess: () => { qc.invalidateQueries({ queryKey: ['rules'] }); setPolicyOpen(false); setForm(defaultRule) } })
-  const createTemplate = useMutation({
-    mutationFn: () => api.createAlertTemplate(templateForm),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ['alert-templates'] }); setTemplateOpen(false); setTemplateForm(defaultTemplate); toast.success('Alert template created.') },
+  const saveTemplate = useMutation({
+    mutationFn: () => editingTemplate ? api.updateAlertTemplate(editingTemplate.id, templateForm) : api.createAlertTemplate(templateForm),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['alert-templates'] }); setTemplateOpen(false); setEditingTemplate(null); setTemplateForm(defaultTemplate); toast.success(editingTemplate ? 'Alert template updated.' : 'Alert template created.') },
   })
-  const closeTemplate = () => { if (createTemplate.isPending) return; setTemplateOpen(false); setTemplateForm(defaultTemplate); createTemplate.reset() }
-  const remove = useMutation({ mutationFn: id => api.deleteAlertRule(id), onSuccess: () => qc.invalidateQueries({ queryKey: ['rules'] }) })
+  const openTemplate = template => {
+    setEditingTemplate(template || null)
+    setTemplateForm(template ? { key: template.key, name: template.name, description: template.description || '', metric: template.metric, operator: template.operator, threshold: template.threshold, severity: template.severity, active: template.active } : defaultTemplate)
+    saveTemplate.reset()
+    setTemplateOpen(true)
+  }
+  const closeTemplate = () => { if (saveTemplate.isPending) return; setTemplateOpen(false); setEditingTemplate(null); setTemplateForm(defaultTemplate); saveTemplate.reset() }
+  const removePolicy = useMutation({ mutationFn: id => api.deleteAlertRule(id), onSuccess: () => { qc.invalidateQueries({ queryKey: ['rules'] }); setPendingRemoval(null); toast.success('Scoped policy removed.') }, onError: error => toast.error(error.response?.data?.message || 'Policy could not be removed.') })
+  const removeTemplate = useMutation({ mutationFn: id => api.deleteAlertTemplate(id), onSuccess: () => { qc.invalidateQueries({ queryKey: ['alert-templates'] }); setPendingRemoval(null); toast.success('Alert template deleted.') }, onError: error => toast.error(error.response?.data?.message || 'Template could not be deleted.') })
   const canManage = user?.role !== 'viewer'
+  const removing = removePolicy.isPending || removeTemplate.isPending
 
-  return <Page title="Alert policies & templates" subtitle="Inspect workspace defaults and create client- or account-scoped policies.">
+  return <Page title="Alert policies & templates" subtitle="Templates are reusable blueprints; scoped policies are the live rules that evaluate performance.">
     <AsyncStateNotice queries={[rules, templates]}/>
     <nav className="report-view-tabs" aria-label="Alert policy views"><button className={view === 'templates' ? 'active' : ''} onClick={() => setFilter('view', 'templates')}>Workspace templates</button><button className={view === 'policies' ? 'active' : ''} onClick={() => setFilter('view', 'policies')}>Scoped policies</button></nav>
 
-    {view === 'templates' && <><div className="ops-toolbar">{user?.role === 'admin' && <button className="ops-primary" onClick={() => setTemplateOpen(true)}><Plus size={14}/> Add template</button>}</div><div className="policy-template-grid">{(templates.data || []).map(template => <article key={template.id}><header><i className="rule-dot" data-severity={template.severity}/><div><h2>{template.name}</h2><p>{template.description || 'Workspace alert template'}</p></div><span>{template.active ? 'Active' : 'Paused'}</span></header><dl><div><dt>Metric</dt><dd>{metric(template.metric).label}</dd></div><div><dt>Condition</dt><dd>{operator(template.operator).label} {template.threshold ?? ''}</dd></div><div><dt>Severity</dt><dd>{template.severity}</dd></div><div><dt>Key</dt><dd className="mono">{template.key}</dd></div></dl></article>)}</div></>}
+    {view === 'templates' && <>
+      <div className="template-kind-note"><Info size={15}/><div><strong>Templates do not generate alerts by themselves.</strong><span>They provide reusable starting settings. Create a scoped policy to apply a template to a client or ad account.</span></div></div>
+      <div className="ops-toolbar">{user?.role === 'admin' && <button className="ops-primary" onClick={() => openTemplate()}><Plus size={14}/> Add template</button>}</div>
+      <div className="policy-template-grid">{(templates.data || []).map(template => <article key={template.id}>
+        <header><i className="rule-dot" data-severity={template.severity}/><div><h2>{template.name}</h2><p>{template.description || 'Reusable alert blueprint'}</p></div><span>{template.active ? 'Available' : 'Paused'}</span></header>
+        <dl><div><dt>Metric</dt><dd>{metric(template.metric).label}</dd></div><div><dt>Condition</dt><dd>{operator(template.operator).label} {template.threshold ?? ''}</dd></div><div><dt>Severity</dt><dd>{template.severity}</dd></div><div><dt>Key</dt><dd className="mono">{template.key}</dd></div></dl>
+        {user?.role === 'admin' && <footer className="template-card-actions"><button onClick={() => openTemplate(template)} aria-label={`Edit ${template.name}`}><Pencil size={13}/> Edit</button><button className="danger" onClick={() => setPendingRemoval({ type: 'template', item: template })} aria-label={`Delete ${template.name}`}><Trash2 size={13}/> Delete</button></footer>}
+      </article>)}</div>
+    </>}
 
-    {view === 'policies' && <><ScopeFilterBar clientId={clientId} accountId={accountId} onScopeChange={setScope} onAccountChange={value => setFilter('ad_account_id', value)}/><div className="ops-toolbar">{canManage && clientId && <button className="ops-primary" onClick={() => setPolicyOpen(value => !value)}><Plus size={14}/> Add policy</button>}</div>{policyOpen && canManage && <PolicyForm value={form} onChange={setForm} templates={templates.data || []} onSubmit={() => create.mutate()} pending={create.isPending}/>}<div className="ops-list">{(rules.data || []).map(rule => <div className="ops-list-row" key={rule.id}><i className="rule-dot" data-severity={rule.severity}/><div><strong>{rule.name}</strong><small>{metric(rule.metric).label} · {operator(rule.operator).label} {rule.threshold ?? ''} · {rule.ad_account?.name || rule.client?.name || 'Workspace-wide'}</small></div><span>{rule.enabled ? 'Active' : 'Paused'}</span>{canManage && rule.client_id && <button onClick={() => window.confirm('Delete this policy?') && remove.mutate(rule.id)}><Trash2 size={14}/></button>}</div>)}</div></>}
+    {view === 'policies' && <>
+      <ScopeFilterBar clientId={clientId} accountId={accountId} onScopeChange={setScope} onAccountChange={value => setFilter('ad_account_id', value)}/>
+      {clientId && <div className="template-kind-note policy-note"><Info size={15}/><div><strong>These are live policies available to the selected client.</strong><span>Client and account policies can be removed here. Workspace-wide policies are inherited and cannot be removed from a client.</span></div></div>}
+      <div className="ops-toolbar">{canManage && clientId && <button className="ops-primary" onClick={() => setPolicyOpen(value => !value)}><Plus size={14}/> Add policy</button>}</div>
+      {policyOpen && canManage && <PolicyForm value={form} onChange={setForm} templates={templates.data || []} onSubmit={() => create.mutate()} pending={create.isPending}/>}<div className="ops-list">{(rules.data || []).map(rule => <div className="ops-list-row" key={rule.id}><i className="rule-dot" data-severity={rule.severity}/><div><strong>{rule.name}</strong><small>{metric(rule.metric).label} · {operator(rule.operator).label} {rule.threshold ?? ''} · {rule.ad_account?.name || rule.client?.name || 'Workspace-wide'}</small></div><span>{rule.client_id ? (rule.enabled ? 'Active' : 'Paused') : 'Inherited'}</span>{canManage && rule.client_id && <button className="policy-remove-button" aria-label={`Remove ${rule.name}`} onClick={() => setPendingRemoval({ type: 'policy', item: rule })}><Trash2 size={13}/> Remove</button>}</div>)}</div>
+    </>}
 
-    <TemplateDialog open={templateOpen} value={templateForm} onChange={setTemplateForm} onClose={closeTemplate} onSubmit={() => createTemplate.mutate()} pending={createTemplate.isPending} error={createTemplate.error}/>
+    <TemplateDialog editing={Boolean(editingTemplate)} open={templateOpen} value={templateForm} onChange={setTemplateForm} onClose={closeTemplate} onSubmit={() => saveTemplate.mutate()} pending={saveTemplate.isPending} error={saveTemplate.error}/>
+    <ConfirmDialog open={Boolean(pendingRemoval)} title={pendingRemoval?.type === 'template' ? 'Delete alert template?' : 'Remove scoped policy?'} description={pendingRemoval?.type === 'template' ? `Existing policies created from “${pendingRemoval.item.name}” will continue running with their copied settings. The template will no longer be available for new policies.` : `Remove “${pendingRemoval?.item?.name}” from this client? Future evaluations will stop, while existing incident history remains available.`} confirmLabel={pendingRemoval?.type === 'template' ? 'Delete template' : 'Remove policy'} tone="danger" busy={removing} onClose={() => !removing && setPendingRemoval(null)} onConfirm={() => pendingRemoval?.type === 'template' ? removeTemplate.mutate(pendingRemoval.item.id) : removePolicy.mutate(pendingRemoval.item.id)}/>
   </Page>
 }
 
-function TemplateDialog({ open, value, onChange, onClose, onSubmit, pending, error }) {
+function TemplateDialog({ editing, open, value, onChange, onClose, onSubmit, pending, error }) {
   useEffect(() => {
     if (!open) return undefined
     const closeOnEscape = event => { if (event.key === 'Escape' && !pending) onClose() }
@@ -129,7 +154,7 @@ function TemplateDialog({ open, value, onChange, onClose, onSubmit, pending, err
   return <div className="alert-template-backdrop" onMouseDown={event => event.target === event.currentTarget && onClose()}>
     <form className="alert-template-dialog" role="dialog" aria-modal="true" aria-labelledby="template-dialog-title" onSubmit={event => { event.preventDefault(); if (valid) onSubmit() }}>
       <header>
-        <div className="alert-template-title"><span><BellRing size={17}/></span><div><p>Workspace template</p><h2 id="template-dialog-title">Create alert template</h2><small>Define reusable detection logic for scoped alert policies.</small></div></div>
+        <div className="alert-template-title"><span><BellRing size={17}/></span><div><p>Reusable blueprint</p><h2 id="template-dialog-title">{editing ? 'Edit alert template' : 'Create alert template'}</h2><small>Template changes affect future policy creation only.</small></div></div>
         <button type="button" aria-label="Close template dialog" disabled={pending} onClick={onClose}><X size={17}/></button>
       </header>
 
@@ -171,7 +196,7 @@ function TemplateDialog({ open, value, onChange, onClose, onSubmit, pending, err
       </div>
 
       {errorMessage && <p className="alert-template-error" role="alert">{errorMessage}</p>}
-      <footer><button type="button" disabled={pending} onClick={onClose}>Cancel</button><button className="ops-primary" disabled={!valid || pending}>{pending ? 'Creating…' : <><Check size={14}/> Create template</>}</button></footer>
+      <footer><button type="button" disabled={pending} onClick={onClose}>Cancel</button><button className="ops-primary" disabled={!valid || pending}>{pending ? 'Saving…' : <><Check size={14}/> {editing ? 'Save changes' : 'Create template'}</>}</button></footer>
     </form>
   </div>
 }

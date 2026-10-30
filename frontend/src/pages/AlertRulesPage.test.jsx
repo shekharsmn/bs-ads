@@ -13,6 +13,8 @@ vi.mock('../api/client', () => ({
     getAlertTemplates: vi.fn(),
     createAlertRule: vi.fn(),
     createAlertTemplate: vi.fn(),
+    updateAlertTemplate: vi.fn(),
+    deleteAlertTemplate: vi.fn(),
     deleteAlertRule: vi.fn(),
   },
 }))
@@ -25,6 +27,9 @@ beforeEach(() => {
   api.getAlertRules.mockResolvedValue({ data: [] })
   api.getAlertTemplates.mockResolvedValue({ data: [] })
   api.createAlertTemplate.mockResolvedValue({ data: { id: 1 } })
+  api.updateAlertTemplate.mockResolvedValue({ data: { id: 1 } })
+  api.deleteAlertTemplate.mockResolvedValue({})
+  api.deleteAlertRule.mockResolvedValue({})
 })
 
 function LocationProbe() {
@@ -84,4 +89,36 @@ it('creates a template from a guided modal with a plain-language preview', async
   }))
   expect(await screen.findByText('Alert template created.')).toBeInTheDocument()
   expect(screen.queryByRole('dialog', { name: 'Create alert template' })).not.toBeInTheDocument()
+})
+
+it('edits and deletes an existing template without changing existing policies', async () => {
+  const template = { id: 7, key: 'cpl-increase', name: 'CPL increased', description: 'Review lead efficiency.', metric: 'cpl', operator: 'percentage_increase', threshold: '25.000000', severity: 'warning', active: true }
+  api.getAlertTemplates.mockResolvedValue({ data: [template] })
+  renderPage()
+
+  fireEvent.click(await screen.findByRole('button', { name: 'Edit CPL increased' }))
+  expect(screen.getByRole('dialog', { name: 'Edit alert template' })).toBeInTheDocument()
+  fireEvent.change(screen.getByRole('spinbutton'), { target: { value: '30' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Save changes' }))
+
+  await waitFor(() => expect(api.updateAlertTemplate).toHaveBeenCalledWith(7, expect.objectContaining({ threshold: 30, name: 'CPL increased' })))
+  expect(await screen.findByText('Alert template updated.')).toBeInTheDocument()
+
+  fireEvent.click(await screen.findByRole('button', { name: 'Delete CPL increased' }))
+  expect(screen.getByRole('alertdialog', { name: 'Delete alert template?' })).toHaveTextContent('Existing policies created from “CPL increased” will continue running')
+  fireEvent.click(screen.getByRole('button', { name: 'Delete template' }))
+
+  await waitFor(() => expect(api.deleteAlertTemplate).toHaveBeenCalledWith(7))
+})
+
+it('removes a client-scoped policy from the selected client', async () => {
+  api.getAlertRules.mockResolvedValue({ data: [{ id: 11, client_id: 2, ad_account_id: null, name: 'CPL increased', metric: 'cpl', operator: 'percentage_increase', threshold: '25.000000', severity: 'warning', enabled: true, client: { id: 2, name: 'Acme' }, ad_account: null }] })
+  renderPage('/alert-rules?view=policies&client_id=2')
+
+  fireEvent.click(await screen.findByRole('button', { name: 'Remove CPL increased' }))
+  expect(screen.getByRole('alertdialog', { name: 'Remove scoped policy?' })).toHaveTextContent('Future evaluations will stop')
+  fireEvent.click(screen.getByRole('button', { name: 'Remove policy' }))
+
+  await waitFor(() => expect(api.deleteAlertRule).toHaveBeenCalledWith(11))
+  expect(await screen.findByText('Scoped policy removed.')).toBeInTheDocument()
 })
