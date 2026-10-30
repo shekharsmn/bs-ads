@@ -94,6 +94,22 @@ class QuickWinsApiTest extends TestCase
         $this->actingAs($marketer)->putJson('/api/alert-rules/'.$rule->id, ['client_id' => null, 'ad_account_id' => $account->id])->assertForbidden();
     }
 
+    public function test_client_policy_removal_cannot_delete_an_inherited_workspace_policy(): void
+    {
+        $admin = User::factory()->create(['role' => 'admin']);
+        $client = Client::create(['name' => 'Scoped', 'slug' => 'scoped-policy-removal']);
+        $workspacePolicy = AlertRule::create(['name' => 'Workspace CPL', 'metric' => 'cpl', 'operator' => 'above', 'threshold' => 100, 'severity' => 'warning']);
+        $clientPolicy = AlertRule::create(['client_id' => $client->id, 'name' => 'Client CPL', 'metric' => 'cpl', 'operator' => 'above', 'threshold' => 120, 'severity' => 'warning']);
+
+        $this->actingAs($admin)->deleteJson('/api/alert-rules/'.$workspacePolicy->id)
+            ->assertUnprocessable()
+            ->assertJsonPath('message', 'Workspace-wide policies cannot be deleted through client-scoped policy management.');
+        $this->assertDatabaseHas('alert_rules', ['id' => $workspacePolicy->id]);
+
+        $this->actingAs($admin)->deleteJson('/api/alert-rules/'.$clientPolicy->id)->assertNoContent();
+        $this->assertDatabaseMissing('alert_rules', ['id' => $clientPolicy->id]);
+    }
+
     public function test_public_reports_are_not_cacheable_and_are_rate_limited(): void
     {
         $owner = User::factory()->create();

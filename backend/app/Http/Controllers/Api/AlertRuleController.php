@@ -81,6 +81,11 @@ class AlertRuleController extends Controller
     public function destroy(Request $request, AlertRule $alertRule)
     {
         $this->authorizeExisting($request, $alertRule);
+        abort_if(
+            ! $alertRule->client_id && ! $alertRule->ad_account_id && ! $alertRule->campaign_id,
+            422,
+            'Workspace-wide policies cannot be deleted through client-scoped policy management.'
+        );
         $alertRule->delete();
 
         return response()->noContent();
