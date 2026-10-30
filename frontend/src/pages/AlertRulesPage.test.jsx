@@ -3,6 +3,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { MemoryRouter, useLocation } from 'react-router-dom'
 import { api } from '../api/client'
+import { ToastProvider } from '../context/ToastContext'
 import AlertRulesPage from './AlertRulesPage'
 
 vi.mock('../api/client', () => ({
@@ -23,6 +24,7 @@ beforeEach(() => {
   api.getClients.mockResolvedValue({ data: [{ id: 2, name: 'Acme', ad_accounts: [{ id: 9, name: 'Acme Meta' }] }] })
   api.getAlertRules.mockResolvedValue({ data: [] })
   api.getAlertTemplates.mockResolvedValue({ data: [] })
+  api.createAlertTemplate.mockResolvedValue({ data: { id: 1 } })
 })
 
 function LocationProbe() {
@@ -30,9 +32,13 @@ function LocationProbe() {
   return <output aria-label="Current query">{location.search}</output>
 }
 
-it('keeps the client selection while choosing an account for a scoped policy', async () => {
+function renderPage(initialEntry = '/alert-rules') {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
-  render(<QueryClientProvider client={queryClient}><MemoryRouter initialEntries={['/alert-rules?view=overrides']}><AlertRulesPage/><LocationProbe/></MemoryRouter></QueryClientProvider>)
+  return render(<QueryClientProvider client={queryClient}><ToastProvider><MemoryRouter initialEntries={[initialEntry]}><AlertRulesPage/><LocationProbe/></MemoryRouter></ToastProvider></QueryClientProvider>)
+}
+
+it('keeps the client selection while choosing an account for a scoped policy', async () => {
+  renderPage('/alert-rules?view=overrides')
 
   await screen.findByRole('option', { name: 'Acme' })
   const clientSelect = await screen.findByRole('combobox', { name: 'Filter by client' })
@@ -49,4 +55,33 @@ it('keeps the client selection while choosing an account for a scoped policy', a
     expect(screen.getByRole('status', { name: 'Current query' })).toHaveTextContent('client_id=2')
     expect(screen.getByRole('status', { name: 'Current query' })).toHaveTextContent('ad_account_id=9')
   })
+})
+
+it('creates a template from a guided modal with a plain-language preview', async () => {
+  renderPage()
+
+  fireEvent.click(await screen.findByRole('button', { name: 'Add template' }))
+  expect(screen.getByRole('dialog', { name: 'Create alert template' })).toBeInTheDocument()
+  expect(screen.getByText('How templates work')).toBeInTheDocument()
+  expect(screen.getByText('Percentage comparisons use equal, consecutive periods.')).toBeInTheDocument()
+
+  fireEvent.change(screen.getByPlaceholderText('e.g. Cost per lead increased'), { target: { value: 'Cost per lead increased' } })
+  expect(screen.getByPlaceholderText('cost-per-lead-increased')).toHaveValue('cost-per-lead-increased')
+  expect(screen.getByRole('spinbutton')).toHaveValue(25)
+  expect(screen.getByText('An alert opens when observed CPL is 25% higher than the preceding equal-length period.')).toBeInTheDocument()
+
+  fireEvent.click(screen.getByRole('button', { name: 'Create template' }))
+
+  await waitFor(() => expect(api.createAlertTemplate).toHaveBeenCalledWith({
+    key: 'cost-per-lead-increased',
+    name: 'Cost per lead increased',
+    description: '',
+    metric: 'cpl',
+    operator: 'percentage_increase',
+    threshold: 25,
+    severity: 'warning',
+    active: true,
+  }))
+  expect(await screen.findByText('Alert template created.')).toBeInTheDocument()
+  expect(screen.queryByRole('dialog', { name: 'Create alert template' })).not.toBeInTheDocument()
 })
