@@ -75,9 +75,10 @@ persistent storage, and check web health and fresh worker/scheduler heartbeats.
 Only the named services in the `bs-ads` Compose project are managed. Caddy,
 MySQL, Docker itself, PM2, and other applications are not restarted or configured.
 
-The script blocks overlapping runs and refuses to build tracked, uncommitted
-source changes. Logs, database backups, and the previous Compose/environment
-configuration are kept in `.deployment/releases/`. On cutover failure it attempts
+The script blocks overlapping runs and refuses to build tracked or untracked
+source changes outside the server-owned `.deployment/` directory. Logs, database
+backups, and the previous Compose/environment configuration are kept in
+`.deployment/releases/`. On cutover failure it attempts
 to restart the previous images and cached configuration. **Database migrations
 are not automatically reversed**; a failed/incompatible migration may require
 manual recovery using the saved database backup. It never uses `migrate:fresh`,

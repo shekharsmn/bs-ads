@@ -22,6 +22,13 @@ with open(os.environ['CALLS'], 'a') as log:
 if name == 'git':
     if 'rev-parse' in args:
         print('abcdef123456' if any(x.startswith('--short') for x in args) else 'a' * 40)
+    elif 'status' in args:
+        if os.environ.get('FAIL_STATUS'):
+            sys.exit(2)
+        if os.environ.get('DIRTY'):
+            print(' M tracked-source.php')
+        if os.environ.get('UNTRACKED'):
+            print('?? unexpected-source.php')
     elif 'diff' in args:
         if 'services/meta-ad-library-scraper' in args:
             sys.exit(int(os.environ.get('SCRAPER_CHANGED', '0')))
@@ -49,7 +56,8 @@ elif name == 'docker':
                 content = sys.stdin.read()
                 if 'Refusing to deploy' in content:
                     if os.environ.get('FAIL_ENV'): sys.exit(1)
-                    print('SCRAPER_SERVICE_TOKEN=fixture-token')
+                    if not os.environ.get('NO_SCRAPER_TOKEN'):
+                        print('SCRAPER_SERVICE_TOKEN=fixture-token')
     else:
         sys.exit('Unexpected Docker command')
 else:
@@ -127,6 +135,12 @@ class DeploymentTest(unittest.TestCase):
         self.assertTrue(self.matching('artisan', 'view:cache'))
         self.assertTrue(self.matching('artisan', 'up'))
         self.assertFalse(self.matching('git', 'pull'))
+        status = self.matching('git', 'status')[0]
+        self.assertIn(':(exclude).deployment', status)
+        self.assertEqual((self.state / 'scraper.env').read_text(), 'SCRAPER_SERVICE_TOKEN=fixture-token\n')
+        releases = list((self.state / 'releases').iterdir())
+        self.assertEqual(len(releases), 1)
+        self.assertFalse((releases[0] / 'scraper.next.env').exists())
         self.assert_isolated()
 
     def test_restart_refreshes_existing_images_without_build_or_migration(self):
@@ -187,6 +201,23 @@ class DeploymentTest(unittest.TestCase):
         self.assertNotEqual(self.run_script(DIRTY='1'), 0)
         self.assertFalse(self.matching('docker', 'buildx', 'build'))
         self.assertFalse(self.matching('artisan', 'down'))
+
+    def test_untracked_source_is_rejected_before_building(self):
+        self.assertNotEqual(self.run_script(UNTRACKED='1'), 0)
+        self.assertFalse(self.matching('docker', 'buildx', 'build'))
+        self.assertFalse(self.matching('artisan', 'down'))
+
+    def test_source_status_failure_is_rejected_before_building(self):
+        self.assertNotEqual(self.run_script(FAIL_STATUS='1'), 0)
+        self.assertFalse(self.matching('docker', 'buildx', 'build'))
+        self.assertFalse(self.matching('artisan', 'down'))
+
+    def test_removing_scraper_token_clears_stale_runtime_secret(self):
+        self.assertEqual(self.run_script('restart', NO_SCRAPER_TOKEN='1'), 0, self.output)
+        self.assertEqual((self.state / 'scraper.env').read_text(), '')
+        releases = list((self.state / 'releases').iterdir())
+        self.assertEqual(len(releases), 1)
+        self.assertFalse((releases[0] / 'scraper.next.env').exists())
 
     def test_concurrent_run_is_rejected(self):
         import fcntl

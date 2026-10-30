@@ -113,11 +113,16 @@ main() {
     trap 'exit 130' INT
     trap 'exit 143' TERM
 
-    local update_scraper=0 previous=''
+    local update_scraper=0 previous='' source_status=''
     if [[ "$MODE" == deploy ]]; then
         command -v mysqldump >/dev/null || die 'Missing command: mysqldump'
-        git -C "$ROOT" -c core.fileMode=false diff --quiet
-        git -C "$ROOT" -c core.fileMode=false diff --cached --quiet
+        # .deployment is server-owned runtime state; every other tracked or
+        # untracked file can affect a Docker build and must match the revision.
+        if ! source_status="$(git -C "$ROOT" -c core.fileMode=false status --porcelain --untracked-files=normal -- . ':(exclude).deployment')"; then
+            die 'Unable to verify the deployment source tree.'
+        fi
+        [[ -z "$source_status" ]] || \
+            die 'Refusing to deploy tracked or untracked source changes.'
         for file in .dockerignore .deployment/Dockerfile.php .deployment/Dockerfile.web; do
             [[ -f "$ROOT/$file" ]] || die "Missing build file: $file"
         done
@@ -179,7 +184,10 @@ $app->make('encrypter'); // Reject missing or invalid keys before maintenance mo
 $token = config('services.ad_library.token');
 if ($token) echo 'SCRAPER_SERVICE_TOKEN='.$token.PHP_EOL;
 PHP
-    if [[ -s "$RELEASE/scraper.next.env" ]]; then cp "$RELEASE/scraper.next.env" "$STATE/scraper.env"; fi
+    # Install even an empty file so removing the token cannot leave a stale
+    # credential active. Do not retain the newly generated secret in releases.
+    install -o root -g root -m 600 "$RELEASE/scraper.next.env" "$STATE/scraper.env"
+    rm -f "$RELEASE/scraper.next.env"
 
     step 'Pausing only BS Ads for cutover'
     MAINTENANCE=1
