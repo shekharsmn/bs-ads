@@ -27,7 +27,7 @@ class AlertController extends Controller
             ->when($data['severity'] ?? null, fn ($q, $v) => $q->where('severity', $v))
             ->when($data['assigned_to'] ?? null, fn ($q, $v) => $q->where('assigned_to', $v))
             ->when($data['q'] ?? null, fn ($q, $v) => $q->where(fn ($nested) => $nested->where('title', 'like', "%{$v}%")->orWhere('summary', 'like', "%{$v}%")))
-            ->with(['client:id,name,slug', 'adAccount:id,name,platform', 'campaign:id,name', 'assignee:id,name'])
+            ->with(['client:id,name,slug', 'adAccount:id,name,platform,currency,timezone', 'campaign:id,name', 'adGroup:id,name,campaign_id', 'ad:id,name,ad_group_id', 'assignee:id,name'])
             ->orderByRaw("CASE severity WHEN 'critical' THEN 1 WHEN 'warning' THEN 2 ELSE 3 END")->orderByDesc('triggered_at')->paginate($data['per_page'] ?? 50);
     }
 
@@ -35,7 +35,7 @@ class AlertController extends Controller
     {
         ClientAccess::authorize($request->user(), Client::findOrFail($alert->client_id));
 
-        return $alert->load(['client:id,name', 'rule', 'adAccount', 'campaign', 'assignee:id,name,email', 'events.actor:id,name']);
+        return $alert->load(['client:id,name,slug', 'rule', 'adAccount', 'campaign', 'adGroup', 'ad', 'assignee:id,name,email', 'events.actor:id,name']);
     }
 
     public function action(Request $request, AlertIncident $alert, string $action, IncidentService $incidents)

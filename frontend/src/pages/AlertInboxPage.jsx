@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
-import { Check, ChevronLeft, ChevronRight, Clock, MessageSquare, Search, UserCheck, X } from 'lucide-react'
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
+import { Check, ChevronLeft, ChevronRight, Clock, ExternalLink, MessageSquare, Search, UserCheck, X } from 'lucide-react'
 import { api } from '../api/client'
 import { Page } from './ClientsPage'
 import { useAuth } from '../context/AuthContext'
@@ -9,6 +9,37 @@ import { useToast } from '../context/ToastContext'
 import ConfirmDialog from '../components/ui/ConfirmDialog'
 import { AsyncStateNotice } from '../components/ui/AsyncState'
 import ScopeFilterBar from '../components/ScopeFilterBar'
+import { accountPerformancePath, adGroupPerformancePath, adPerformancePath, campaignPerformancePath } from '../lib/performanceRoutes'
+
+function formatMoney(value, currency = 'USD') {
+  if (value === null || value === undefined) return '—'
+  try { return new Intl.NumberFormat(undefined, { style: 'currency', currency, maximumFractionDigits: 2 }).format(Number(value)) } catch { return `${currency} ${Number(value).toFixed(2)}` }
+}
+
+function formatPeriod(start, end, timezone) {
+  if (!start || !end) return '—'
+  const options = { dateStyle: 'medium', timeStyle: 'short', ...(timezone ? { timeZone: timezone } : {}) }
+  const formatter = new Intl.DateTimeFormat(undefined, options)
+  return `${formatter.format(new Date(start))} – ${formatter.format(new Date(end))}`
+}
+
+function RelatedLinks({ alert }) {
+  const clientId = alert.client?.id || alert.client_id
+  const accountId = alert.ad_account?.id || alert.ad_account_id
+  const campaignId = alert.campaign?.id || alert.campaign_id
+  const groupId = alert.ad_group?.id || alert.ad_group_id
+  const adId = alert.ad?.id || alert.ad_id
+  const links = [
+    clientId && { label: 'Client', name: alert.client?.name, to: `/clients/${clientId}` },
+    clientId && accountId && { label: 'Ad account', name: alert.ad_account?.name, to: accountPerformancePath(clientId, accountId) },
+    clientId && accountId && campaignId && { label: 'Campaign', name: alert.campaign?.name, to: campaignPerformancePath(clientId, accountId, campaignId) },
+    clientId && accountId && campaignId && groupId && { label: alert.ad_account?.platform === 'meta' ? 'Ad set' : 'Ad group', name: alert.ad_group?.name, to: adGroupPerformancePath(clientId, accountId, campaignId, groupId) },
+    clientId && accountId && campaignId && groupId && adId && { label: 'Ad', name: alert.ad?.name, to: adPerformancePath(clientId, accountId, campaignId, groupId, adId) },
+  ].filter(Boolean)
+  if (!links.length) return null
+
+  return <nav className="alert-related" aria-label="Related records">{links.map(link => <Link key={link.label} to={link.to}><span>{link.label}</span><strong>{link.name || `Open ${link.label.toLowerCase()}`}</strong><ExternalLink size={12}/></Link>)}</nav>
+}
 
 export default function AlertInboxPage() {
   const { id } = useParams()
@@ -58,7 +89,7 @@ export default function AlertInboxPage() {
       {!rows.length && <div className="alert-empty">No incidents match this view.</div>}
       {alerts.data?.last_page > 1 && <nav className="alert-pagination"><button disabled={page <= 1} onClick={() => setFilter('page', String(page - 1))}><ChevronLeft size={13}/></button><span>{page} / {alerts.data.last_page}</span><button disabled={page >= alerts.data.last_page} onClick={() => setFilter('page', String(page + 1))}><ChevronRight size={13}/></button></nav>}
     </section>
-    <aside className="ops-inspector">{id && <button className="alert-detail-back" onClick={() => navigate(`/alerts?${search}`)}><ChevronLeft size={13}/> Back to inbox</button>}{detail.data ? <><p className="ops-eyebrow">{detail.data.severity} · {detail.data.status}</p><h2>{detail.data.title}</h2><p>{detail.data.summary}</p><dl><dt>Observed</dt><dd>{detail.data.observed_value ?? '—'}</dd><dt>Baseline</dt><dd>{detail.data.baseline_value ?? '—'}</dd><dt>Threshold</dt><dd>{detail.data.threshold_value ?? '—'}</dd></dl>{operate && <div className="ops-actions"><button onClick={() => action.mutate({ action: 'acknowledge', data: {} })}><Check size={14}/> Acknowledge</button><button onClick={() => setNoteOpen(true)}><MessageSquare size={14}/> Note</button><button onClick={() => action.mutate({ action: 'snooze', data: { snoozed_until: new Date(Date.now() + 6 * 3600000).toISOString() } })}><Clock size={14}/> Snooze 6h</button><button onClick={() => action.mutate({ action: 'resolve', data: { note: 'Manually resolved' } })}><UserCheck size={14}/> Resolve</button></div>}<h3>Activity</h3><ol className="ops-timeline">{detail.data.events?.map(event => <li key={event.id}><strong>{event.type}</strong><span>{event.actor?.name || 'System'} · {new Date(event.created_at).toLocaleString()}</span>{event.note && <p>{event.note}</p>}</li>)}</ol></> : <div className="alert-empty">Select an incident to inspect its history.</div>}</aside></div>
+    <aside className="ops-inspector">{id && <button className="alert-detail-back" onClick={() => navigate(`/alerts?${search}`)}><ChevronLeft size={13}/> Back to inbox</button>}{detail.data ? <><p className="ops-eyebrow">{detail.data.severity} · {detail.data.status}</p><h2>{detail.data.title}</h2><p>{detail.data.summary}</p><RelatedLinks alert={detail.data}/><dl className="alert-metric-grid"><div><dt>Observed {detail.data.rule?.metric || 'value'}</dt><dd>{detail.data.observed_value ?? '—'}</dd></div><div><dt>Baseline {detail.data.rule?.metric || 'value'}</dt><dd>{detail.data.baseline_value ?? '—'}</dd></div><div><dt>Threshold</dt><dd>{detail.data.threshold_value ?? '—'}</dd></div><div><dt>Observed spend</dt><dd>{formatMoney(detail.data.observed_spend, detail.data.currency || detail.data.ad_account?.currency)}</dd></div><div><dt>Baseline spend</dt><dd>{formatMoney(detail.data.baseline_spend, detail.data.currency || detail.data.ad_account?.currency)}</dd></div></dl><section className="alert-periods"><h3>Measurement windows</h3><dl><div><dt>Observed</dt><dd>{formatPeriod(detail.data.observed_period_start, detail.data.observed_period_end, detail.data.ad_account?.timezone)}</dd></div><div><dt>Baseline</dt><dd>{formatPeriod(detail.data.baseline_period_start, detail.data.baseline_period_end, detail.data.ad_account?.timezone)}</dd></div></dl></section>{operate && <div className="ops-actions"><button onClick={() => action.mutate({ action: 'acknowledge', data: {} })}><Check size={14}/> Acknowledge</button><button onClick={() => setNoteOpen(true)}><MessageSquare size={14}/> Note</button><button onClick={() => action.mutate({ action: 'snooze', data: { snoozed_until: new Date(Date.now() + 6 * 3600000).toISOString() } })}><Clock size={14}/> Snooze 6h</button><button onClick={() => action.mutate({ action: 'resolve', data: { note: 'Manually resolved' } })}><UserCheck size={14}/> Resolve</button></div>}<h3>Activity</h3><ol className="ops-timeline">{detail.data.events?.map(event => <li key={event.id}><strong>{event.type}</strong><span>{event.actor?.name || 'System'} · {new Date(event.created_at).toLocaleString()}</span>{event.note && <p>{event.note}</p>}</li>)}</ol></> : <div className="alert-empty">Select an incident to inspect its history.</div>}</aside></div>
     <ConfirmDialog open={noteOpen} title="Add incident note" description={<textarea className="dialog-textarea" autoFocus rows="4" value={note} onChange={event => setNote(event.target.value)} placeholder="Add context for the next person…"/>} confirmLabel="Add note" tone="primary" busy={action.isPending} onClose={() => setNoteOpen(false)} onConfirm={() => { if (!note.trim()) return; action.mutate({ action: 'note', data: { note: note.trim() } }); setNote(''); setNoteOpen(false) }}/>
   </Page>
 }

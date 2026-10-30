@@ -22,25 +22,36 @@ class IncidentService
             $incident = AlertIncident::query()->where('alert_rule_id', $rule->id)->where('ad_account_id', $account->id)
                 ->when($campaign, fn ($q) => $q->where('campaign_id', $campaign->id), fn ($q) => $q->whereNull('campaign_id'))
                 ->whereIn('status', ['open', 'acknowledged', 'snoozed'])->lockForUpdate()->first();
+            $measurement = [
+                'summary' => $result['reason'],
+                'currency' => $result['currency'] ?? $account->currency,
+                'observed_spend' => $result['observed_spend'] ?? null,
+                'baseline_spend' => $result['baseline_spend'] ?? null,
+                'observed_value' => $result['observed'],
+                'baseline_value' => $result['baseline'],
+                'threshold_value' => $result['threshold'],
+                'observed_period_start' => $result['observed_period_start'] ?? null,
+                'observed_period_end' => $result['observed_period_end'] ?? null,
+                'baseline_period_start' => $result['baseline_period_start'] ?? null,
+                'baseline_period_end' => $result['baseline_period_end'] ?? null,
+            ];
             if (! $incident) {
-                $incident = AlertIncident::create([
+                $incident = AlertIncident::create(array_merge([
                 'incident_key' => hash('sha256', $rule->id.'|'.$scopeKey.'|'.Str::uuid()),
                 'client_id' => $account->client_id,
                 'alert_rule_id' => $rule->id,
                 'ad_account_id' => $account->id,
                 'campaign_id' => $campaign?->id,
+                'ad_group_id' => $result['ad_group_id'] ?? null,
+                'ad_id' => $result['ad_id'] ?? null,
                 'status' => 'open',
                 'severity' => $rule->severity,
                 'title' => $rule->name,
-                'summary' => $result['reason'],
-                'observed_value' => $result['observed'],
-                'baseline_value' => $result['baseline'],
-                'threshold_value' => $result['threshold'],
                 'triggered_at' => now(),
-                ]);
+                ], $measurement));
                 AlertEvent::create(['alert_incident_id' => $incident->id, 'type' => 'triggered', 'metadata' => $result]);
             } else {
-                $incident->update(['observed_value' => $result['observed'], 'baseline_value' => $result['baseline'], 'summary' => $result['reason']]);
+                $incident->update($measurement);
             }
             return $incident;
         });

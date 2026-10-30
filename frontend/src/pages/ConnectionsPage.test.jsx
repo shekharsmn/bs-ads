@@ -1,5 +1,6 @@
 import { fireEvent, render, within } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
+import { buildAccountAssignmentPayload, hasCompleteAccountAssignments } from '../lib/accountAssignments'
 import { discoveryErrorMessage } from '../lib/connectionErrors'
 import { ConnectionSetupGuide } from './ConnectionsPage'
 
@@ -47,5 +48,31 @@ describe('account discovery errors', () => {
     expect(discoveryErrorMessage({ code: 'ECONNABORTED' })).toBe('Account discovery took too long. Please try again.')
     expect(discoveryErrorMessage({ request: {} })).toBe('Could not reach the server during account discovery. Please try again.')
     expect(discoveryErrorMessage({ response: { data: { message: 'Google Ads rejected the account.' } } })).toBe('Google Ads rejected the account.')
+  })
+})
+
+describe('discovered account assignments', () => {
+  const accounts = [{ external_id: '123', name: 'Acme Search', manager_external_id: '999', currency: null, timezone: null }]
+  const clients = [{ id: 17, name: 'Acme', currency: 'AED', timezone: 'Asia/Dubai' }]
+
+  it('does not treat an empty agency client selection as the first client', () => {
+    const selection = { 123: { selected: true, client_id: '' } }
+
+    expect(hasCompleteAccountAssignments(selection, clients)).toBe(false)
+    expect(() => buildAccountAssignmentPayload(accounts, selection, clients)).toThrow('Choose a client for Acme Search')
+  })
+
+  it('resolves the selected client before building the API payload', () => {
+    const selection = { 123: { selected: true, client_id: '17' } }
+
+    expect(hasCompleteAccountAssignments(selection, clients)).toBe(true)
+    expect(buildAccountAssignmentPayload(accounts, selection, clients)).toEqual([{
+      client_id: 17,
+      external_id: '123',
+      manager_external_id: '999',
+      name: 'Acme Search',
+      currency: 'AED',
+      timezone: 'Asia/Dubai',
+    }])
   })
 })

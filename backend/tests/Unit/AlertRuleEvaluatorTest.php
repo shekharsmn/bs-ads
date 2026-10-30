@@ -33,4 +33,18 @@ class AlertRuleEvaluatorTest extends TestCase
     {
         $this->assertNull(\App\Services\MetricCalculator::derived(['spend' => 10, 'clicks' => 0])['cpc']);
     }
+
+    public function test_evaluation_preserves_observed_and_baseline_spend(): void
+    {
+        $result = (new AlertRuleEvaluator)->evaluate(
+            'no_conversions_with_spend',
+            null,
+            ['spend' => 250, 'conversions' => 0],
+            ['spend' => 175, 'conversions' => 3],
+            ['metric' => 'conversions', 'minimum_spend' => 100],
+        );
+
+        $this->assertSame(250.0, $result['observed_spend']);
+        $this->assertSame(175.0, $result['baseline_spend']);
+    }
 }

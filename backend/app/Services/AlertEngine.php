@@ -45,6 +45,13 @@ class AlertEngine
                 'freshness_hours' => $latest ? now()->diffInHours($latest) : INF,
                 'connection_error' => $account->connection->status->value === 'error',
             ]);
+            $result = array_merge($result, [
+                'currency' => $account->currency,
+                'observed_period_start' => $currentStart->copy()->startOfDay()->utc()->toIso8601String(),
+                'observed_period_end' => $end->copy()->endOfDay()->utc()->toIso8601String(),
+                'baseline_period_start' => $end->copy()->subDays(($days * 2) - 1)->startOfDay()->utc()->toIso8601String(),
+                'baseline_period_end' => $end->copy()->subDays($days)->endOfDay()->utc()->toIso8601String(),
+            ]);
             $this->applyResult($rule, $account, $campaign, $result);
         }
     }

@@ -77,6 +77,14 @@ class AlertRuleEvaluator
         $minimumImpressions = (int) ($context['minimum_impressions'] ?? 0);
         if ($minimumImpressions > 0 && (int) ($current['impressions'] ?? 0) < $minimumImpressions) $breached = false;
 
-        return ['breached' => $breached, 'observed' => $observed, 'baseline' => $base, 'threshold' => $threshold, 'reason' => $reason];
+        return [
+            'breached' => $breached,
+            'observed' => $observed,
+            'baseline' => $base,
+            'threshold' => $threshold,
+            'observed_spend' => $spend,
+            'baseline_spend' => (float) ($baseline['spend'] ?? 0),
+            'reason' => $reason,
+        ];
     }
 }

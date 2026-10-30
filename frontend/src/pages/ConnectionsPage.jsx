@@ -7,6 +7,7 @@ import ConfirmDialog from '../components/ui/ConfirmDialog'
 import { AsyncStateNotice } from '../components/ui/AsyncState'
 import ScopeFilterBar from '../components/ScopeFilterBar'
 import { useAuth } from '../context/AuthContext'
+import { buildAccountAssignmentPayload, hasCompleteAccountAssignments } from '../lib/accountAssignments'
 import { discoveryErrorMessage } from '../lib/connectionErrors'
 import { Page } from './ClientsPage'
 
@@ -120,25 +121,14 @@ export default function ConnectionsPage() {
   const assign = useMutation({
     mutationFn: async connection => {
       const accounts = discovered[connection.id] || []
-      const payload = accounts.filter(account => selection[account.external_id]?.selected).map(account => {
-        const clientId = Number(selection[account.external_id].client_id)
-        const client = clients.data?.find(item => item.id === clientId)
-        return {
-          client_id: clientId,
-          external_id: account.external_id,
-          manager_external_id: account.manager_external_id || null,
-          name: account.name,
-          currency: account.currency || client?.currency,
-          timezone: account.timezone || client?.timezone,
-        }
-      })
+      const payload = buildAccountAssignmentPayload(accounts, selection, clientList)
       return api.assignDiscoveredAccounts(connection.id, payload)
     },
     onSuccess: async (_, connection) => {
       await qc.invalidateQueries({ queryKey: ['connections'] })
       await discover(connection)
     },
-    onError: requestError => setError(requestError.response?.data?.message || 'Could not assign the selected accounts.'),
+    onError: requestError => setError(requestError.response?.data?.message || requestError.message || 'Could not assign the selected accounts.'),
   })
 
   const remove = useMutation({
@@ -205,6 +195,7 @@ export default function ConnectionsPage() {
   }
 
   const selectedCount = Object.values(selection).filter(item => item.selected).length
+  const assignmentsComplete = hasCompleteAccountAssignments(selection, clientList)
 
   return <Page title="Ad platforms" subtitle="Connect once, discover accessible ad accounts, then assign them to clients.">
     <AsyncStateNotice queries={[clients, connections]}/>
@@ -292,14 +283,14 @@ export default function ConnectionsPage() {
         {connection.ad_accounts?.length > 0 && <div className="assigned-strip">{connection.ad_accounts.map(account => <span key={account.id}><i data-platform={connection.platform}/>{account.name}<small>{account.client?.name}</small></span>)}</div>}
 
         {isOpen && accounts && <div className="account-picker">
-          <div className="account-picker-head"><div><strong>Accessible accounts</strong><small>{connection.platform === 'google' ? 'Manager accounts organize the hierarchy; select client accounts to import.' : 'Select the ad accounts to import.'}</small></div><button className="ops-primary" disabled={!hasClients || !selectedCount || assign.isPending} onClick={() => assign.mutate(connection)}><Check size={14}/> Assign {selectedCount || ''}</button></div>
+          <div className="account-picker-head"><div><strong>Accessible accounts</strong><small>{connection.platform === 'google' ? 'Manager accounts organize the hierarchy; select client accounts to import.' : 'Select the ad accounts to import.'}</small></div><button className="ops-primary" disabled={!hasClients || !assignmentsComplete || assign.isPending} onClick={() => assign.mutate(connection)}><Check size={14}/> Assign {selectedCount || ''}</button></div>
           {!hasClients && <div className="account-picker-empty">Create a client before assigning discovered ad accounts.</div>}
           <div className="account-picker-list">{accounts.map(account => account.is_manager
             ? <div className="manager-account" key={account.external_id} style={{ paddingLeft: `${12 + account.level * 18}px` }}><span>Manager</span><strong>{account.name}</strong><small>{account.external_id}</small></div>
             : <label className="discovered-account" key={account.external_id} style={{ paddingLeft: `${12 + account.level * 18}px` }}>
               <input type="checkbox" disabled={!hasClients} checked={Boolean(selection[account.external_id]?.selected)} onChange={event => updateSelection(account.external_id, { selected: event.target.checked })}/>
               <span><strong>{account.name}</strong><small>{account.external_id} · {account.currency || 'uses client currency'} · {account.timezone || 'uses client timezone'}{account.assigned_client ? ` · assigned to ${account.assigned_client.name}` : ''}</small></span>
-              <select disabled={!hasClients || connection.scope === 'client'} aria-label={`Client for ${account.name}`} value={selection[account.external_id]?.client_id || ''} onChange={event => updateSelection(account.external_id, { client_id: event.target.value })}>{assignableClients.map(client => <option key={client.id} value={client.id}>{client.name}</option>)}</select>
+              <select disabled={!hasClients || connection.scope === 'client'} aria-label={`Client for ${account.name}`} value={selection[account.external_id]?.client_id || ''} onChange={event => updateSelection(account.external_id, { client_id: event.target.value })}><option value="">Choose client</option>{assignableClients.map(client => <option key={client.id} value={client.id}>{client.name}</option>)}</select>
             </label>
           )}</div>
         </div>}
