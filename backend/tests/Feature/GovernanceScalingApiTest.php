@@ -109,6 +109,21 @@ class GovernanceScalingApiTest extends TestCase
         $this->assertNotSame('ops@example.com', \DB::table('notification_destinations')->where('id', $response->json('id'))->value('configuration'));
     }
 
+    public function test_destination_can_be_created_without_global_event_subscriptions(): void
+    {
+        $marketer = User::factory()->create(['role' => 'marketer']);
+        $client = Client::create(['name' => 'Acme', 'slug' => 'acme']);
+        $client->users()->attach($marketer);
+
+        $response = $this->actingAs($marketer)->postJson('/api/notification-destinations', [
+            'client_id' => $client->id, 'name' => 'Performance Pulse chat', 'channel' => 'google_chat',
+            'configuration' => ['url' => 'https://chat.googleapis.com/v1/spaces/test/messages'], 'events' => [],
+        ])->assertCreated();
+
+        $this->assertDatabaseHas('notification_destinations', ['id' => $response->json('id'), 'client_id' => $client->id]);
+        $this->assertDatabaseMissing('notification_subscriptions', ['notification_destination_id' => $response->json('id')]);
+    }
+
     public function test_generic_webhooks_reject_private_network_targets(): void
     {
         $client = Client::create(['name' => 'Acme', 'slug' => 'acme']);

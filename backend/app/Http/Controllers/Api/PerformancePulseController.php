@@ -149,6 +149,8 @@ class PerformancePulseController extends Controller
             'local_time' => $required.'required|date_format:H:i',
             'include_campaign_breakdown' => 'sometimes|boolean', 'enabled' => 'sometimes|boolean',
             'destination_ids' => 'sometimes|array|min:1', 'destination_ids.*' => 'integer|distinct|exists:notification_destinations,id',
+        ], [
+            'destination_ids.min' => 'Choose at least one destination or add a new one.',
         ]);
     }
 

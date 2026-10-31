@@ -9,7 +9,7 @@ import ScheduledReportsPage from './ScheduledReportsPage'
 vi.mock('../api/client', () => ({ api: {
   getClients: vi.fn(), getReportTemplates: vi.fn(), getReportSchedules: vi.fn(), getReports: vi.fn(),
   getPerformancePulses: vi.fn(), getPerformancePulseOptions: vi.fn(), createPerformancePulse: vi.fn(),
-  updatePerformancePulse: vi.fn(), deletePerformancePulse: vi.fn(), sendPerformancePulse: vi.fn(),
+  updatePerformancePulse: vi.fn(), deletePerformancePulse: vi.fn(), sendPerformancePulse: vi.fn(), createNotificationDestination: vi.fn(),
 } }))
 vi.mock('../context/AuthContext', () => ({ useAuth: () => ({ user: { id: 1, role: 'marketer' } }) }))
 
@@ -28,6 +28,7 @@ describe('Performance Pulse reports tab', () => {
     api.getPerformancePulses.mockResolvedValue({ data: [] })
     api.getPerformancePulseOptions.mockResolvedValue({ data: { destinations: [{ id: 4, name: 'Morning Chat', channel: 'google_chat', enabled: true }], campaigns: [{ id: 12, name: 'Lead Search' }], legacy_google_chat_configured: false } })
     api.createPerformancePulse.mockResolvedValue({ data: { id: 20 } })
+    api.createNotificationDestination.mockResolvedValue({ data: { id: 8, name: 'Pulse Slack', channel: 'slack', enabled: true } })
   })
 
   it('creates a disabled-by-default account pulse with two periods and the default chat destination', async () => {
@@ -50,5 +51,35 @@ describe('Performance Pulse reports tab', () => {
     const scope = await screen.findByLabelText('Scope')
     fireEvent.change(scope, { target: { value: '12' } })
     expect(screen.queryByText('Include campaign breakdown after account totals')).not.toBeInTheDocument()
+  })
+
+  it('creates and selects a destination without leaving Performance Pulse', async () => {
+    api.getPerformancePulseOptions.mockResolvedValue({ data: { destinations: [], campaigns: [], legacy_google_chat_configured: false } })
+    renderPage()
+    fireEvent.click(await screen.findByRole('button', { name: 'Add destination' }))
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Pulse Slack' } })
+    fireEvent.change(screen.getByLabelText('Channel'), { target: { value: 'slack' } })
+    fireEvent.change(screen.getByLabelText('HTTPS webhook URL'), { target: { value: 'https://hooks.slack.com/services/test' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Create and select' }))
+
+    await waitFor(() => expect(api.createNotificationDestination).toHaveBeenCalledWith(expect.objectContaining({
+      client_id: 7, name: 'Pulse Slack', channel: 'slack', events: [], enabled: true,
+      configuration: { url: 'https://hooks.slack.com/services/test' },
+    })))
+    expect(await screen.findByRole('checkbox', { name: /Pulse Slack/ })).toBeChecked()
+    fireEvent.click(screen.getByRole('button', { name: 'Create Performance Pulse' }))
+    await waitFor(() => expect(api.createPerformancePulse).toHaveBeenCalledWith(expect.objectContaining({ destination_ids: [8] })))
+  })
+
+  it('lets the backend create the legacy client chat destination', async () => {
+    api.getPerformancePulseOptions.mockResolvedValue({ data: { destinations: [], campaigns: [], legacy_google_chat_configured: true } })
+    renderPage()
+    expect(await screen.findByText('The saved client Google Chat webhook will become the default destination when you save.')).toBeInTheDocument()
+    const createButton = screen.getByRole('button', { name: 'Create Performance Pulse' })
+    await waitFor(() => expect(createButton).not.toBeDisabled())
+    fireEvent.click(createButton)
+
+    await waitFor(() => expect(api.createPerformancePulse).toHaveBeenCalled())
+    expect(api.createPerformancePulse.mock.calls.at(-1)[0]).not.toHaveProperty('destination_ids')
   })
 })

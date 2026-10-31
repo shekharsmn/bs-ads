@@ -92,7 +92,7 @@ class NotificationDestinationController extends Controller
             'name' => $prefix.'required|string|max:120', 'channel' => $prefix.'required|in:'.implode(',', self::CHANNELS),
             'configuration' => $partial ? 'sometimes|array' : 'required|array',
             'configuration.url' => 'nullable|url|starts_with:https://', 'configuration.address' => 'nullable|email', 'configuration.secret' => 'nullable|string|max:255',
-            'events' => $partial ? 'sometimes|array' : 'required|array|min:1', 'events.*' => 'required|in:'.implode(',', self::EVENTS), 'enabled' => 'sometimes|boolean',
+            'events' => $partial ? 'sometimes|array' : 'required|array', 'events.*' => 'required|in:'.implode(',', self::EVENTS), 'enabled' => 'sometimes|boolean',
         ]);
     }
 }

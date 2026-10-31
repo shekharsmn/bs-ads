@@ -63,15 +63,18 @@ function TemplateSelect({ templates, value, onChange }) { return <select classNa
 function TemplateEditor({ value, onChange, onSave, saving }) { return <section className="report-template-editor"><div className="report-template-fields"><label><span>Name</span><input value={value.name} onChange={event => onChange({ ...value, name: event.target.value })}/></label><label><span>Report brand</span><input value={value.brand_name} onChange={event => onChange({ ...value, brand_name: event.target.value })}/></label><label><span>Accent</span><input type="color" value={value.brand_color} onChange={event => onChange({ ...value, brand_color: event.target.value })}/></label><label><span>Logo URL</span><input type="url" value={value.logo_url} onChange={event => onChange({ ...value, logo_url: event.target.value })}/></label></div><div className="report-template-sections">{['summary', 'trends', 'campaigns', 'alerts'].map(section => <label key={section}><input type="checkbox" checked={value.sections.includes(section)} onChange={event => onChange({ ...value, sections: event.target.checked ? [...value.sections, section] : value.sections.filter(item => item !== section) })}/><span>{section}</span></label>)}</div><button className="ops-primary" disabled={!value.name.trim() || !value.sections.length || saving} onClick={onSave}>{saving ? 'Saving…' : 'Save template'}</button></section> }
 
 const emptyPulse = { campaign_id: '', periods: ['yesterday', 'month_to_date'], local_time: '09:00', include_campaign_breakdown: false, destination_ids: null, enabled: false }
+const emptyPulseDestination = { name: '', channel: 'google_chat', endpoint: '', secret: '' }
 
 function PerformancePulsePanel({ clientId, accountId, canManage }) {
   const qc = useQueryClient(); const toast = useToast(); const [editingId, setEditingId] = useState(null); const [form, setForm] = useState(emptyPulse)
+  const [showDestinationForm, setShowDestinationForm] = useState(false); const [destinationForm, setDestinationForm] = useState(emptyPulseDestination)
   const scope = { client_id: clientId || undefined, ad_account_id: accountId || undefined }
   const pulses = useQuery({ queryKey: ['performance-pulses', scope], queryFn: () => api.getPerformancePulses(scope).then(response => response.data), refetchInterval: query => (query.state.data || []).some(pulse => pulse.runs?.some(run => ['pending', 'generating', 'queued'].includes(run.status))) ? 3000 : false })
   const options = useQuery({ queryKey: ['performance-pulse-options', clientId, accountId], queryFn: () => api.getPerformancePulseOptions(scope).then(response => response.data), enabled: Boolean(clientId) })
   const refresh = () => qc.invalidateQueries({ queryKey: ['performance-pulses'] })
   const preferredDestination = options.data?.destinations?.find(item => item.channel === 'google_chat') || options.data?.destinations?.[0]
   const destinationIds = form.destination_ids ?? (preferredDestination ? [preferredDestination.id] : [])
+  const canUseLegacyDefault = !options.data?.destinations?.length && options.data?.legacy_google_chat_configured
   const save = useMutation({
     mutationFn: payload => editingId ? api.updatePerformancePulse(editingId, payload) : api.createPerformancePulse(payload),
     onSuccess: () => { refresh(); setEditingId(null); setForm(emptyPulse); toast.success('Performance Pulse saved.') },
@@ -80,9 +83,30 @@ function PerformancePulsePanel({ clientId, accountId, canManage }) {
   const send = useMutation({ mutationFn: id => api.sendPerformancePulse(id), onSuccess: () => { refresh(); toast.success('Performance Pulse queued.') }, onError: error => toast.error(error.response?.data?.message || 'Unable to send Performance Pulse.') })
   const update = useMutation({ mutationFn: ({ id, data }) => api.updatePerformancePulse(id, data), onSuccess: refresh, onError: error => toast.error(error.response?.data?.message || 'Unable to update Performance Pulse.') })
   const remove = useMutation({ mutationFn: id => api.deletePerformancePulse(id), onSuccess: () => { refresh(); toast.success('Performance Pulse deleted.') } })
+  const createDestination = useMutation({
+    mutationFn: () => {
+      const configuration = destinationForm.channel === 'email' ? { address: destinationForm.endpoint.trim() } : { url: destinationForm.endpoint.trim() }
+      if (destinationForm.channel === 'webhook' && destinationForm.secret.trim()) configuration.secret = destinationForm.secret.trim()
+      return api.createNotificationDestination({ client_id: Number(clientId), name: destinationForm.name.trim(), channel: destinationForm.channel, configuration, events: [], enabled: true })
+    },
+    onSuccess: response => {
+      const destination = response.data
+      qc.setQueryData(['performance-pulse-options', clientId, accountId], current => ({ ...current, destinations: [...(current?.destinations || []).filter(item => item.id !== destination.id), destination] }))
+      setForm(current => ({ ...current, destination_ids: [...new Set([...(current.destination_ids ?? destinationIds), destination.id])] }))
+      setDestinationForm(emptyPulseDestination); setShowDestinationForm(false); toast.success('Destination created and selected.')
+    },
+    onError: error => toast.error(Object.values(error.response?.data?.errors || {})[0]?.[0] || error.response?.data?.message || 'Unable to create destination.'),
+  })
   const edit = pulse => { setEditingId(pulse.id); setForm({ campaign_id: pulse.campaign_id || '', periods: pulse.periods, local_time: pulse.local_time.slice(0, 5), include_campaign_breakdown: pulse.include_campaign_breakdown, destination_ids: pulse.destinations.map(item => item.id), enabled: pulse.enabled }) }
-  const submit = event => { event.preventDefault(); save.mutate({ ...form, client_id: Number(clientId), ad_account_id: Number(accountId), campaign_id: form.campaign_id ? Number(form.campaign_id) : null, destination_ids: destinationIds.map(Number) }) }
+  const submit = event => {
+    event.preventDefault()
+    const payload = { ...form, client_id: Number(clientId), ad_account_id: Number(accountId), campaign_id: form.campaign_id ? Number(form.campaign_id) : null }
+    if (destinationIds.length) payload.destination_ids = destinationIds.map(Number)
+    else delete payload.destination_ids
+    save.mutate(payload)
+  }
   const toggleDestination = (id, checked) => setForm(current => ({ ...current, destination_ids: checked ? [...new Set([...destinationIds, id])] : destinationIds.filter(value => value !== id) }))
+  const destinationReady = destinationForm.name.trim() && destinationForm.endpoint.trim()
 
   if (!clientId || !accountId) return <p className="report-notice">Choose a client and ad account to configure Performance Pulse.</p>
   return <section className="pulse-panel">
@@ -95,9 +119,14 @@ function PerformancePulsePanel({ clientId, accountId, canManage }) {
         <label><span>Daily time</span><input type="time" required value={form.local_time} onChange={event => setForm({ ...form, local_time: event.target.value })}/></label>
       </div>
       {!form.campaign_id && <label className="ops-check"><input type="checkbox" checked={form.include_campaign_breakdown} onChange={event => setForm({ ...form, include_campaign_breakdown: event.target.checked })}/><span>Include campaign breakdown after account totals</span></label>}
-      <fieldset className="pulse-destinations"><legend>Destinations</legend>{(options.data?.destinations || []).map(destination => <label key={destination.id}><input type="checkbox" checked={destinationIds.includes(destination.id)} onChange={event => toggleDestination(destination.id, event.target.checked)}/><span>{destination.name}<small>{destination.channel.replaceAll('_', ' ')}</small></span></label>)}{!options.data?.destinations?.length && <p>{options.data?.legacy_google_chat_configured ? 'The saved client Google Chat webhook will become the default destination when you save.' : 'Add a notification destination in Governance before saving.'}</p>}</fieldset>
+      <fieldset className="pulse-destinations"><legend>Destinations</legend>{(options.data?.destinations || []).map(destination => <label key={destination.id}><input type="checkbox" checked={destinationIds.includes(destination.id)} onChange={event => toggleDestination(destination.id, event.target.checked)}/><span>{destination.name}<small>{destination.channel.replaceAll('_', ' ')}</small></span></label>)}{!options.data?.destinations?.length && <p>{options.data?.legacy_google_chat_configured ? 'The saved client Google Chat webhook will become the default destination when you save.' : 'No destinations yet. Add one here to continue.'}</p>}<button type="button" className="pulse-add-destination" onClick={() => setShowDestinationForm(value => !value)}><Plus size={13}/>{showDestinationForm ? 'Close' : 'Add destination'}</button></fieldset>
+      {showDestinationForm && <section className="pulse-destination-creator" onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); if (destinationReady && !createDestination.isPending) createDestination.mutate() } }}>
+        <header><div><strong>Add a delivery destination</strong><small>Saved securely for this client and selected for this pulse.</small></div></header>
+        <div><label><span>Name</span><input autoFocus value={destinationForm.name} placeholder="e.g. Daily performance chat" onChange={event => setDestinationForm({ ...destinationForm, name: event.target.value })}/></label><label><span>Channel</span><select value={destinationForm.channel} onChange={event => setDestinationForm({ ...destinationForm, channel: event.target.value, endpoint: '', secret: '' })}><option value="google_chat">Google Chat</option><option value="email">Email</option><option value="slack">Slack</option><option value="teams">Microsoft Teams</option><option value="webhook">Generic webhook</option></select></label><label className="pulse-destination-endpoint"><span>{destinationForm.channel === 'email' ? 'Email address' : 'HTTPS webhook URL'}</span><input type={destinationForm.channel === 'email' ? 'email' : 'url'} value={destinationForm.endpoint} placeholder={destinationForm.channel === 'email' ? 'performance@example.com' : 'https://…'} onChange={event => setDestinationForm({ ...destinationForm, endpoint: event.target.value })}/></label>{destinationForm.channel === 'webhook' && <label><span>Signing secret (optional)</span><input type="password" value={destinationForm.secret} onChange={event => setDestinationForm({ ...destinationForm, secret: event.target.value })}/></label>}</div>
+        <footer><button type="button" onClick={() => { setShowDestinationForm(false); setDestinationForm(emptyPulseDestination) }}>Cancel</button><button type="button" className="ops-primary" disabled={!destinationReady || createDestination.isPending} onClick={() => createDestination.mutate()}>{createDestination.isPending ? 'Creating…' : 'Create and select'}</button></footer>
+      </section>}
       <label className="ops-check"><input type="checkbox" checked={form.enabled} onChange={event => setForm({ ...form, enabled: event.target.checked })}/><span>Enable daily schedule</span></label>
-      <button className="ops-primary" disabled={save.isPending || form.periods[0] === form.periods[1] || (!destinationIds.length && !options.data?.legacy_google_chat_configured)}>{save.isPending ? 'Saving…' : editingId ? 'Save changes' : 'Create Performance Pulse'}</button>
+      <button className="ops-primary" disabled={save.isPending || form.periods[0] === form.periods[1] || (!destinationIds.length && !canUseLegacyDefault)}>{save.isPending ? 'Saving…' : editingId ? 'Save changes' : 'Create Performance Pulse'}</button>
     </form>}
     <div className="report-section-head"><div><h2>Configured pulses</h2><p>Send instantly or manage the daily schedule independently.</p></div></div>
     <div className="pulse-list">{(pulses.data || []).map(pulse => <article key={pulse.id} className="pulse-card">
