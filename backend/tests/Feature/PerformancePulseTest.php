@@ -18,6 +18,7 @@ use Carbon\CarbonImmutable;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Queue;
+use Illuminate\Support\Facades\Schema;
 use Tests\TestCase;
 
 class PerformancePulseTest extends TestCase
@@ -28,6 +29,22 @@ class PerformancePulseTest extends TestCase
     {
         CarbonImmutable::setTestNow();
         parent::tearDown();
+    }
+
+    public function test_migration_can_resume_after_mysql_has_committed_earlier_ddl(): void
+    {
+        $migration = require database_path('migrations/2026_10_31_000000_create_performance_pulses.php');
+
+        $migration->up();
+
+        $this->assertTrue(Schema::hasTable('performance_pulses'));
+        $this->assertTrue(Schema::hasTable('performance_pulse_destination'));
+        $this->assertTrue(Schema::hasTable('performance_pulse_runs'));
+        $this->assertTrue(Schema::hasColumns('notification_deliveries', [
+            'performance_pulse_run_id',
+            'part_number',
+            'part_count',
+        ]));
     }
 
     public function test_manager_can_create_disabled_account_pulse_and_send_it_immediately(): void
