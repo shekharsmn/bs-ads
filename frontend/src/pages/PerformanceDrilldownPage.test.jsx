@@ -55,6 +55,15 @@ describe('performance drilldown', () => {
     expect(screen.getByTestId('location')).toHaveTextContent('/command-center/clients/7/ad-accounts/9/campaigns/3?range=custom&start_date=2026-09-01&end_date=2026-09-18')
   })
 
+  it('links the middle breadcrumb to the client page while preserving the account period', async () => {
+    renderPath('/command-center/clients/7/ad-accounts/9?range=custom&start_date=2026-09-01&end_date=2026-09-18')
+    const clientLink = await screen.findByRole('link', { name: 'Acme' })
+    const accountLink = screen.getByRole('link', { name: 'Acme Meta' })
+
+    expect(clientLink).toHaveAttribute('href', '/clients/7')
+    expect(accountLink).toHaveAttribute('href', '/command-center/clients/7/ad-accounts/9?range=custom&start_date=2026-09-01&end_date=2026-09-18')
+  })
+
   it('uses Meta ad-set terminology on campaign pages', async () => {
     renderPath('/command-center/clients/7/ad-accounts/9/campaigns/3?range=30d&start_date=2026-09-28&end_date=2026-10-27')
     expect(await screen.findByRole('heading', { name: 'Ad sets' })).toBeInTheDocument()
