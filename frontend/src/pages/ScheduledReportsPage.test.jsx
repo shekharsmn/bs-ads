@@ -13,14 +13,15 @@ vi.mock('../api/client', () => ({ api: {
 } }))
 vi.mock('../context/AuthContext', () => ({ useAuth: () => ({ user: { id: 1, role: 'marketer' } }) }))
 
-function renderPage() {
+function renderPage(entry = '/reports?view=pulse&client_id=7&ad_account_id=9') {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } })
-  return render(<QueryClientProvider client={client}><ToastProvider><MemoryRouter initialEntries={['/reports?view=pulse&client_id=7&ad_account_id=9']}><ScheduledReportsPage/></MemoryRouter></ToastProvider></QueryClientProvider>)
+  return render(<QueryClientProvider client={client}><ToastProvider><MemoryRouter initialEntries={[entry]}><ScheduledReportsPage/></MemoryRouter></ToastProvider></QueryClientProvider>)
 }
 
 describe('Performance Pulse reports tab', () => {
   afterEach(cleanup)
   beforeEach(() => {
+    vi.clearAllMocks()
     api.getClients.mockResolvedValue({ data: [{ id: 7, name: 'Kosala', ad_accounts: [{ id: 9, name: 'Kosala Ads', platform: 'google', timezone: 'Asia/Kolkata' }] }] })
     api.getReportTemplates.mockResolvedValue({ data: [] })
     api.getReportSchedules.mockResolvedValue({ data: { schedules: [], runs: [] } })
@@ -53,6 +54,28 @@ describe('Performance Pulse reports tab', () => {
     expect(screen.queryByText('Include campaign breakdown after account totals')).not.toBeInTheDocument()
   })
 
+  it('shows all configured pulses when no client or account is selected', async () => {
+    api.getPerformancePulses.mockResolvedValue({ data: [{ id: 21, enabled: true, local_time: '09:00:00', periods: ['yesterday', 'month_to_date'], client: { id: 7, name: 'Kosala' }, ad_account: { id: 9, name: 'Kosala Ads', platform: 'google', timezone: 'Asia/Kolkata' }, campaign: null, destinations: [{ id: 4, name: 'Morning Chat', channel: 'google_chat' }], runs: [] }] })
+    renderPage('/reports?view=pulse')
+
+    expect(await screen.findByRole('heading', { name: 'All configured pulses' })).toBeInTheDocument()
+    expect(await screen.findByText('Kosala Ads')).toBeInTheDocument()
+    expect(screen.getByText(/Kosala · google/)).toBeInTheDocument()
+    expect(api.getPerformancePulses).toHaveBeenCalledWith({ client_id: undefined, ad_account_id: undefined })
+    expect(api.getPerformancePulseOptions).not.toHaveBeenCalled()
+  })
+
+  it('allows the default destination to be unchecked on a new paused pulse', async () => {
+    renderPage()
+    const destination = await screen.findByRole('checkbox', { name: /Morning Chat/ })
+    expect(destination).toBeChecked()
+    fireEvent.click(destination)
+    expect(destination).not.toBeChecked()
+    fireEvent.click(screen.getByRole('button', { name: 'Create Performance Pulse' }))
+
+    await waitFor(() => expect(api.createPerformancePulse).toHaveBeenCalledWith(expect.objectContaining({ destination_ids: [], enabled: false })))
+  })
+
   it('creates and selects a destination without leaving Performance Pulse', async () => {
     api.getPerformancePulseOptions.mockResolvedValue({ data: { destinations: [], campaigns: [], legacy_google_chat_configured: false } })
     renderPage()
@@ -74,12 +97,21 @@ describe('Performance Pulse reports tab', () => {
   it('lets the backend create the legacy client chat destination', async () => {
     api.getPerformancePulseOptions.mockResolvedValue({ data: { destinations: [], campaigns: [], legacy_google_chat_configured: true } })
     renderPage()
-    expect(await screen.findByText('The saved client Google Chat webhook will become the default destination when you save.')).toBeInTheDocument()
+    expect(await screen.findByRole('checkbox', { name: /Client default Google Chat/ })).toBeChecked()
     const createButton = screen.getByRole('button', { name: 'Create Performance Pulse' })
     await waitFor(() => expect(createButton).not.toBeDisabled())
     fireEvent.click(createButton)
 
     await waitFor(() => expect(api.createPerformancePulse).toHaveBeenCalled())
     expect(api.createPerformancePulse.mock.calls.at(-1)[0]).not.toHaveProperty('destination_ids')
+  })
+
+  it('allows the legacy client chat destination to be explicitly unchecked', async () => {
+    api.getPerformancePulseOptions.mockResolvedValue({ data: { destinations: [], campaigns: [], legacy_google_chat_configured: true } })
+    renderPage()
+    fireEvent.click(await screen.findByRole('checkbox', { name: /Client default Google Chat/ }))
+    fireEvent.click(screen.getByRole('button', { name: 'Create Performance Pulse' }))
+
+    await waitFor(() => expect(api.createPerformancePulse).toHaveBeenCalledWith(expect.objectContaining({ destination_ids: [], enabled: false })))
   })
 })

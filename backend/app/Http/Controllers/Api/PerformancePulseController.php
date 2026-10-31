@@ -62,6 +62,7 @@ class PerformancePulseController extends Controller
         $scope = $this->scopes->resolve($request->user(), $data, manage: true);
         $this->ensureUniqueScope($scope->client->id, $scope->adAccount->id, $scope->campaign?->id);
         $destinationIds = $this->destinationIds($scope->client, $data['destination_ids'] ?? null, $request);
+        $this->ensureEnabledHasDestination($data['enabled'] ?? false, $destinationIds);
         $pulse = DB::transaction(function () use ($data, $scope, $destinationIds, $request) {
             $pulse = PerformancePulse::create([
                 ...collect($data)->except('destination_ids')->all(),
@@ -89,15 +90,19 @@ class PerformancePulseController extends Controller
         ];
         $scope = $this->scopes->resolve($request->user(), $scopeData, manage: true);
         $this->ensureUniqueScope($scope->client->id, $scope->adAccount->id, $scope->campaign?->id, $performancePulse->id);
+        $destinationIds = array_key_exists('destination_ids', $data)
+            ? $this->destinationIds($scope->client, $data['destination_ids'], $request)
+            : $performancePulse->destinations()->pluck('notification_destinations.id')->all();
+        $this->ensureEnabledHasDestination($data['enabled'] ?? $performancePulse->enabled, $destinationIds);
         $before = $this->auditValues($performancePulse);
-        DB::transaction(function () use ($request, $data, $scope, $performancePulse) {
+        DB::transaction(function () use ($data, $scope, $performancePulse, $destinationIds) {
             $performancePulse->update([
                 ...collect($data)->except('destination_ids')->all(),
                 'ad_account_id' => $scope->adAccount->id, 'campaign_id' => $scope->campaign?->id,
                 'scope_key' => $scope->campaign ? 'campaign:'.$scope->campaign->id : 'account:'.$scope->adAccount->id,
             ]);
             if (array_key_exists('destination_ids', $data)) {
-                $performancePulse->destinations()->sync($this->destinationIds($scope->client, $data['destination_ids'], $request));
+                $performancePulse->destinations()->sync($destinationIds);
             }
         });
         $audit->record('performance_pulse.updated', $performancePulse, $before, $this->auditValues($performancePulse->fresh()), $performancePulse->client_id, $request->user(), $request);
@@ -148,9 +153,7 @@ class PerformancePulseController extends Controller
             'periods.*' => ['required', 'distinct', Rule::in(self::PERIODS)],
             'local_time' => $required.'required|date_format:H:i',
             'include_campaign_breakdown' => 'sometimes|boolean', 'enabled' => 'sometimes|boolean',
-            'destination_ids' => 'sometimes|array|min:1', 'destination_ids.*' => 'integer|distinct|exists:notification_destinations,id',
-        ], [
-            'destination_ids.min' => 'Choose at least one destination or add a new one.',
+            'destination_ids' => 'sometimes|array', 'destination_ids.*' => 'integer|distinct|exists:notification_destinations,id',
         ]);
     }
 
@@ -176,6 +179,13 @@ class PerformancePulseController extends Controller
         }
 
         return [$destination->id];
+    }
+
+    private function ensureEnabledHasDestination(bool $enabled, array $destinationIds): void
+    {
+        if ($enabled && $destinationIds === []) {
+            throw ValidationException::withMessages(['destination_ids' => 'Choose at least one destination before enabling the daily schedule.']);
+        }
     }
 
     private function payload(PerformancePulse $pulse): PerformancePulse

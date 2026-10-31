@@ -63,6 +63,20 @@ class PerformancePulseTest extends TestCase
         Queue::assertPushed(GeneratePerformancePulseJob::class);
     }
 
+    public function test_disabled_pulse_can_be_saved_without_a_destination_but_cannot_be_enabled(): void
+    {
+        [$user, $client, $account] = $this->fixture('ecommerce');
+
+        $pulseId = $this->actingAs($user)->postJson('/api/performance-pulses', [
+            'client_id' => $client->id, 'ad_account_id' => $account->id, 'campaign_id' => null,
+            'periods' => ['yesterday', 'month_to_date'], 'local_time' => '09:00',
+            'destination_ids' => [], 'enabled' => false,
+        ])->assertCreated()->assertJsonCount(0, 'destinations')->json('id');
+
+        $this->actingAs($user)->putJson('/api/performance-pulses/'.$pulseId, ['enabled' => true])
+            ->assertUnprocessable()->assertJsonValidationErrors('destination_ids');
+    }
+
     public function test_scope_and_destination_must_belong_to_the_same_client(): void
     {
         [$user, $client, $account] = $this->fixture();
