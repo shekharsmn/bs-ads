@@ -19,9 +19,10 @@ use App\Http\Controllers\Api\GoogleOAuthController;
 use App\Http\Controllers\Api\InspectorController;
 use App\Http\Controllers\Api\MetaAccountController;
 use App\Http\Controllers\Api\MethodologyController;
-use App\Http\Controllers\Api\PerformanceController;
 use App\Http\Controllers\Api\NotificationDestinationController;
 use App\Http\Controllers\Api\OperationsReadinessController;
+use App\Http\Controllers\Api\PerformanceController;
+use App\Http\Controllers\Api\PerformancePulseController;
 use App\Http\Controllers\Api\PublicPerformanceReportController;
 use App\Http\Controllers\Api\PublicReportController;
 use App\Http\Controllers\Api\ReportController;
@@ -86,6 +87,14 @@ Route::middleware(['auth:sanctum', 'active', 'audit.mutations'])->group(function
     Route::put('/notification-destinations/{destination}', [NotificationDestinationController::class, 'update'])->middleware('role:admin,marketer');
     Route::delete('/notification-destinations/{destination}', [NotificationDestinationController::class, 'destroy'])->middleware('role:admin,marketer');
     Route::post('/notification-destinations/{destination}/test', [NotificationDestinationController::class, 'test'])->middleware('role:admin,marketer');
+
+    Route::get('/performance-pulses', [PerformancePulseController::class, 'index']);
+    Route::get('/performance-pulses/options', [PerformancePulseController::class, 'options']);
+    Route::post('/performance-pulses', [PerformancePulseController::class, 'store'])->middleware('role:admin,marketer');
+    Route::put('/performance-pulses/{performancePulse}', [PerformancePulseController::class, 'update'])->middleware('role:admin,marketer');
+    Route::delete('/performance-pulses/{performancePulse}', [PerformancePulseController::class, 'destroy'])->middleware('role:admin,marketer');
+    Route::post('/performance-pulses/{performancePulse}/send', [PerformancePulseController::class, 'send'])->middleware('role:admin,marketer');
+    Route::get('/performance-pulses/{performancePulse}/runs', [PerformancePulseController::class, 'runs']);
 
     Route::get('/connections', [ConnectionController::class, 'index']);
     Route::post('/connections', [ConnectionController::class, 'store'])->middleware('role:admin');

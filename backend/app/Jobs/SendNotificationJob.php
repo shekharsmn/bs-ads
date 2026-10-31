@@ -3,6 +3,7 @@
 namespace App\Jobs;
 
 use App\Models\NotificationDelivery;
+use App\Models\PerformancePulseRun;
 use App\Models\ReportRun;
 use App\Services\AdLibraryAudit\SafePublicUrl;
 use Illuminate\Contracts\Queue\ShouldBeUnique;
@@ -54,6 +55,7 @@ class SendNotificationJob implements ShouldBeUnique, ShouldQueue
                 $request->post($url, $payload)->throw();
             }
             $delivery->update(['status' => 'delivered', 'delivered_at' => now(), 'error_message' => null]);
+            $this->refreshPerformancePulseRun($delivery);
             if ($reportRunId = $delivery->payload['report_run_id'] ?? null) {
                 $run = ReportRun::find($reportRunId);
                 if ($run && NotificationDelivery::where('event_type', 'report_delivery')->whereJsonContains('payload->report_run_id', (int) $reportRunId)->where('status', '!=', 'delivered')->doesntExist()) {
@@ -62,10 +64,29 @@ class SendNotificationJob implements ShouldBeUnique, ShouldQueue
             }
         } catch (\Throwable $error) {
             $delivery->update(['status' => 'failed', 'error_message' => mb_substr($error->getMessage(), 0, 1000)]);
+            $this->refreshPerformancePulseRun($delivery);
             if ($reportRunId = $delivery->payload['report_run_id'] ?? null) {
                 ReportRun::whereKey($reportRunId)->update(['delivery_status' => 'failed', 'delivery_error' => mb_substr($error->getMessage(), 0, 1000)]);
             }
             throw $error;
         }
+    }
+
+    private function refreshPerformancePulseRun(NotificationDelivery $delivery): void
+    {
+        if (! $delivery->performance_pulse_run_id) {
+            return;
+        }
+        $run = PerformancePulseRun::find($delivery->performance_pulse_run_id);
+        if (! $run) {
+            return;
+        }
+        $statuses = $run->deliveries()->pluck('status');
+        $status = $statuses->contains('pending')
+            ? 'queued'
+            : ($statuses->every(fn ($value) => $value === 'delivered')
+                ? 'delivered'
+                : ($statuses->contains('delivered') ? 'partial' : 'failed'));
+        $run->update(['status' => $status, 'completed_at' => $status === 'queued' ? null : now()]);
     }
 }

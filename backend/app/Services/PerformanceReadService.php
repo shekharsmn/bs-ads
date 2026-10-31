@@ -14,6 +14,8 @@ class PerformanceReadService
 {
     private const SUM_COLUMNS = ['spend', 'impressions', 'reach', 'clicks', 'conversions', 'leads', 'purchases', 'conversion_value'];
 
+    public function __construct(private readonly PerformanceObjectiveClassifier $objectives) {}
+
     public function accounts(User $user): array
     {
         $clientIds = ClientAccess::clientsFor($user)->pluck('id');
@@ -26,7 +28,7 @@ class PerformanceReadService
                 $first = $platformAccounts->first();
                 $classifiedRows = $platformAccounts->flatMap(fn (AdAccount $account) => $this->commandCenterRows($account));
                 $thirtyDaySpend = $classifiedRows->groupBy('result_type')->map->sum('spend');
-                $resultType = $this->winningResultType($thirtyDaySpend, (string) $first->client?->objective);
+                $resultType = $this->objectives->winning($thirtyDaySpend, (string) $first->client?->objective);
                 $windows = collect(['yesterday' => 1, 'last_7_days' => 7, 'last_30_days' => 30])
                     ->mapWithKeys(function (int $days, string $key) use ($classifiedRows, $resultType) {
                         $rows = $classifiedRows->where('result_type', $resultType)->filter(fn (array $row) => $row['days_ago'] < $days);
@@ -77,7 +79,7 @@ class PerformanceReadService
             ->reject(fn ($row) => $campaignDates->contains(CarbonImmutable::parse($row->metric_date)->toDateString()));
 
         return $campaignRows->concat($accountRows)->map(function ($row) use ($account, $yesterday): array {
-            $resultType = $this->classifyResultType($row, (string) $account->client?->objective);
+            $resultType = $this->objectives->classify($row, (string) $account->client?->objective);
             $leads = (float) ($row->leads ?? 0);
             $purchases = (float) ($row->purchases ?? 0);
             $results = $resultType === 'sales' ? $purchases : $leads;
@@ -92,41 +94,6 @@ class PerformanceReadService
                 'days_ago' => CarbonImmutable::parse($row->metric_date, $account->timezone)->startOfDay()->diffInDays($yesterday),
             ];
         });
-    }
-
-    private function classifyResultType(object $row, string $clientObjective): string
-    {
-        $campaignType = strtolower((string) ($row->campaign_type ?? ''));
-        if (str_contains($campaignType, 'lead')) {
-            return 'leads';
-        }
-        if (str_contains($campaignType, 'sale') || str_contains($campaignType, 'purchase') || str_contains($campaignType, 'shop')) {
-            return 'sales';
-        }
-
-        $leads = (float) ($row->leads ?? 0);
-        $purchases = (float) ($row->purchases ?? 0);
-        if ($leads !== $purchases) {
-            return $purchases > $leads ? 'sales' : 'leads';
-        }
-        if (strtolower($clientObjective) === 'both' && (float) ($row->conversion_value ?? 0) > 0) {
-            return 'sales';
-        }
-
-        return $this->objectiveResultType($clientObjective);
-    }
-
-    private function winningResultType($spendByType, string $clientObjective): string
-    {
-        $leadSpend = (float) ($spendByType['leads'] ?? 0);
-        $salesSpend = (float) ($spendByType['sales'] ?? 0);
-
-        return $leadSpend === $salesSpend ? $this->objectiveResultType($clientObjective) : ($salesSpend > $leadSpend ? 'sales' : 'leads');
-    }
-
-    private function objectiveResultType(string $objective): string
-    {
-        return in_array(strtolower($objective), ['ecommerce', 'sales', 'purchase'], true) ? 'sales' : 'leads';
     }
 
     public function overview(AdAccount $account, string $start, string $end): array

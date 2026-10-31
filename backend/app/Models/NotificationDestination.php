@@ -29,6 +29,11 @@ class NotificationDestination extends Model
         return $this->belongsTo(Client::class);
     }
 
+    public function performancePulses()
+    {
+        return $this->belongsToMany(PerformancePulse::class, 'performance_pulse_destination');
+    }
+
     public function getConfiguredAttribute(): bool
     {
         return filled($this->configuration);

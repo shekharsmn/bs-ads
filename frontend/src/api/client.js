@@ -126,6 +126,13 @@ export const api = {
   updateNotificationDestination: (id, data) => client.put(`/api/notification-destinations/${id}`, data),
   deleteNotificationDestination: (id) => client.delete(`/api/notification-destinations/${id}`),
   testNotificationDestination: (id) => client.post(`/api/notification-destinations/${id}/test`),
+  getPerformancePulses: (params) => client.get('/api/performance-pulses', { params }),
+  getPerformancePulseOptions: (params) => client.get('/api/performance-pulses/options', { params }),
+  createPerformancePulse: (data) => client.post('/api/performance-pulses', data),
+  updatePerformancePulse: (id, data) => client.put(`/api/performance-pulses/${id}`, data),
+  deletePerformancePulse: (id) => client.delete(`/api/performance-pulses/${id}`),
+  sendPerformancePulse: (id) => client.post(`/api/performance-pulses/${id}/send`),
+  getPerformancePulseRuns: (id, params) => client.get(`/api/performance-pulses/${id}/runs`, { params }),
 
   // Admin settings
   getAiModels: () => client.get('/api/settings/ai-models'),

@@ -14,4 +14,9 @@ class NotificationDelivery extends Model
     {
         return $this->belongsTo(NotificationDestination::class, 'notification_destination_id');
     }
+
+    public function performancePulseRun()
+    {
+        return $this->belongsTo(PerformancePulseRun::class);
+    }
 }

@@ -29,6 +29,11 @@ Schedule::command('reports:dispatch-due')
     ->onOneServer()
     ->withoutOverlapping(5);
 
+Schedule::command('performance-pulses:dispatch-due')
+    ->everyMinute()
+    ->onOneServer()
+    ->withoutOverlapping(5);
+
 Schedule::command('performance:prune-history')
     ->dailyAt('02:30')
     ->onOneServer()
