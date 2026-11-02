@@ -1,4 +1,5 @@
-import { useState } from 'react'
+import { useEffect, useId, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useSearchParams } from 'react-router-dom'
 import { BellRing, CalendarClock, ExternalLink, FileCheck, FileText, LoaderCircle, Palette, Pencil, Plus, Send, Trash2, X } from 'lucide-react'
@@ -67,11 +68,13 @@ const emptyPulseDestination = { name: '', channel: 'google_chat', endpoint: '', 
 
 function PerformancePulsePanel({ clientId, accountId, canManage }) {
   const qc = useQueryClient(); const toast = useToast(); const [editingId, setEditingId] = useState(null); const [form, setForm] = useState(emptyPulse)
+  const [editorOpen, setEditorOpen] = useState(false); const [editorScope, setEditorScope] = useState({ clientId: '', accountId: '' })
   const [showDestinationForm, setShowDestinationForm] = useState(false); const [destinationForm, setDestinationForm] = useState(emptyPulseDestination)
   const scope = { client_id: clientId || undefined, ad_account_id: accountId || undefined }
   const hasCreationScope = Boolean(clientId && accountId)
   const pulses = useQuery({ queryKey: ['performance-pulses', scope], queryFn: () => api.getPerformancePulses(scope).then(response => response.data), refetchInterval: query => (query.state.data || []).some(pulse => pulse.runs?.some(run => ['pending', 'generating', 'queued'].includes(run.status))) ? 3000 : false })
-  const options = useQuery({ queryKey: ['performance-pulse-options', clientId, accountId], queryFn: () => api.getPerformancePulseOptions(scope).then(response => response.data), enabled: hasCreationScope })
+  const editorApiScope = { client_id: editorScope.clientId || undefined, ad_account_id: editorScope.accountId || undefined }
+  const options = useQuery({ queryKey: ['performance-pulse-options', editorScope.clientId, editorScope.accountId], queryFn: () => api.getPerformancePulseOptions(editorApiScope).then(response => response.data), enabled: editorOpen && Boolean(editorScope.clientId && editorScope.accountId) })
   const refresh = () => qc.invalidateQueries({ queryKey: ['performance-pulses'] })
   const preferredDestination = options.data?.destinations?.find(item => item.channel === 'google_chat') || options.data?.destinations?.[0]
   const destinationIds = form.destination_ids ?? (preferredDestination ? [preferredDestination.id] : [])
@@ -80,7 +83,7 @@ function PerformancePulsePanel({ clientId, accountId, canManage }) {
   const hasSelectedDestination = destinationIds.length > 0 || usesLegacyDefault
   const save = useMutation({
     mutationFn: payload => editingId ? api.updatePerformancePulse(editingId, payload) : api.createPerformancePulse(payload),
-    onSuccess: () => { refresh(); setEditingId(null); setForm(emptyPulse); toast.success('Performance Pulse saved.') },
+    onSuccess: () => { refresh(); closeEditor(); toast.success('Performance Pulse saved.') },
     onError: error => toast.error(error.response?.data?.message || Object.values(error.response?.data?.errors || {})[0]?.[0] || 'Unable to save Performance Pulse.'),
   })
   const send = useMutation({ mutationFn: id => api.sendPerformancePulse(id), onSuccess: () => { refresh(); toast.success('Performance Pulse queued.') }, onError: error => toast.error(error.response?.data?.message || 'Unable to send Performance Pulse.') })
@@ -90,20 +93,28 @@ function PerformancePulsePanel({ clientId, accountId, canManage }) {
     mutationFn: () => {
       const configuration = destinationForm.channel === 'email' ? { address: destinationForm.endpoint.trim() } : { url: destinationForm.endpoint.trim() }
       if (destinationForm.channel === 'webhook' && destinationForm.secret.trim()) configuration.secret = destinationForm.secret.trim()
-      return api.createNotificationDestination({ client_id: Number(clientId), name: destinationForm.name.trim(), channel: destinationForm.channel, configuration, events: [], enabled: true })
+      return api.createNotificationDestination({ client_id: Number(editorScope.clientId), name: destinationForm.name.trim(), channel: destinationForm.channel, configuration, events: [], enabled: true })
     },
     onSuccess: response => {
       const destination = response.data
-      qc.setQueryData(['performance-pulse-options', clientId, accountId], current => ({ ...current, destinations: [...(current?.destinations || []).filter(item => item.id !== destination.id), destination] }))
+      qc.setQueryData(['performance-pulse-options', editorScope.clientId, editorScope.accountId], current => ({ ...current, destinations: [...(current?.destinations || []).filter(item => item.id !== destination.id), destination] }))
       setForm(current => ({ ...current, destination_ids: [...new Set([...(current.destination_ids ?? destinationIds), destination.id])] }))
       setDestinationForm(emptyPulseDestination); setShowDestinationForm(false); toast.success('Destination created and selected.')
     },
     onError: error => toast.error(Object.values(error.response?.data?.errors || {})[0]?.[0] || error.response?.data?.message || 'Unable to create destination.'),
   })
-  const edit = pulse => { setEditingId(pulse.id); setForm({ campaign_id: pulse.campaign_id || '', periods: pulse.periods, local_time: pulse.local_time.slice(0, 5), include_campaign_breakdown: pulse.include_campaign_breakdown, destination_ids: pulse.destinations.map(item => item.id), enabled: pulse.enabled }) }
+  const closeEditor = () => { setEditorOpen(false); setEditingId(null); setForm(emptyPulse); setShowDestinationForm(false); setDestinationForm(emptyPulseDestination) }
+  const create = () => { setEditingId(null); setEditorScope({ clientId, accountId }); setForm(emptyPulse); setEditorOpen(true) }
+  const edit = pulse => {
+    setEditingId(pulse.id)
+    setEditorScope({ clientId: pulse.client_id || pulse.client?.id, accountId: pulse.ad_account_id || pulse.ad_account?.id })
+    setForm({ campaign_id: pulse.campaign_id || '', periods: pulse.periods, local_time: pulse.local_time.slice(0, 5), include_campaign_breakdown: pulse.include_campaign_breakdown, destination_ids: pulse.destinations.map(item => item.id), enabled: pulse.enabled })
+    setEditorOpen(true)
+  }
   const submit = event => {
     event.preventDefault()
-    const payload = { ...form, client_id: Number(clientId), ad_account_id: Number(accountId), campaign_id: form.campaign_id ? Number(form.campaign_id) : null }
+    const payload = { ...form, ad_account_id: Number(editorScope.accountId), campaign_id: form.campaign_id ? Number(form.campaign_id) : null }
+    if (!editingId) payload.client_id = Number(editorScope.clientId)
     if (form.destination_ids !== null) payload.destination_ids = destinationIds.map(Number)
     else if (destinationIds.length) payload.destination_ids = destinationIds.map(Number)
     else delete payload.destination_ids
@@ -113,32 +124,83 @@ function PerformancePulsePanel({ clientId, accountId, canManage }) {
   const destinationReady = destinationForm.name.trim() && destinationForm.endpoint.trim()
 
   return <section className="pulse-panel">
-    <AsyncStateNotice queries={hasCreationScope ? [pulses, options] : [pulses]}/>
+    <AsyncStateNotice queries={[pulses]}/>
     {canManage && !hasCreationScope && <p className="report-notice">Showing configured Performance Pulses. Choose a client and ad account to create a new one.</p>}
-    {canManage && hasCreationScope && <form className="pulse-editor" onSubmit={submit}>
-      <div className="report-section-head"><div><h2>{editingId ? 'Edit Performance Pulse' : 'New Performance Pulse'}</h2><p>Daily delivery uses the ad account timezone. Scheduling is off until you enable it.</p></div>{editingId && <button type="button" onClick={() => { setEditingId(null); setForm(emptyPulse) }}><X size={13}/> Cancel</button>}</div>
-      <div className="pulse-fields">
-        <label><span>Scope</span><select value={form.campaign_id} onChange={event => setForm({ ...form, campaign_id: event.target.value, include_campaign_breakdown: event.target.value ? false : form.include_campaign_breakdown })}><option value="">Ad account</option>{(options.data?.campaigns || []).map(campaign => <option key={campaign.id} value={campaign.id}>{campaign.name}</option>)}</select></label>
-        {[0, 1].map(index => <label key={index}><span>Period {index + 1}</span><select value={form.periods[index]} onChange={event => setForm({ ...form, periods: form.periods.map((value, itemIndex) => itemIndex === index ? event.target.value : value) })}>{PULSE_PERIODS.map(period => <option key={period.value} value={period.value} disabled={form.periods[1 - index] === period.value}>{period.label}</option>)}</select></label>)}
-        <label><span>Daily time</span><input type="time" required value={form.local_time} onChange={event => setForm({ ...form, local_time: event.target.value })}/></label>
-      </div>
-      {!form.campaign_id && <label className="ops-check"><input type="checkbox" checked={form.include_campaign_breakdown} onChange={event => setForm({ ...form, include_campaign_breakdown: event.target.checked })}/><span>Include campaign breakdown after account totals</span></label>}
-      <fieldset className="pulse-destinations"><legend>Destinations</legend>{(options.data?.destinations || []).map(destination => <label key={destination.id}><input type="checkbox" checked={destinationIds.includes(destination.id)} onChange={event => toggleDestination(destination.id, event.target.checked)}/><span>{destination.name}<small>{destination.channel.replaceAll('_', ' ')}</small></span></label>)}{canUseLegacyDefault && <label><input type="checkbox" checked={usesLegacyDefault} onChange={event => setForm({ ...form, destination_ids: event.target.checked ? null : [] })}/><span>Client default Google Chat<small>google chat</small></span></label>}{!options.data?.destinations?.length && !canUseLegacyDefault && <p>No destinations yet. Add one here, or save this pulse while paused.</p>}<button type="button" className="pulse-add-destination" onClick={() => setShowDestinationForm(value => !value)}><Plus size={13}/>{showDestinationForm ? 'Close' : 'Add destination'}</button></fieldset>
-      {showDestinationForm && <section className="pulse-destination-creator" onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); if (destinationReady && !createDestination.isPending) createDestination.mutate() } }}>
-        <header><div><strong>Add a delivery destination</strong><small>Saved securely for this client and selected for this pulse.</small></div></header>
-        <div><label><span>Name</span><input autoFocus value={destinationForm.name} placeholder="e.g. Daily performance chat" onChange={event => setDestinationForm({ ...destinationForm, name: event.target.value })}/></label><label><span>Channel</span><select value={destinationForm.channel} onChange={event => setDestinationForm({ ...destinationForm, channel: event.target.value, endpoint: '', secret: '' })}><option value="google_chat">Google Chat</option><option value="email">Email</option><option value="slack">Slack</option><option value="teams">Microsoft Teams</option><option value="webhook">Generic webhook</option></select></label><label className="pulse-destination-endpoint"><span>{destinationForm.channel === 'email' ? 'Email address' : 'HTTPS webhook URL'}</span><input type={destinationForm.channel === 'email' ? 'email' : 'url'} value={destinationForm.endpoint} placeholder={destinationForm.channel === 'email' ? 'performance@example.com' : 'https://…'} onChange={event => setDestinationForm({ ...destinationForm, endpoint: event.target.value })}/></label>{destinationForm.channel === 'webhook' && <label><span>Signing secret (optional)</span><input type="password" value={destinationForm.secret} onChange={event => setDestinationForm({ ...destinationForm, secret: event.target.value })}/></label>}</div>
-        <footer><button type="button" onClick={() => { setShowDestinationForm(false); setDestinationForm(emptyPulseDestination) }}>Cancel</button><button type="button" className="ops-primary" disabled={!destinationReady || createDestination.isPending} onClick={() => createDestination.mutate()}>{createDestination.isPending ? 'Creating…' : 'Create and select'}</button></footer>
-      </section>}
-      <label className="ops-check"><input type="checkbox" checked={form.enabled} onChange={event => setForm({ ...form, enabled: event.target.checked })}/><span>Enable daily schedule</span></label>
-      {!hasSelectedDestination && <p className="pulse-destination-warning">No destination selected. You can save this pulse while paused, then add a destination before enabling or sending it.</p>}
-      <button className="ops-primary" disabled={save.isPending || form.periods[0] === form.periods[1] || (form.enabled && !hasSelectedDestination)}>{save.isPending ? 'Saving…' : editingId ? 'Save changes' : 'Create Performance Pulse'}</button>
-    </form>}
-    <div className="report-section-head"><div><h2>{clientId || accountId ? 'Configured pulses' : 'All configured pulses'}</h2><p>Send instantly or manage the daily schedule independently.</p></div></div>
+    <div className="report-section-head pulse-list-head"><div><h2>{clientId || accountId ? 'Configured pulses' : 'All configured pulses'}</h2><p>Send instantly or manage the daily schedule independently.</p></div>{canManage && hasCreationScope && <button className="ops-primary" onClick={create}><Plus size={14}/> Add Performance Pulse</button>}</div>
     <div className="pulse-list">{(pulses.data || []).map(pulse => <article key={pulse.id} className="pulse-card">
       <header><span><BellRing size={16}/></span><div><strong>{pulse.campaign?.name || pulse.ad_account.name}</strong><small>{pulse.client.name} · {pulse.ad_account.platform} · {pulse.local_time.slice(0, 5)} {pulse.ad_account.timezone} · {pulse.periods.map(value => PULSE_PERIODS.find(item => item.value === value)?.label).join(' + ')}</small></div><em data-status={pulse.enabled ? 'active' : 'paused'}>{pulse.enabled ? 'Active' : 'Paused'}</em></header>
       <div className="destination-events">{pulse.destinations.map(item => <small key={item.id}>{item.name} · {item.channel.replaceAll('_', ' ')}</small>)}{!pulse.destinations.length && <small>No destination selected</small>}</div>
       {canManage && <div className="pulse-actions"><button onClick={() => send.mutate(pulse.id)} disabled={send.isPending || !pulse.destinations.length} title={!pulse.destinations.length ? 'Add a destination before sending.' : undefined}><Send size={13}/> Send now</button><button onClick={() => update.mutate({ id: pulse.id, data: { enabled: !pulse.enabled } })} disabled={!pulse.enabled && !pulse.destinations.length} title={!pulse.enabled && !pulse.destinations.length ? 'Add a destination before enabling.' : undefined}>{pulse.enabled ? 'Pause' : 'Enable'}</button><button onClick={() => edit(pulse)}><Pencil size={13}/> Edit</button><button className="icon-danger" aria-label={`Delete ${pulse.campaign?.name || pulse.ad_account.name}`} onClick={() => remove.mutate(pulse.id)}><Trash2 size={13}/></button></div>}
       <div className="pulse-history">{(pulse.runs || []).map(run => <div key={run.id}><span><strong>{run.trigger === 'manual' ? 'Sent now' : 'Scheduled'} · {run.reporting_date?.slice(0, 10)}</strong><small>{new Date(run.created_at).toLocaleString()}{run.warning ? ` · ${run.warning}` : ''}</small></span><em data-status={run.status}>{run.status}</em><div>{(run.deliveries || []).map(delivery => <small key={delivery.id}>{delivery.destination?.name} · part {delivery.part_number || 1}/{delivery.part_count || 1} · {delivery.status}</small>)}</div></div>)}</div>
     </article>)}{!pulses.isLoading && !(pulses.data || []).length && <p className="scoped-empty">No Performance Pulses are configured for this scope.</p>}</div>
+    <PulseEditorDialog open={editorOpen} editing={Boolean(editingId)} busy={save.isPending} submitDisabled={form.periods[0] === form.periods[1] || (form.enabled && !hasSelectedDestination)} onClose={closeEditor} onSubmit={submit}>
+      <AsyncStateNotice queries={[options]}/>
+      <section className="pulse-dialog-section">
+        <div className="pulse-dialog-section-head"><span>1</span><div><h3>Scope and comparison</h3><p>Select the level to report and two completed periods to compare.</p></div></div>
+        <div className="pulse-fields">
+          <label><span>Scope</span><select value={form.campaign_id} onChange={event => setForm({ ...form, campaign_id: event.target.value, include_campaign_breakdown: event.target.value ? false : form.include_campaign_breakdown })}><option value="">Ad account</option>{(options.data?.campaigns || []).map(campaign => <option key={campaign.id} value={campaign.id}>{campaign.name}</option>)}</select></label>
+          {[0, 1].map(index => <label key={index}><span>Period {index + 1}</span><select value={form.periods[index]} onChange={event => setForm({ ...form, periods: form.periods.map((value, itemIndex) => itemIndex === index ? event.target.value : value) })}>{PULSE_PERIODS.map(period => <option key={period.value} value={period.value} disabled={form.periods[1 - index] === period.value}>{period.label}</option>)}</select></label>)}
+          <label><span>Daily time</span><input type="time" required value={form.local_time} onChange={event => setForm({ ...form, local_time: event.target.value })}/><small>Account timezone</small></label>
+        </div>
+        {!form.campaign_id && <label className="pulse-option-row"><input type="checkbox" checked={form.include_campaign_breakdown} onChange={event => setForm({ ...form, include_campaign_breakdown: event.target.checked })}/><span><strong>Include campaign breakdown</strong><small>Add campaign detail after the account totals.</small></span></label>}
+      </section>
+      <section className="pulse-dialog-section">
+        <div className="pulse-dialog-section-head"><span>2</span><div><h3>Delivery</h3><p>Choose where the Performance Pulse should be sent.</p></div></div>
+        <fieldset className="pulse-destinations" aria-label="Destinations">{(options.data?.destinations || []).map(destination => <label className={destinationIds.includes(destination.id) ? 'selected' : ''} key={destination.id}><input type="checkbox" checked={destinationIds.includes(destination.id)} onChange={event => toggleDestination(destination.id, event.target.checked)}/><span>{destination.name}<small>{destination.channel.replaceAll('_', ' ')}</small></span></label>)}{canUseLegacyDefault && <label className={usesLegacyDefault ? 'selected' : ''}><input type="checkbox" checked={usesLegacyDefault} onChange={event => setForm({ ...form, destination_ids: event.target.checked ? null : [] })}/><span>Client default Google Chat<small>google chat</small></span></label>}{!options.isPending && !options.data?.destinations?.length && !canUseLegacyDefault && <p>No destinations yet. Add one here, or save this pulse while paused.</p>}<button type="button" className="pulse-add-destination" onClick={() => setShowDestinationForm(value => !value)}><Plus size={13}/>{showDestinationForm ? 'Close destination form' : 'Add destination'}</button></fieldset>
+        {showDestinationForm && <section className="pulse-destination-creator" onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); if (destinationReady && !createDestination.isPending) createDestination.mutate() } }}>
+          <header><div><strong>Add a delivery destination</strong><small>Saved securely for this client and selected immediately.</small></div></header>
+          <div><label><span>Name</span><input autoFocus value={destinationForm.name} placeholder="e.g. Daily performance chat" onChange={event => setDestinationForm({ ...destinationForm, name: event.target.value })}/></label><label><span>Channel</span><select value={destinationForm.channel} onChange={event => setDestinationForm({ ...destinationForm, channel: event.target.value, endpoint: '', secret: '' })}><option value="google_chat">Google Chat</option><option value="email">Email</option><option value="slack">Slack</option><option value="teams">Microsoft Teams</option><option value="webhook">Generic webhook</option></select></label><label className="pulse-destination-endpoint"><span>{destinationForm.channel === 'email' ? 'Email address' : 'HTTPS webhook URL'}</span><input type={destinationForm.channel === 'email' ? 'email' : 'url'} value={destinationForm.endpoint} placeholder={destinationForm.channel === 'email' ? 'performance@example.com' : 'https://…'} onChange={event => setDestinationForm({ ...destinationForm, endpoint: event.target.value })}/></label>{destinationForm.channel === 'webhook' && <label><span>Signing secret (optional)</span><input type="password" value={destinationForm.secret} onChange={event => setDestinationForm({ ...destinationForm, secret: event.target.value })}/></label>}</div>
+          <footer><button type="button" onClick={() => { setShowDestinationForm(false); setDestinationForm(emptyPulseDestination) }}>Cancel</button><button type="button" className="ops-primary" disabled={!destinationReady || createDestination.isPending} onClick={() => createDestination.mutate()}>{createDestination.isPending ? 'Creating…' : 'Create and select'}</button></footer>
+        </section>}
+      </section>
+      <section className="pulse-dialog-section pulse-schedule-section">
+        <div className="pulse-dialog-section-head"><span>3</span><div><h3>Schedule</h3><p>New pulses stay paused until you are ready to automate delivery.</p></div></div>
+        <label className="pulse-schedule-control"><span><strong>Daily schedule</strong><small>{form.enabled ? `Runs each day at ${form.local_time}` : 'Saved as paused — you can still send it manually.'}</small></span><input type="checkbox" checked={form.enabled} onChange={event => setForm({ ...form, enabled: event.target.checked })}/><i aria-hidden="true"/></label>
+        {!hasSelectedDestination && <p className="pulse-destination-warning">No destination selected. Keep this pulse paused, then add a destination before enabling or sending it.</p>}
+      </section>
+    </PulseEditorDialog>
   </section>
+}
+
+function PulseEditorDialog({ open, editing, busy, submitDisabled, onClose, onSubmit, children }) {
+  const dialogRef = useRef(null)
+  const closeRef = useRef(null)
+  const titleId = useId()
+  const onCloseRef = useRef(onClose)
+  const busyRef = useRef(busy)
+  useEffect(() => { onCloseRef.current = onClose; busyRef.current = busy }, [busy, onClose])
+  useEffect(() => {
+    if (!open) return undefined
+    const previouslyFocused = document.activeElement
+    const root = document.getElementById('root')
+    const previousOverflow = document.body.style.overflow
+    const previousInert = root?.inert
+    if (root) root.inert = true
+    document.body.style.overflow = 'hidden'
+    const frame = requestAnimationFrame(() => closeRef.current?.focus())
+    const handleKeyDown = event => {
+      if (event.key === 'Escape' && !busyRef.current) { event.preventDefault(); onCloseRef.current(); return }
+      if (event.key !== 'Tab') return
+      const focusable = [...(dialogRef.current?.querySelectorAll('button:not([disabled]), input:not([disabled]), select:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])') || [])]
+      if (!focusable.length) return
+      const first = focusable[0]; const last = focusable[focusable.length - 1]
+      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus() }
+      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus() }
+    }
+    document.addEventListener('keydown', handleKeyDown)
+    return () => {
+      cancelAnimationFrame(frame); document.removeEventListener('keydown', handleKeyDown); document.body.style.overflow = previousOverflow
+      if (root) root.inert = previousInert || false
+      previouslyFocused?.focus?.()
+    }
+  }, [open])
+  if (!open) return null
+
+  return createPortal(<div className="pulse-dialog-backdrop" role="presentation" onMouseDown={event => event.target === event.currentTarget && !busy && onClose()}>
+    <form ref={dialogRef} className="pulse-dialog" role="dialog" aria-modal="true" aria-labelledby={titleId} onSubmit={onSubmit}>
+      <header><div className="pulse-dialog-title"><span><BellRing size={18}/></span><div><p>{editing ? 'Update delivery' : 'Daily performance briefing'}</p><h2 id={titleId}>{editing ? 'Edit Performance Pulse' : 'New Performance Pulse'}</h2><small>Compare completed periods and deliver the result on your schedule.</small></div></div><button ref={closeRef} type="button" aria-label="Close Performance Pulse dialog" disabled={busy} onClick={onClose}><X size={18}/></button></header>
+      <div className="pulse-dialog-body">{children}</div>
+      <footer><span><CalendarClock size={14}/> Uses the selected ad account’s timezone</span><div><button type="button" className="pulse-dialog-cancel" disabled={busy} onClick={onClose}>Cancel</button><button className="ops-primary" disabled={busy || submitDisabled}>{busy ? 'Saving…' : editing ? 'Save changes' : 'Create Performance Pulse'}</button></div></footer>
+    </form>
+  </div>, document.body)
 }
