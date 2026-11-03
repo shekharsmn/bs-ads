@@ -40,6 +40,9 @@ class PerformancePulseTest extends TestCase
         $this->assertTrue(Schema::hasTable('performance_pulses'));
         $this->assertTrue(Schema::hasTable('performance_pulse_destination'));
         $this->assertTrue(Schema::hasTable('performance_pulse_runs'));
+        $pivotForeignKeys = collect(Schema::getForeignKeys('performance_pulse_destination'));
+        $this->assertTrue($pivotForeignKeys->contains(fn (array $foreignKey) => $foreignKey['columns'] === ['performance_pulse_id']));
+        $this->assertTrue($pivotForeignKeys->contains(fn (array $foreignKey) => $foreignKey['columns'] === ['notification_destination_id']));
         $this->assertTrue(Schema::hasColumns('notification_deliveries', [
             'performance_pulse_run_id',
             'part_number',

@@ -154,12 +154,93 @@ class PerformanceHierarchyApiTest extends TestCase
         }
         $dates = '?start_date=2026-10-01&end_date=2026-10-27';
         $this->actingAs($viewer)->getJson("/api/performance/accounts/{$account->id}/campaigns/{$campaign->id}/ad-groups{$dates}")
-            ->assertOk()->assertJsonPath('ad_groups.0.ad_group.name', 'Ad group')->assertJsonPath('metrics.cpl', 25);
+            ->assertOk()
+            ->assertJsonPath('ad_groups.0.ad_group.name', 'Ad group')
+            ->assertJsonPath('metrics.cpl', 25)
+            ->assertJsonPath('series.0.metrics.spend', 100)
+            ->assertJsonPath('series.0.metrics.leads', 4);
         $this->actingAs($viewer)->getJson("/api/performance/accounts/{$account->id}/campaigns/{$campaign->id}/ad-groups/{$group->id}/ads{$dates}")
-            ->assertOk()->assertJsonPath('ads.0.ad.name', 'Ad');
+            ->assertOk()
+            ->assertJsonPath('ads.0.ad.name', 'Ad')
+            ->assertJsonPath('series.0.metrics.cpl', 25);
+        $this->actingAs($viewer)->getJson("/api/performance/accounts/{$account->id}/campaigns/{$campaign->id}/ad-groups/{$group->id}/ads/{$ad->id}{$dates}")
+            ->assertOk()
+            ->assertJsonPath('ad.name', 'Ad')
+            ->assertJsonPath('metrics.spend', 100)
+            ->assertJsonPath('series.0.metrics.cpl', 25);
+
+        $wrongGroup = AdGroup::create(['campaign_id' => $campaign->id, 'external_id' => 'g2', 'name' => 'Wrong group', 'status' => 'ENABLED']);
+        $this->actingAs($viewer)->getJson("/api/performance/accounts/{$account->id}/campaigns/{$campaign->id}/ad-groups/{$wrongGroup->id}/ads/{$ad->id}{$dates}")
+            ->assertNotFound();
 
         [, $otherAccount] = $this->accountFixture('UTC', 'other');
         $this->actingAs($viewer)->getJson("/api/performance/accounts/{$otherAccount->id}/campaigns/{$campaign->id}/ad-groups{$dates}")->assertForbidden();
+        $this->actingAs($viewer)->getJson("/api/performance/accounts/{$otherAccount->id}/campaigns/{$campaign->id}/ad-groups/{$group->id}/ads/{$ad->id}{$dates}")->assertForbidden();
+    }
+
+    public function test_client_overview_lists_exact_accounts_and_keeps_currency_summaries_separate(): void
+    {
+        [$viewer, $inrAccount] = $this->accountFixture();
+        $client = $inrAccount->client()->firstOrFail();
+        $client->update(['objective' => 'both']);
+        $usdAccount = AdAccount::create([
+            'client_id' => $client->id, 'platform_connection_id' => $inrAccount->platform_connection_id,
+            'platform' => 'meta', 'external_id' => 'usd-account', 'name' => 'USD Ads', 'currency' => 'USD',
+            'timezone' => 'America/New_York', 'status' => 'inactive',
+        ]);
+        $emptyAccount = AdAccount::create([
+            'client_id' => $client->id, 'platform_connection_id' => $inrAccount->platform_connection_id,
+            'platform' => 'google', 'external_id' => 'empty-account', 'name' => 'No Data Ads', 'currency' => 'INR',
+            'timezone' => 'Asia/Kolkata', 'status' => 'active',
+        ]);
+        foreach ([
+            [$inrAccount, 'INR', '2026-10-20', 100, 5, 0, 0],
+            [$inrAccount, 'INR', '2026-10-21', 50, 0, 1, 200],
+            [$usdAccount, 'USD', '2026-10-20', 20, 2, 0, 0],
+        ] as [$account, $currency, $date, $spend, $leads, $purchases, $value]) {
+            MetricSnapshot::create([
+                'ad_account_id' => $account->id, 'scope' => 'account', 'scope_key' => 'account:'.$account->id,
+                'metric_date' => $date, 'currency' => $currency, 'spend' => $spend, 'impressions' => 1000,
+                'clicks' => 50, 'conversions' => $leads + $purchases, 'leads' => $leads, 'purchases' => $purchases,
+                'conversion_value' => $value, 'collected_at' => '2026-10-22 06:00:00',
+            ]);
+        }
+
+        $response = $this->actingAs($viewer)->getJson("/api/clients/{$client->id}/performance?start_date=2026-10-20&end_date=2026-10-21")
+            ->assertOk()
+            ->assertJsonPath('reporting_dates.start', '2026-10-20')
+            ->assertJsonPath('reporting_dates.end', '2026-10-21')
+            ->assertJsonCount(3, 'accounts')
+            ->assertJsonCount(2, 'currency_groups');
+
+        $accounts = collect($response->json('accounts'))->keyBy('account.id');
+        $this->assertSame(150, $accounts[$inrAccount->id]['metrics']['spend']);
+        $this->assertSame(30, $accounts[$inrAccount->id]['metrics']['cpl']);
+        $this->assertSame('inactive', $accounts[$usdAccount->id]['account']['status']);
+        $this->assertSame(0, $accounts[$emptyAccount->id]['metrics']['spend']);
+        $this->assertNull($accounts[$emptyAccount->id]['freshness_timestamp']);
+
+        $groups = collect($response->json('currency_groups'))->keyBy('currency');
+        $this->assertSame(150, $groups['INR']['metrics']['spend']);
+        $this->assertSame(20, $groups['USD']['metrics']['spend']);
+        $this->assertCount(2, $groups['INR']['series']);
+        $this->assertSame(100, $groups['INR']['series'][0]['metrics']['spend']);
+        $this->assertSame(5, $groups['INR']['series'][0]['metrics']['leads']);
+        $this->assertSame(20, $groups['INR']['series'][0]['metrics']['cpl']);
+    }
+
+    public function test_client_overview_and_exact_account_metadata_are_access_checked(): void
+    {
+        [$viewer, $account] = $this->accountFixture();
+        [, $hiddenAccount] = $this->accountFixture('UTC', 'hidden');
+
+        $this->actingAs($viewer)->getJson("/api/performance/accounts/{$account->id}")
+            ->assertOk()
+            ->assertJsonPath('id', $account->id)
+            ->assertJsonPath('client.objective', 'lead_gen');
+        $this->actingAs($viewer)->getJson("/api/performance/accounts/{$hiddenAccount->id}")->assertForbidden();
+        $this->actingAs($viewer)->getJson("/api/clients/{$hiddenAccount->client_id}/performance?start_date=2026-10-01&end_date=2026-10-31")
+            ->assertForbidden();
     }
 
     private function accountFixture(string $timezone = 'Asia/Kolkata', string $slug = 'acme'): array

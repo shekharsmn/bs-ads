@@ -1,7 +1,9 @@
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Check, Cpu, Pencil, Plus, Trash2, X } from 'lucide-react'
+import { Check, Cpu, Mail, Pencil, Plus, Send, ShieldCheck, Trash2, X } from 'lucide-react'
+import { NavLink, useLocation } from 'react-router-dom'
 import { api } from '../api/client'
+import { useToast } from '../context/ToastContext'
 import { Page } from './ClientsPage'
 
 const emptyForm = {
@@ -23,6 +25,21 @@ const capabilityLabels = {
 }
 
 export default function AiModelSettingsPage() {
+  const { pathname } = useLocation()
+  const emailTab = pathname === '/settings/email-integration'
+
+  return <Page title="Settings" subtitle="Manage the services SharkAds uses for AI analysis and email delivery.">
+    <nav className="settings-tabs" aria-label="Settings sections">
+      <NavLink to="/settings/ai-models"><Cpu size={15}/><span>AI models</span></NavLink>
+      <NavLink to="/settings/email-integration"><Mail size={15}/><span>Email integration</span></NavLink>
+    </nav>
+    <div className="settings-tab-panel" key={emailTab ? 'email' : 'ai'}>
+      {emailTab ? <EmailIntegrationTab/> : <AiModelsTab/>}
+    </div>
+  </Page>
+}
+
+function AiModelsTab() {
   const queryClient = useQueryClient()
   const [editingId, setEditingId] = useState(null)
   const [form, setForm] = useState(emptyForm)
@@ -93,7 +110,10 @@ export default function AiModelSettingsPage() {
     })
   }
 
-  return <Page title="AI model settings" subtitle="Control which models operators can select for content audits.">
+  return <>
+    <div className="settings-section-heading">
+      <div><Cpu size={17}/><span><strong>AI models</strong><small>Control which models operators can select for content audits.</small></span></div>
+    </div>
     <div className="ai-settings-providers">
       <span>Provider keys</span>
       {providers.map(provider => <div key={provider.key} className={provider.configured ? 'ready' : 'missing'}>
@@ -144,7 +164,121 @@ export default function AiModelSettingsPage() {
         <div className="ai-model-actions"><button title={`Edit ${model.label}`} onClick={() => edit(model)}><Pencil size={14}/></button><button title={`Delete ${model.label}`} disabled={remove.isPending} onClick={() => { if (window.confirm(`Delete ${model.label}?`)) remove.mutate(model.id) }}><Trash2 size={14}/></button></div>
       </div>)}
     </div>
-  </Page>
+  </>
+}
+
+const emptyEmailForm = {
+  enabled: false,
+  region: 'us-east-1',
+  port: 587,
+  smtp_username: '',
+  smtp_password: '',
+  from_address: '',
+  from_name: 'SharkAds',
+}
+
+function EmailIntegrationTab() {
+  const query = useQuery({
+    queryKey: ['email-integration-settings'],
+    queryFn: () => api.getEmailIntegration().then(response => response.data),
+  })
+
+  return <>
+    <div className="settings-section-heading">
+      <div><Mail size={17}/><span><strong>Email integration</strong><small>Send invitations, alerts, and operational email through Amazon SES.</small></span></div>
+    </div>
+    {query.isLoading
+      ? <div className="email-integration-loading">Loading email settings…</div>
+      : <EmailIntegrationForm settings={query.data}/>
+    }
+  </>
+}
+
+function EmailIntegrationForm({ settings }) {
+  const queryClient = useQueryClient()
+  const toast = useToast()
+  const [form, setForm] = useState(() => ({
+    ...emptyEmailForm,
+    enabled: settings?.enabled ?? false,
+    region: settings?.region || emptyEmailForm.region,
+    port: settings?.port || emptyEmailForm.port,
+    from_address: settings?.from_address || '',
+    from_name: settings?.from_name || emptyEmailForm.from_name,
+  }))
+  const [testRecipient, setTestRecipient] = useState(settings?.from_address || '')
+  const [error, setError] = useState('')
+
+  const save = useMutation({
+    mutationFn: () => {
+      const payload = { ...form, port: Number(form.port) }
+      if (!payload.smtp_username) delete payload.smtp_username
+      if (!payload.smtp_password) delete payload.smtp_password
+      return api.updateEmailIntegration(payload)
+    },
+    onSuccess: async response => {
+      queryClient.setQueryData(['email-integration-settings'], response.data)
+      setForm(current => ({ ...current, smtp_username: '', smtp_password: '' }))
+      setError('')
+      toast.success('Amazon SES settings saved.')
+    },
+    onError: requestError => setError(apiError(requestError, 'Could not save the Amazon SES settings.')),
+  })
+
+  const sendTest = useMutation({
+    mutationFn: () => api.testEmailIntegration({ recipient: testRecipient }),
+    onSuccess: response => {
+      queryClient.setQueryData(['email-integration-settings'], response.data.integration)
+      setError('')
+      toast.success(`Test email sent to ${testRecipient}.`)
+    },
+    onError: requestError => setError(apiError(requestError, 'Could not send the test email.')),
+  })
+
+  const status = !settings?.enabled ? 'Disabled' : settings.configured ? 'Ready' : 'Setup required'
+
+  return <form className="email-integration-form" onSubmit={event => { event.preventDefault(); setError(''); save.mutate() }}>
+      <div className="email-integration-summary">
+        <span className="email-provider-mark">SES</span>
+        <div><strong>Amazon Simple Email Service</strong><small>SMTP delivery through your AWS region</small></div>
+        <span className={`email-status ${settings?.enabled && settings?.configured ? 'ready' : ''}`}><i/>{status}</span>
+      </div>
+
+      <div className="email-integration-toggle">
+        <div><ShieldCheck size={16}/><span><strong>Enable Amazon SES</strong><small>Use these credentials as the default mail delivery service.</small></span></div>
+        <label className="settings-switch"><input type="checkbox" checked={form.enabled} onChange={event => setForm({ ...form, enabled: event.target.checked })}/><span/></label>
+      </div>
+
+      <div className="email-settings-grid">
+        <Field label="AWS region"><input required value={form.region} onChange={event => setForm({ ...form, region: event.target.value })} placeholder="ap-south-1"/></Field>
+        <Field label="SMTP port"><input required min="1" max="65535" type="number" value={form.port} onChange={event => setForm({ ...form, port: event.target.value })}/></Field>
+        <Field label="SES endpoint"><input readOnly value={`email-smtp.${form.region || 'us-east-1'}.amazonaws.com`}/></Field>
+      </div>
+
+      <div className="email-settings-block">
+        <div><strong>SMTP credentials</strong><small>Create SMTP credentials in the Amazon SES console. Saved credentials are encrypted and never returned by the API.</small></div>
+        <div className="email-settings-grid two">
+          <Field label="SMTP username"><input autoComplete="off" value={form.smtp_username} onChange={event => setForm({ ...form, smtp_username: event.target.value })} placeholder={settings?.smtp_username_hint || 'Enter SES SMTP username'}/></Field>
+          <Field label="SMTP password"><input autoComplete="new-password" type="password" value={form.smtp_password} onChange={event => setForm({ ...form, smtp_password: event.target.value })} placeholder={settings?.smtp_password_configured ? 'Saved — enter a value to replace' : 'Enter SES SMTP password'}/></Field>
+        </div>
+      </div>
+
+      <div className="email-settings-block">
+        <div><strong>Sender identity</strong><small>The From address must be verified in Amazon SES for this region.</small></div>
+        <div className="email-settings-grid two">
+          <Field label="From email"><input required type="email" value={form.from_address} onChange={event => setForm({ ...form, from_address: event.target.value })} placeholder="notifications@example.com"/></Field>
+          <Field label="From name"><input required value={form.from_name} onChange={event => setForm({ ...form, from_name: event.target.value })} placeholder="SharkAds"/></Field>
+        </div>
+      </div>
+
+      {settings?.last_tested_at && <p className={`email-test-result ${settings.last_test_status === 'success' ? 'success' : 'failed'}`}>Last test {settings.last_test_status === 'success' ? 'succeeded' : 'failed'} on {new Date(settings.last_tested_at).toLocaleString()}. {settings.last_test_error}</p>}
+      {error && <p className="ops-form-error">{error}</p>}
+
+      <div className="email-integration-actions">
+        <label><span>Test recipient</span><input type="email" value={testRecipient} onChange={event => setTestRecipient(event.target.value)} placeholder="you@example.com"/></label>
+        <button type="button" className="email-test-button" disabled={!settings?.enabled || !settings?.configured || !testRecipient || sendTest.isPending} onClick={() => { setError(''); sendTest.mutate() }}><Send size={14}/>{sendTest.isPending ? 'Sending…' : 'Send test'}</button>
+        <button className="ops-primary" disabled={save.isPending}>{save.isPending ? 'Saving…' : 'Save settings'}</button>
+      </div>
+  </form>
 }
 
 function Field({ label, children }) { return <label className="ai-settings-field"><span>{label}</span>{children}</label> }

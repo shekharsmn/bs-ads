@@ -6,7 +6,9 @@ use App\Http\Controllers\Controller;
 use App\Jobs\CollectAccountMetricsJob;
 use App\Models\AdAccount;
 use App\Models\AdGroup;
+use App\Models\Ad;
 use App\Models\Campaign;
+use App\Models\Client;
 use App\Services\ClientAccess;
 use App\Services\PerformanceReadService;
 use Carbon\CarbonImmutable;
@@ -67,6 +69,21 @@ class PerformanceController extends Controller
         return $this->performance->overview($account->load('client:id,name'), $start, $end);
     }
 
+    public function clientOverview(Request $request, Client $client)
+    {
+        ClientAccess::authorize($request->user(), $client);
+        [$start, $end] = $this->dates($request);
+
+        return $this->performance->clientOverview($client, $start, $end);
+    }
+
+    public function account(Request $request, AdAccount $account)
+    {
+        $this->authorizeAccount($request, $account);
+
+        return $this->performance->account($account);
+    }
+
     public function campaigns(Request $request, AdAccount $account)
     {
         $this->authorizeAccount($request, $account);
@@ -91,6 +108,20 @@ class PerformanceController extends Controller
         [$start, $end] = $this->dates($request);
 
         return $this->performance->ads($account, $campaign, $adGroup, $start, $end);
+    }
+
+    public function ad(Request $request, AdAccount $account, Campaign $campaign, AdGroup $adGroup, Ad $ad)
+    {
+        $this->authorizeAccount($request, $account);
+        abort_unless(
+            (int) $campaign->ad_account_id === (int) $account->id
+            && (int) $adGroup->campaign_id === (int) $campaign->id
+            && (int) $ad->ad_group_id === (int) $adGroup->id,
+            404
+        );
+        [$start, $end] = $this->dates($request);
+
+        return $this->performance->ad($account, $campaign, $adGroup, $ad, $start, $end);
     }
 
     private function authorizeAccount(Request $request, AdAccount $account): void

@@ -121,6 +121,7 @@ export default function App() {
               <Route path="users" element={<AdminRoute><UsersPage /></AdminRoute>} />
               <Route path="data-health" element={<DataHealthPage />} />
               <Route path="settings/ai-models" element={<AdminRoute><AiModelSettingsPage /></AdminRoute>} />
+              <Route path="settings/email-integration" element={<AdminRoute><AiModelSettingsPage /></AdminRoute>} />
               <Route path="ad-library" element={<AdLibraryPage />} />
               <Route path="ad-library/audits" element={<AdLibraryAuditPage />} />
               <Route path="ad-library/audits/:id" element={<AdLibraryAuditPage />} />

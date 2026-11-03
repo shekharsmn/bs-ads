@@ -7,8 +7,10 @@ import { AsyncStateNotice } from '../components/ui/AsyncState'
 import { ScopedAlerts, ScopedConnections, ScopedDataHealth, ScopedReports } from '../components/ScopedOperations'
 import { accountPerformancePath } from '../lib/performanceRoutes'
 import ConfirmDialog from '../components/ui/ConfirmDialog'
+import ClientPerformanceOverview from '../components/ClientPerformanceOverview'
 import { useAuth } from '../context/AuthContext'
 import { useToast } from '../context/ToastContext'
+import { completedDateRange } from '../lib/performance'
 
 const tabs = [
   ['overview', 'Overview', BarChart3], ['accounts', 'Ad accounts', Settings2], ['connections', 'Connections', Cable],
@@ -26,7 +28,11 @@ export default function ClientHubPage() {
   const client = useQuery({ queryKey: ['client', clientId], queryFn: () => api.getClient(clientId).then(response => response.data) })
   const library = useQuery({ queryKey: ['ad-library-searches', clientId], queryFn: () => api.getAdLibrarySearches({ related_client_id: clientId }).then(response => response.data), enabled: active === 'library' })
   const audits = useQuery({ queryKey: ['ad-library-audits', clientId], queryFn: () => api.getAdLibraryAudits({ related_client_id: clientId, per_page: 25 }).then(response => response.data), enabled: active === 'audits' })
-  const selectTab = tab => setSearch(tab === 'overview' ? {} : { tab }, { replace: true })
+  const selectTab = tab => setSearch(current => { const next = new URLSearchParams(current); tab === 'overview' ? next.delete('tab') : next.set('tab', tab); return next }, { replace: true })
+  const range = search.get('range') || '30d'
+  const preset = completedDateRange(Number(range === 'custom' ? 30 : range.replace('d', '')), client.data?.timezone)
+  const dates = { start_date: search.get('start_date') || preset.start_date, end_date: search.get('end_date') || preset.end_date }
+  const updatePeriod = next => setSearch(current => { const merged = new URLSearchParams(current); Object.entries(next).forEach(([key, value]) => value ? merged.set(key, value) : merged.delete(key)); return merged }, { replace: true })
   const accountCount = client.data?.ad_accounts?.length || 0
   const alertCount = client.data?.incidents_count || 0
   const removeAccount = useMutation({
@@ -50,7 +56,7 @@ export default function ClientHubPage() {
     <section className="client-hub-stats"><div><span>Ad accounts</span><strong>{accountCount}</strong></div><div><span>Open alerts</span><strong>{alertCount}</strong></div><div><span>Report schedules</span><strong>{client.data?.report_schedules?.length || 0}</strong></div><div><span>Status</span><strong>{client.data?.active ? 'Active' : 'Paused'}</strong></div></section>
     <nav className="client-hub-tabs" aria-label="Client sections">{tabs.map(([key, label, icon]) => <button key={key} className={active === key ? 'active' : ''} onClick={() => selectTab(key)}>{createElement(icon, { size: 14 })}{label}</button>)}</nav>
 
-    {active === 'overview' && <div className="client-overview-grid"><ScopedAlerts clientId={clientId} limit={5}/><ScopedDataHealth clientId={clientId} limit={5}/><ScopedConnections clientId={clientId}/><ScopedReports clientId={clientId} limit={4}/></div>}
+    {active === 'overview' && <ClientPerformanceOverview client={client.data} clientId={clientId} range={range} dates={dates} onPeriodChange={updatePeriod}/>}
     {active === 'accounts' && <section className="client-hub-section"><SectionHead title="Connected ad accounts" subtitle="Open an account to inspect performance and its contextual operations."/>{(client.data?.ad_accounts || []).map(account => <article className="client-account-row" key={account.id}><i data-platform={account.platform}/><Link className="client-account-main" to={accountPerformancePath(clientId, account.id)}><strong>{account.name}</strong><small>{account.platform} · {account.external_id} · {account.currency} · {account.timezone}</small></Link><em data-status={account.status}>{account.status}</em>{user?.role === 'admin' && <button className="account-delete-button" aria-label={`Delete ${account.name}`} onClick={() => setPendingDelete(account)}><Trash2 size={14}/></button>}</article>)}{client.isSuccess && !accountCount && <Empty>No ad accounts are assigned to this client.</Empty>}</section>}
     {active === 'connections' && <ScopedConnections clientId={clientId}/>} 
     {active === 'health' && <div className="client-overview-grid"><ScopedAlerts clientId={clientId} limit={25}/><ScopedDataHealth clientId={clientId} limit={25}/></div>}

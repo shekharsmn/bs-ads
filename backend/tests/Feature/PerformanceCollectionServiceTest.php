@@ -8,12 +8,39 @@ use App\Models\MetricSnapshot;
 use App\Models\PlatformConnection;
 use App\Services\PerformanceCollectionService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Http;
 use Tests\TestCase;
 
 class PerformanceCollectionServiceTest extends TestCase
 {
     use RefreshDatabase;
+
+    public function test_new_account_collection_defaults_to_the_last_30_completed_days(): void
+    {
+        $this->travelTo(Carbon::parse('2026-11-03 12:00:00', 'Asia/Kolkata'));
+        $account = $this->metaAccount('initial-window');
+        Http::fake(['graph.facebook.com/*' => Http::response(['data' => []])]);
+
+        app(PerformanceCollectionService::class)->collect($account);
+
+        $this->assertSame([
+            ['since' => '2026-10-04', 'until' => '2026-11-02'],
+        ], $this->recordedTimeRanges());
+    }
+
+    public function test_existing_account_collection_keeps_a_14_day_completed_window(): void
+    {
+        $this->travelTo(Carbon::parse('2026-11-03 12:00:00', 'Asia/Kolkata'));
+        $account = $this->metaAccount('incremental-window', '2026-11-01 12:00:00');
+        Http::fake(['graph.facebook.com/*' => Http::response(['data' => []])]);
+
+        app(PerformanceCollectionService::class)->collect($account);
+
+        $this->assertSame([
+            ['since' => '2026-10-20', 'until' => '2026-11-02'],
+        ], $this->recordedTimeRanges());
+    }
 
     public function test_unmapped_google_conversions_fall_back_to_the_client_objective(): void
     {
@@ -121,5 +148,31 @@ class PerformanceCollectionServiceTest extends TestCase
         $this->assertDatabaseCount('metric_snapshots', 4);
         $this->assertDatabaseHas('metric_snapshots', ['scope' => 'ad_group', 'leads' => 5]);
         $this->assertDatabaseHas('metric_snapshots', ['scope' => 'ad', 'leads' => 5]);
+    }
+
+    private function metaAccount(string $suffix, ?string $lastCollectedAt = null): AdAccount
+    {
+        $client = Client::create(['name' => 'Acme '.$suffix, 'slug' => $suffix, 'objective' => 'ecommerce', 'currency' => 'INR']);
+        $connection = PlatformConnection::create([
+            'platform' => 'meta', 'name' => 'Meta '.$suffix, 'scope' => 'agency',
+            'credentials' => ['access_token' => 'test-token'], 'status' => 'healthy',
+        ]);
+
+        return AdAccount::create([
+            'client_id' => $client->id, 'platform_connection_id' => $connection->id,
+            'platform' => 'meta', 'external_id' => 'act_'.$suffix, 'name' => 'Acme Meta '.$suffix,
+            'currency' => 'INR', 'timezone' => 'Asia/Kolkata', 'last_collected_at' => $lastCollectedAt,
+        ]);
+    }
+
+    private function recordedTimeRanges(): array
+    {
+        return collect(Http::recorded())
+            ->map(fn (array $record) => $record[0]->data()['time_range'] ?? null)
+            ->filter()
+            ->map(fn (string $range) => json_decode($range, true, flags: JSON_THROW_ON_ERROR))
+            ->unique(fn (array $range) => json_encode($range))
+            ->values()
+            ->all();
     }
 }

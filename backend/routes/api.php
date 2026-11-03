@@ -14,6 +14,7 @@ use App\Http\Controllers\Api\ClientController;
 use App\Http\Controllers\Api\ConnectionController;
 use App\Http\Controllers\Api\ConversionMappingController;
 use App\Http\Controllers\Api\DataQualityController;
+use App\Http\Controllers\Api\EmailIntegrationController;
 use App\Http\Controllers\Api\GoogleAccountController;
 use App\Http\Controllers\Api\GoogleOAuthController;
 use App\Http\Controllers\Api\InspectorController;
@@ -108,10 +109,13 @@ Route::middleware(['auth:sanctum', 'active', 'audit.mutations'])->group(function
 
     Route::get('/performance/accounts', [PerformanceController::class, 'accounts']);
     Route::post('/performance/refresh', [PerformanceController::class, 'refresh']);
+    Route::get('/clients/{client}/performance', [PerformanceController::class, 'clientOverview']);
+    Route::get('/performance/accounts/{account}', [PerformanceController::class, 'account']);
     Route::get('/performance/accounts/{account}/overview', [PerformanceController::class, 'overview']);
     Route::get('/performance/accounts/{account}/campaigns', [PerformanceController::class, 'campaigns']);
     Route::get('/performance/accounts/{account}/campaigns/{campaign}/ad-groups', [PerformanceController::class, 'adGroups']);
     Route::get('/performance/accounts/{account}/campaigns/{campaign}/ad-groups/{adGroup}/ads', [PerformanceController::class, 'ads']);
+    Route::get('/performance/accounts/{account}/campaigns/{campaign}/ad-groups/{adGroup}/ads/{ad}', [PerformanceController::class, 'ad']);
 
     Route::get('/alert-templates', [AlertRuleController::class, 'templates']);
     Route::post('/alert-templates', [AlertRuleController::class, 'storeTemplate'])->middleware('role:admin');
@@ -160,6 +164,9 @@ Route::middleware(['auth:sanctum', 'active', 'audit.mutations'])->group(function
     Route::post('/settings/ai-models', [AiModelController::class, 'store'])->middleware('role:admin');
     Route::put('/settings/ai-models/{aiModel}', [AiModelController::class, 'update'])->middleware('role:admin');
     Route::delete('/settings/ai-models/{aiModel}', [AiModelController::class, 'destroy'])->middleware('role:admin');
+    Route::get('/settings/email-integration', [EmailIntegrationController::class, 'show'])->middleware('role:admin');
+    Route::put('/settings/email-integration', [EmailIntegrationController::class, 'update'])->middleware('role:admin');
+    Route::post('/settings/email-integration/test', [EmailIntegrationController::class, 'test'])->middleware('role:admin');
 
     Route::get('/ad-library/searches', [AdLibraryController::class, 'searches']);
     Route::post('/ad-library/searches', [AdLibraryController::class, 'store']);

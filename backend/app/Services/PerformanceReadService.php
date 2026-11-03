@@ -4,7 +4,9 @@ namespace App\Services;
 
 use App\Models\AdAccount;
 use App\Models\AdGroup;
+use App\Models\Ad;
 use App\Models\Campaign;
+use App\Models\Client;
 use App\Models\User;
 use Carbon\CarbonImmutable;
 use Illuminate\Database\Query\Builder;
@@ -114,6 +116,54 @@ class PerformanceReadService
         ];
     }
 
+    public function clientOverview(Client $client, string $start, string $end): array
+    {
+        $accounts = $client->adAccounts()->orderBy('name')->get();
+        $accountIds = $accounts->pluck('id');
+        $totalsByAccount = $this->aggregateMany($accountIds->all(), $start, $end, ['metric_snapshots.ad_account_id'])
+            ->get()->keyBy('ad_account_id');
+
+        $accountRows = $accounts->map(function (AdAccount $account) use ($client, $totalsByAccount): array {
+            $row = $totalsByAccount->get($account->id);
+
+            return [
+                'account' => $this->accountPayload($account->setRelation('client', $client)),
+                'freshness_timestamp' => $row?->freshness ? CarbonImmutable::parse($row->freshness)->toIso8601String() : null,
+                'metrics' => $row ? $this->metrics($this->rowTotals($row)) : $this->metrics([]),
+            ];
+        })->values();
+
+        $summaryRows = $this->aggregateMany($accountIds->all(), $start, $end, ['ad_accounts.currency'])
+            ->get()->keyBy('currency');
+        $seriesRows = $this->aggregateMany($accountIds->all(), $start, $end, ['ad_accounts.currency', 'metric_snapshots.metric_date'])
+            ->orderBy('metric_snapshots.metric_date')->get()->groupBy('currency');
+
+        $currencyGroups = $accounts->pluck('currency')->unique()->sort()->values()->map(function (string $currency) use ($summaryRows, $seriesRows): array {
+            $summary = $summaryRows->get($currency);
+
+            return [
+                'currency' => $currency,
+                'freshness_timestamp' => $summary?->freshness ? CarbonImmutable::parse($summary->freshness)->toIso8601String() : null,
+                'metrics' => $summary ? $this->metrics($this->rowTotals($summary)) : $this->metrics([]),
+                'series' => collect($seriesRows->get($currency, []))->map(fn ($row) => [
+                    'date' => CarbonImmutable::parse($row->metric_date)->toDateString(),
+                    'metrics' => $this->metrics($this->rowTotals($row)),
+                ])->values(),
+            ];
+        });
+
+        return [
+            'reporting_dates' => ['start' => $start, 'end' => $end],
+            'accounts' => $accountRows,
+            'currency_groups' => $currencyGroups,
+        ];
+    }
+
+    public function account(AdAccount $account): array
+    {
+        return $this->accountPayload($account->loadMissing('client:id,name,objective'));
+    }
+
     public function campaigns(AdAccount $account, string $start, string $end): array
     {
         $rows = $this->aggregate($account->id, 'campaign', $start, $end, ['metric_snapshots.campaign_id'])->get();
@@ -134,6 +184,7 @@ class PerformanceReadService
         return [
             'campaign' => $campaign,
             'metrics' => $this->entityMetrics($account->id, 'campaign', 'campaign_id', $campaign->id, $start, $end),
+            'series' => $this->entitySeries($account->id, 'campaign', 'campaign_id', $campaign->id, $start, $end),
             'ad_groups' => $rows->map(fn ($row) => [
                 'ad_group' => $models->get($row->ad_group_id),
                 'metrics' => $this->metrics($this->rowTotals($row)),
@@ -152,10 +203,22 @@ class PerformanceReadService
             'campaign' => $campaign,
             'ad_group' => $adGroup,
             'metrics' => $this->entityMetrics($account->id, 'ad_group', 'ad_group_id', $adGroup->id, $start, $end),
+            'series' => $this->entitySeries($account->id, 'ad_group', 'ad_group_id', $adGroup->id, $start, $end),
             'ads' => $rows->map(fn ($row) => [
                 'ad' => $models->get($row->ad_id),
                 'metrics' => $this->metrics($this->rowTotals($row)),
             ])->filter(fn ($row) => $row['ad'])->sortByDesc('metrics.spend')->values(),
+        ];
+    }
+
+    public function ad(AdAccount $account, Campaign $campaign, AdGroup $adGroup, Ad $ad, string $start, string $end): array
+    {
+        return [
+            'campaign' => $campaign,
+            'ad_group' => $adGroup,
+            'ad' => $ad,
+            'metrics' => $this->entityMetrics($account->id, 'ad', 'ad_id', $ad->id, $start, $end),
+            'series' => $this->entitySeries($account->id, 'ad', 'ad_id', $ad->id, $start, $end),
         ];
     }
 
@@ -164,6 +227,18 @@ class PerformanceReadService
         $row = $this->aggregate($accountId, $scope, $start, $end)->where("metric_snapshots.{$column}", $id)->first();
 
         return $row ? $this->metrics($this->rowTotals($row)) : $this->metrics([]);
+    }
+
+    private function entitySeries(int $accountId, string $scope, string $column, int $id, string $start, string $end): array
+    {
+        return $this->aggregate($accountId, $scope, $start, $end, ['metric_snapshots.metric_date'])
+            ->where("metric_snapshots.{$column}", $id)
+            ->orderBy('metric_snapshots.metric_date')
+            ->get()
+            ->map(fn ($row) => [
+                'date' => CarbonImmutable::parse($row->metric_date)->toDateString(),
+                'metrics' => $this->metrics($this->rowTotals($row)),
+            ])->values()->all();
     }
 
     private function aggregate(int $accountId, string $scope, string $start, string $end, array $groups = []): Builder
@@ -176,6 +251,23 @@ class PerformanceReadService
         }
 
         return $groups ? $query->groupBy($groups) : $query;
+    }
+
+    private function aggregateMany(array $accountIds, string $start, string $end, array $groups): Builder
+    {
+        $query = DB::table('metric_snapshots')
+            ->join('ad_accounts', 'ad_accounts.id', '=', 'metric_snapshots.ad_account_id')
+            ->whereIn('metric_snapshots.ad_account_id', $accountIds)
+            ->where('metric_snapshots.scope', 'account')
+            ->whereDate('metric_snapshots.metric_date', '>=', $start)
+            ->whereDate('metric_snapshots.metric_date', '<=', $end)
+            ->select($groups)
+            ->selectRaw('MAX(metric_snapshots.collected_at) as freshness');
+        foreach (self::SUM_COLUMNS as $column) {
+            $query->selectRaw("SUM(metric_snapshots.{$column}) as {$column}");
+        }
+
+        return $query->groupBy($groups);
     }
 
     private function rowTotals(object $row): array
@@ -199,7 +291,7 @@ class PerformanceReadService
     private function accountPayload(AdAccount $account): array
     {
         return $account->only(['id', 'client_id', 'external_id', 'name', 'platform', 'currency', 'timezone', 'status']) + [
-            'client' => $account->client?->only(['id', 'name']),
+            'client' => $account->client?->only(['id', 'name', 'objective']),
         ];
     }
 }

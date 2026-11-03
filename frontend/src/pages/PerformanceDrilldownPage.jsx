@@ -1,13 +1,16 @@
 import { useQuery } from '@tanstack/react-query'
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { AlertTriangle, ArrowLeft, DatabaseZap, ExternalLink, FileText, HeartPulse, LayoutDashboard } from 'lucide-react'
-import { Area, AreaChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { api } from '../api/client'
+import CampaignColumnConfigurator from '../components/CampaignColumnConfigurator'
 import PerformanceMetricsTable from '../components/PerformanceMetricsTable'
 import PerformancePeriodControl from '../components/PerformancePeriodControl'
+import PerformanceTrendChart from '../components/PerformanceTrendChart'
 import { ScopedAlerts, ScopedConnections, ScopedDataHealth, ScopedReports } from '../components/ScopedOperations'
 import { AsyncStateNotice } from '../components/ui/AsyncState'
-import { completedDateRange, formatMoney, formatNumber, formatRoas, metricColumns } from '../lib/performance'
+import { useAuth } from '../context/AuthContext'
+import useCampaignColumns from '../hooks/useCampaignColumns'
+import { completedDateRange, formatMoney, formatNumber, formatRoas, metricColumns, metricColumnsFor, objectiveMetricKeys } from '../lib/performance'
 import { adPlatformEntityUrl, adPlatformLabel } from '../lib/adPlatformDeepLinks'
 import { accountPerformancePath, adGroupPerformancePath, adPerformancePath, campaignPerformancePath, commandCenterPath } from '../lib/performanceRoutes'
 
@@ -23,8 +26,11 @@ export default function PerformanceDrilldownPage() {
   const { clientId, accountId, campaignId, groupId, adId } = useParams()
   const [search, setSearch] = useSearchParams()
   const navigate = useNavigate()
-  const accounts = useQuery({ queryKey: ['performance-accounts'], queryFn: () => api.getPerformanceAccounts().then(response => response.data.accounts) })
-  const account = accounts.data?.find(item => (String(item.id) === String(accountId) || item.account_ids?.some(id => String(id) === String(accountId))) && String(item.client?.id) === String(clientId))
+  const { user } = useAuth()
+  const accountQuery = useQuery({ queryKey: ['performance-account', accountId], queryFn: () => api.getPerformanceAccount(accountId).then(response => response.data), enabled: Boolean(accountId) })
+  const account = accountQuery.data
+  const campaignColumns = useCampaignColumns({ userId: user?.id, accountId: account?.id, objective: account?.client?.objective })
+  const campaignMetricColumns = metricColumnsFor(campaignColumns.keys)
   const range = search.get('range') || '30d'
   const preset = completedDateRange(Number(range === 'custom' ? 30 : range.replace('d', '')), account?.timezone)
   const dates = { start_date: search.get('start_date') || preset.start_date, end_date: search.get('end_date') || preset.end_date }
@@ -36,14 +42,17 @@ export default function PerformanceDrilldownPage() {
   const overview = useQuery({ queryKey: ['account-overview', accountId, dates], queryFn: () => api.getAccountPerformance(accountId, dates).then(response => response.data), enabled: enabled && !campaignId })
   const campaigns = useQuery({ queryKey: ['account-campaigns', accountId, dates], queryFn: () => api.getAccountCampaigns(accountId, dates).then(response => response.data), enabled: enabled && !campaignId })
   const groups = useQuery({ queryKey: ['campaign-ad-groups', accountId, campaignId, dates], queryFn: () => api.getCampaignAdGroups(accountId, campaignId, dates).then(response => response.data), enabled: enabled && Boolean(campaignId) && !groupId })
-  const ads = useQuery({ queryKey: ['ad-group-ads', accountId, campaignId, groupId, dates], queryFn: () => api.getAdGroupAds(accountId, campaignId, groupId, dates).then(response => response.data), enabled: enabled && Boolean(groupId) })
-  const activeQueries = [accounts, ...(groupId ? [ads] : campaignId ? [groups] : [overview, campaigns])]
+  const ads = useQuery({ queryKey: ['ad-group-ads', accountId, campaignId, groupId, dates], queryFn: () => api.getAdGroupAds(accountId, campaignId, groupId, dates).then(response => response.data), enabled: enabled && Boolean(groupId) && !adId })
+  const ad = useQuery({ queryKey: ['ad-performance', accountId, campaignId, groupId, adId, dates], queryFn: () => api.getAdPerformance(accountId, campaignId, groupId, adId, dates).then(response => response.data), enabled: enabled && Boolean(adId) })
+  const activeQueries = [accountQuery, ...(adId ? [ad] : groupId ? [ads] : campaignId ? [groups] : [overview, campaigns])]
 
   const level = adId ? 'ad' : groupId ? 'group' : campaignId ? 'campaign' : 'account'
-  const payload = groupId ? ads.data : level === 'campaign' ? groups.data : overview.data
-  const selectedAd = adId ? payload?.ads?.find(row => String(row.ad?.id) === String(adId)) : null
+  const payload = adId ? ad.data : groupId ? ads.data : level === 'campaign' ? groups.data : overview.data
+  const selectedAd = adId && payload?.ad ? { ad: payload.ad, metrics: payload.metrics } : null
   const title = level === 'ad' ? selectedAd?.ad?.name : level === 'group' ? payload?.ad_group?.name : level === 'campaign' ? payload?.campaign?.name : account?.name
-  const metrics = level === 'ad' ? selectedAd?.metrics : level === 'account' ? overview.data?.metrics : payload?.metrics
+  const metrics = level === 'account' ? overview.data?.metrics : payload?.metrics
+  const trendColumns = metricColumnsFor(objectiveMetricKeys(account?.client?.objective))
+  const series = level === 'account' ? overview.data?.series : payload?.series
   const childLabel = level === 'account' ? 'Campaigns' : level === 'campaign' ? (account?.platform === 'meta' ? 'Ad sets' : 'Ad groups') : level === 'group' ? 'Ads' : null
   const childNoun = level === 'account' ? 'campaign' : account?.platform === 'meta' ? 'ad set' : 'ad group'
   const groupLabel = account?.platform === 'meta' ? 'Ad set' : 'Ad group'
@@ -87,8 +96,8 @@ export default function PerformanceDrilldownPage() {
       {section === 'details' && <>
         <AsyncStateNotice queries={activeQueries}/>
         <section className="performance-kpis">{metricColumns.map(column => <div key={column.key}><span>{column.label}</span><strong>{column.key === 'spend' || column.key === 'cpl' || column.key === 'cpp' ? formatMoney(metrics?.[column.key], account?.currency) : column.key === 'roas' ? formatRoas(metrics?.[column.key]) : formatNumber(metrics?.[column.key])}</strong></div>)}</section>
-        <section className="performance-trend"><div className="performance-section-head"><div><h2>Spend trend</h2><p>Daily account spend in {account?.currency}</p></div></div><div className="performance-chart">{overview.data?.series?.length ? <ResponsiveContainer width="100%" height="100%"><AreaChart data={overview.data.series.map(item => ({ date: item.date.slice(5), spend: item.metrics.spend }))}><defs><linearGradient id="accountSpend" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="#2563eb" stopOpacity=".2"/><stop offset="100%" stopColor="#2563eb" stopOpacity="0"/></linearGradient></defs><XAxis dataKey="date" axisLine={false} tickLine={false}/><YAxis axisLine={false} tickLine={false}/><Tooltip formatter={value => formatMoney(value, account?.currency)}/><Area type="monotone" dataKey="spend" stroke="#2563eb" strokeWidth={2} fill="url(#accountSpend)"/></AreaChart></ResponsiveContainer> : <div className="performance-empty-row">No trend data in this period.</div>}</div></section>
-        <section className="performance-children"><div className="performance-section-head"><div><h2>{childLabel}</h2><p>{`Select ${childNoun === 'ad set' ? 'an' : 'a'} ${childNoun} to inspect the next level.`}</p></div></div><PerformanceMetricsTable label={childLabel.slice(0, -1)} rows={rows} currency={account?.currency} onOpen={openChild} platformLabel={platformLabel}/></section>
+        <PerformanceTrendChart series={series} currency={account?.currency} columns={trendColumns} ariaLabel="Account daily performance trend"/>
+        <section className="performance-children"><div className="performance-section-head"><div><h2>{childLabel}</h2><p>{`Select ${childNoun === 'ad set' ? 'an' : 'a'} ${childNoun} to inspect the next level.`}</p></div><CampaignColumnConfigurator columnKeys={campaignColumns.keys} onChange={campaignColumns.setKeys} onReset={campaignColumns.reset}/></div><PerformanceMetricsTable label={childLabel.slice(0, -1)} rows={rows} currency={account?.currency} onOpen={openChild} platformLabel={platformLabel} metricColumns={campaignMetricColumns}/></section>
       </>}
       {section === 'alerts' && <ScopedAlerts clientId={clientId} accountId={account.id} limit={25}/>} 
       {section === 'data-health' && <ScopedDataHealth clientId={clientId} accountId={account.id} limit={25}/>} 
@@ -97,6 +106,7 @@ export default function PerformanceDrilldownPage() {
     </div> : <>
       <AsyncStateNotice queries={activeQueries}/>
       {level !== 'account' && <section className="performance-kpis">{metricColumns.map(column => <div key={column.key}><span>{column.label}</span><strong>{column.key === 'spend' || column.key === 'cpl' || column.key === 'cpp' ? formatMoney(metrics?.[column.key], account?.currency) : column.key === 'roas' ? formatRoas(metrics?.[column.key]) : formatNumber(metrics?.[column.key])}</strong></div>)}</section>}
+      {level !== 'account' && <PerformanceTrendChart series={series} currency={account?.currency} columns={trendColumns} ariaLabel={`${level === 'campaign' ? 'Campaign' : level === 'group' ? groupLabel : 'Ad'} daily performance trend`}/>}
       {level !== 'account' && level !== 'ad' && <section className="performance-children"><div className="performance-section-head"><div><h2>{childLabel}</h2><p>{level === 'group' ? 'Select an ad to inspect its performance.' : `Select ${childNoun === 'ad set' ? 'an' : 'a'} ${childNoun} to inspect the next level.`}</p></div><button onClick={() => navigate(-1)}><ArrowLeft size={14}/> Back</button></div><PerformanceMetricsTable label={childLabel.slice(0, -1)} rows={rows} currency={account?.currency} onOpen={openChild} platformLabel={platformLabel}/></section>}
     </>}
     {level === 'ad' && <section className="performance-children ad-detail-section"><div className="performance-section-head"><div><h2>Ad details</h2><p>Platform identity and hierarchy for this ad.</p></div><button onClick={() => navigate(-1)}><ArrowLeft size={14}/> Back to ads</button></div><dl className="ad-detail-grid"><div><dt>Status</dt><dd><span className="entity-status">{selectedAd?.ad?.status || 'Unknown'}</span></dd></div><div><dt>Format</dt><dd>{selectedAd?.ad?.type || 'Not reported'}</dd></div><div><dt>Platform</dt><dd>{platformLabel}</dd></div><div><dt>Ad ID</dt><dd className="mono">{selectedAd?.ad?.external_id || 'Not reported'}</dd></div><div><dt>Client</dt><dd>{account?.client?.name || 'Not reported'}</dd></div><div><dt>Ad account</dt><dd><Link to={accountPath}>{account?.name || 'Not reported'}</Link><small className="mono">{account?.external_id}</small></dd></div><div><dt>Campaign</dt><dd><Link to={campaignPath}>{payload?.campaign?.name || 'Not reported'}</Link><small className="mono">{payload?.campaign?.external_id}</small></dd></div><div><dt>{groupLabel}</dt><dd><Link to={groupPath}>{payload?.ad_group?.name || 'Not reported'}</Link><small className="mono">{payload?.ad_group?.external_id}</small></dd></div><div><dt>Currency</dt><dd>{account?.currency || 'Not reported'}</dd></div><div><dt>Reporting timezone</dt><dd>{account?.timezone || 'Not reported'}</dd></div></dl></section>}

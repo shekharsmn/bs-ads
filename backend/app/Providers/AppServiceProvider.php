@@ -8,6 +8,7 @@ use App\Models\Report;
 use App\Models\ReportRun;
 use App\Services\AdLibrary\AdLibraryProvider;
 use App\Services\AdLibrary\ScraperAdLibraryProvider;
+use App\Services\EmailIntegrationService;
 use App\Services\WorkflowActivityService;
 use Illuminate\Cache\RateLimiting\Limit;
 use Illuminate\Http\Request;
@@ -29,6 +30,12 @@ class AppServiceProvider extends ServiceProvider
      */
     public function boot(): void
     {
+        try {
+            app(EmailIntegrationService::class)->apply(purge: false);
+        } catch (\Throwable) {
+            // Database-backed mail settings are optional during setup and migrations.
+        }
+
         RateLimiter::for('public-reports', function (Request $request) {
             $token = (string) $request->route('token');
 
