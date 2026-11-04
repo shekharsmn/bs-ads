@@ -13,7 +13,7 @@ vi.mock('recharts', () => ({ ResponsiveContainer: ({ children }) => <div>{childr
 afterEach(cleanup)
 beforeEach(() => {
   vi.clearAllMocks()
-  api.getClient.mockResolvedValue({ data: { id: 7, name: 'Acme', timezone: 'UTC', currency: 'USD', objective: 'ecommerce', active: true, incidents_count: 2, report_schedules: [], ad_accounts: [{ id: 9, name: 'Acme Meta', platform: 'meta', external_id: 'act_9', currency: 'USD', timezone: 'UTC', status: 'active' }] } })
+  api.getClient.mockResolvedValue({ data: { id: 7, name: 'Acme', timezone: 'UTC', currency: 'USD', objective: 'ecommerce', active: true, portal_enabled: true, incidents_count: 2, report_schedules: [], ad_accounts: [{ id: 9, name: 'Acme Meta', platform: 'meta', external_id: 'act_9', currency: 'USD', timezone: 'UTC', status: 'active' }] } })
   api.getClientPerformance.mockResolvedValue({ data: { reporting_dates: { start: '2026-10-01', end: '2026-10-30' }, currency_groups: [{ currency: 'USD', freshness_timestamp: '2026-10-31T01:00:00Z', metrics: { spend: 350, purchases: 7, cpp: 50, conversion_value: 1400, roas: 4 }, series: [{ date: '2026-10-29', metrics: { spend: 200, purchases: 4, cpp: 50, conversion_value: 800, roas: 4 } }, { date: '2026-10-30', spend: 250 }] }], accounts: [{ account: { id: 9, name: 'Acme Meta', platform: 'meta', external_id: 'act_9', currency: 'USD', timezone: 'UTC', status: 'active' }, freshness_timestamp: '2026-10-31T01:00:00Z', metrics: { spend: 200, purchases: 4, cpp: 50, conversion_value: 800, roas: 4 } }, { account: { id: 10, name: 'Acme Google', platform: 'google', external_id: '10', currency: 'USD', timezone: 'UTC', status: 'active' }, freshness_timestamp: '2026-10-31T01:00:00Z', metrics: { spend: 150, purchases: 3, cpp: 50, conversion_value: 600, roas: 4 } }] } })
   api.deleteAdAccount.mockResolvedValue({ data: null })
 })
@@ -28,6 +28,14 @@ it('shows linked accounts on the URL-backed client hub', async () => {
   expect(await screen.findByRole('heading', { name: 'Acme' }, { timeout: 5_000 })).toBeInTheDocument()
   expect(screen.getByRole('link', { name: /Acme Meta/ })).toHaveAttribute('href', '/command-center/clients/7/ad-accounts/9')
   expect(screen.getByRole('button', { name: /Ad accounts/ })).toHaveClass('active')
+  expect(screen.getByRole('link', { name: 'Login as client' })).toHaveAttribute('href', '/portal/preview/clients/7')
+  expect(screen.getByRole('link', { name: 'Login as client' })).toHaveAttribute('target', '_blank')
+})
+
+it('keeps login as client visible but disabled until portal access is enabled', async () => {
+  api.getClient.mockResolvedValueOnce({ data: { id: 7, name: 'Acme', timezone: 'UTC', currency: 'USD', objective: 'ecommerce', active: true, portal_enabled: false, incidents_count: 0, report_schedules: [], ad_accounts: [] } })
+  renderHub()
+  expect(await screen.findByRole('button', { name: 'Login as client' })).toBeDisabled()
 })
 
 it('requires confirmation before deleting an ad account', async () => {

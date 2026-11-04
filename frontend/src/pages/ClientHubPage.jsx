@@ -1,7 +1,7 @@
 import { createElement, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useParams, useSearchParams } from 'react-router-dom'
-import { Activity, AlertTriangle, BarChart3, Cable, ClipboardCheck, FileText, LibraryBig, Settings2, ShieldCheck, Trash2 } from 'lucide-react'
+import { Activity, AlertTriangle, BarChart3, Cable, ClipboardCheck, FileText, LibraryBig, Settings2, ShieldCheck, Trash2, UserRoundCheck } from 'lucide-react'
 import { api } from '../api/client'
 import { AsyncStateNotice } from '../components/ui/AsyncState'
 import { ScopedAlerts, ScopedConnections, ScopedDataHealth, ScopedReports } from '../components/ScopedOperations'
@@ -54,7 +54,7 @@ export default function ClientHubPage() {
 
   return <main className="client-hub-page">
     <AsyncStateNotice queries={[client]}/>
-    <header className="client-hub-head"><div><p className="ops-eyebrow">Client operating hub</p><h1>{client.data?.name || 'Loading client…'}</h1><p>{client.data ? `${client.data.timezone} · ${client.data.currency} · ${client.data.objective.replace('_', ' ')}` : 'Accounts, delivery, research, and operational health in one workspace.'}</p></div><Link className="client-hub-back" to="/clients">All clients</Link></header>
+    <header className="client-hub-head"><div><p className="ops-eyebrow">Client operating hub</p><h1>{client.data?.name || 'Loading client…'}</h1><p>{client.data ? `${client.data.timezone} · ${client.data.currency} · ${client.data.objective.replace('_', ' ')}` : 'Accounts, delivery, research, and operational health in one workspace.'}</p></div><div className="client-hub-head-actions">{user?.role === 'admin' && (client.data?.portal_enabled ? <a className="client-login-as" href={`/portal/preview/clients/${clientId}`} target="_blank" rel="noreferrer"><UserRoundCheck size={14}/>Login as client</a> : <button className="client-login-as" type="button" disabled title="Enable client portal access before previewing this client"><UserRoundCheck size={14}/>Login as client</button>)}<Link className="client-hub-back" to="/clients">All clients</Link></div></header>
     <section className="client-hub-stats"><div><span>Ad accounts</span><strong>{accountCount}</strong></div><div><span>Open alerts</span><strong>{alertCount}</strong></div><div><span>Report schedules</span><strong>{client.data?.report_schedules?.length || 0}</strong></div><div><span>Status</span><strong>{client.data?.active ? 'Active' : 'Paused'}</strong></div></section>
     <nav className="client-hub-tabs" aria-label="Client sections">{visibleTabs.map(([key, label, icon]) => <button key={key} className={active === key ? 'active' : ''} onClick={() => selectTab(key)}>{createElement(icon, { size: 14 })}{label}</button>)}</nav>
 

@@ -1,6 +1,6 @@
 import { useEffect } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { ArrowUpRight, BarChart3, Download, LogOut } from 'lucide-react'
+import { ArrowLeft, ArrowUpRight, BarChart3, Download, LogOut } from 'lucide-react'
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { api } from '../api/client'
 import PerformancePeriodControl from '../components/PerformancePeriodControl'
@@ -34,5 +34,5 @@ export default function ClientPortalPage({ preview = false }) {
 }
 
 export function PortalShell({ clients, clientId, logout, preview = false, children }) {
-  return <div className="portal-shell"><header className="portal-topbar"><Link to={preview ? `/clients/${clientId}?tab=client-access` : '/portal'} className="portal-brand"><span><BarChart3 size={18}/></span><div><strong>SharkAds</strong><small>{preview ? 'Client portal preview' : 'Client portal'}</small></div></Link><div className="portal-topbar-actions">{clients.length > 1 && <select aria-label="Select client" value={clientId || ''} onChange={event => window.location.assign(`${preview ? '/portal/preview/clients' : '/portal/clients'}/${event.target.value}`)}>{clients.map(client => <option key={client.id} value={client.id}>{client.name}</option>)}</select>}<button onClick={logout}><LogOut size={14}/>Sign out</button></div></header>{children}</div>
+  return <div className="portal-shell"><header className="portal-topbar"><Link to={preview ? `/clients/${clientId}` : '/portal'} className="portal-brand"><span><BarChart3 size={18}/></span><div><strong>SharkAds</strong><small>{preview ? 'Viewing as client' : 'Client portal'}</small></div></Link><div className="portal-topbar-actions">{!preview && clients.length > 1 && <select aria-label="Select client" value={clientId || ''} onChange={event => window.location.assign(`/portal/clients/${event.target.value}`)}>{clients.map(client => <option key={client.id} value={client.id}>{client.name}</option>)}</select>}{preview ? <Link className="portal-return-link" to={`/clients/${clientId}`}><ArrowLeft size={14}/>Return to client</Link> : <button onClick={logout}><LogOut size={14}/>Sign out</button>}</div></header>{children}</div>
 }
