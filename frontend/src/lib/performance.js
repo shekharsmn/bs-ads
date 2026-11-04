@@ -3,7 +3,12 @@ export const formatMoney = (value, currency = 'INR') => value == null ? '—' : 
 export const formatRoas = value => value == null ? '—' : `${formatNumber(value)}×`
 export const formatPercent = value => value == null ? '—' : `${formatNumber(value)}%`
 export function dateInTimeZone(date, timezone) { const parts = Object.fromEntries(new Intl.DateTimeFormat('en', { timeZone: timezone || 'UTC', year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(date).map(part => [part.type, part.value])); return `${parts.year}-${parts.month}-${parts.day}` }
-export function completedDateRange(days, timezone) { const now = new Date(); const yesterday = new Date(now.getTime() - 86_400_000); const start = new Date(yesterday.getTime() - (days - 1) * 86_400_000); return { start_date: dateInTimeZone(start, timezone), end_date: dateInTimeZone(yesterday, timezone) } }
+function shiftCalendarDate(value, days) { const [year, month, day] = value.split('-').map(Number); return new Date(Date.UTC(year, month - 1, day + days)).toISOString().slice(0, 10) }
+export function completedDateRange(days, timezone, now = new Date()) { const today = dateInTimeZone(now, timezone); const end = shiftCalendarDate(today, -1); return { start_date: shiftCalendarDate(end, -(days - 1)), end_date: end } }
+export function completedPeriodRange(range, timezone, now = new Date()) {
+  const dates = completedDateRange(range === 'yesterday' || range === 'mtd' ? 1 : Number(range === 'custom' ? 30 : range.replace('d', '')), timezone, now)
+  return range === 'mtd' ? { start_date: `${dates.end_date.slice(0, 7)}-01`, end_date: dates.end_date } : dates
+}
 export const performanceMetricColumns = [
   { key: 'spend', label: 'Spend', format: formatMoney },
   { key: 'impressions', label: 'Impressions', format: formatNumber },

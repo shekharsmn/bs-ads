@@ -21,6 +21,7 @@ class User extends Authenticatable
     protected $fillable = [
         'name',
         'email',
+        'email_verified_at',
         'password',
         'google_subject',
         'role',
@@ -105,6 +106,11 @@ class User extends Authenticatable
     public function canUseDataInspector(): bool
     {
         return ! $this->disabled_at && ($this->isAdmin() || $this->use_data_inspector);
+    }
+
+    public function isClient(): bool
+    {
+        return $this->role === UserRole::Client && ! $this->disabled_at;
     }
 
     public function canAccessClient(int $clientId): bool

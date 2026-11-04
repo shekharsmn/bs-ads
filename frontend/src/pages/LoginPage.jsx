@@ -19,6 +19,7 @@ export default function LoginPage() {
           <ShieldCheck size={18} color="#2563eb" /> Continue with Google Workspace
         </a>
         <p style={{ color: '#526681', fontSize: 12, marginTop: 16 }}>Access is restricted to the configured Workspace domain.</p>
+        <Link to="/client-login" style={{ display: 'block', color: '#93c5fd', fontSize: 13, margin: '18px 0 12px', textUnderlineOffset: 3 }}>Client portal sign in</Link>
         <Link to="/privacy-policy" style={{ color: '#9aacc8', fontSize: 12, textUnderlineOffset: 3 }}>Privacy Policy</Link>
       </div>
     </main>

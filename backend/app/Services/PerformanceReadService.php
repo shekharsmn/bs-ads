@@ -7,6 +7,7 @@ use App\Models\AdGroup;
 use App\Models\Ad;
 use App\Models\Campaign;
 use App\Models\Client;
+use App\Models\ClientPortalAccountScope;
 use App\Models\User;
 use Carbon\CarbonImmutable;
 use Illuminate\Database\Query\Builder;
@@ -116,6 +117,70 @@ class PerformanceReadService
         ];
     }
 
+    public function portalOverview(AdAccount $account, ClientPortalAccountScope $scope, string $start, string $end): array
+    {
+        if ($scope->visibility_mode === ClientPortalAccountScope::ALL_CAMPAIGNS) {
+            return $this->overview($account, $start, $end) + ['visibility_mode' => $scope->visibility_mode];
+        }
+
+        $campaignIds = $scope->campaignIds() ?? [];
+        $summaryRow = $this->aggregateScope($account->id, 'campaign', $start, $end, [], $campaignIds)->first();
+        $seriesRows = $this->aggregateScope($account->id, 'campaign', $start, $end, ['metric_snapshots.metric_date'], $campaignIds)
+            ->orderBy('metric_snapshots.metric_date')->get();
+
+        return [
+            'account' => $this->accountPayload($account),
+            'reporting_dates' => ['start' => $start, 'end' => $end],
+            'freshness_timestamp' => $summaryRow?->freshness ? CarbonImmutable::parse($summaryRow->freshness)->toIso8601String() : null,
+            'metrics' => $summaryRow ? $this->metrics($this->rowTotals($summaryRow)) : $this->metrics([]),
+            'series' => $seriesRows->map(fn ($row) => [
+                'date' => CarbonImmutable::parse($row->metric_date)->toDateString(),
+                'metrics' => $this->metrics($this->rowTotals($row)),
+            ])->values(),
+            'visibility_mode' => $scope->visibility_mode,
+        ];
+    }
+
+    public function portalClientOverview(Client $client, $scopes, string $start, string $end): array
+    {
+        $accounts = AdAccount::query()->with('client:id,name,objective')->whereIn('id', collect($scopes)->pluck('ad_account_id'))->orderBy('name')->get()->keyBy('id');
+        $summaryRows = collect();
+        $seriesRows = collect();
+        $accountRows = collect($scopes)->map(function (ClientPortalAccountScope $scope) use ($accounts, $start, $end, $summaryRows, $seriesRows) {
+            $account = $accounts->get($scope->ad_account_id);
+            if (! $account) return null;
+            $campaignIds = $scope->campaignIds();
+            $sourceScope = $campaignIds === null ? 'account' : 'campaign';
+            $summary = $this->aggregateScope($account->id, $sourceScope, $start, $end, [], $campaignIds)->first();
+            $daily = $this->aggregateScope($account->id, $sourceScope, $start, $end, ['metric_snapshots.metric_date'], $campaignIds)
+                ->orderBy('metric_snapshots.metric_date')->get();
+            if ($summary) $summaryRows->push((object) [...(array) $summary, 'currency' => $account->currency]);
+            $daily->each(fn ($row) => $seriesRows->push((object) [...(array) $row, 'currency' => $account->currency]));
+
+            return [
+                'account' => $this->accountPayload($account),
+                'freshness_timestamp' => $summary?->freshness ? CarbonImmutable::parse($summary->freshness)->toIso8601String() : null,
+                'metrics' => $summary ? $this->metrics($this->rowTotals($summary)) : $this->metrics([]),
+                'visibility_mode' => $scope->visibility_mode,
+            ];
+        })->filter()->values();
+
+        $currencyGroups = $accountRows->pluck('account.currency')->unique()->sort()->values()->map(function (string $currency) use ($summaryRows, $seriesRows) {
+            $summaries = $summaryRows->where('currency', $currency);
+            $daily = $seriesRows->where('currency', $currency)->groupBy(fn ($row) => CarbonImmutable::parse($row->metric_date)->toDateString());
+            $freshness = $summaries->pluck('freshness')->filter()->max();
+
+            return [
+                'currency' => $currency,
+                'freshness_timestamp' => $freshness ? CarbonImmutable::parse($freshness)->toIso8601String() : null,
+                'metrics' => $this->metrics($this->sumRows($summaries)),
+                'series' => $daily->map(fn ($rows, $date) => ['date' => $date, 'metrics' => $this->metrics($this->sumRows($rows))])->values(),
+            ];
+        });
+
+        return ['reporting_dates' => ['start' => $start, 'end' => $end], 'accounts' => $accountRows, 'currency_groups' => $currencyGroups];
+    }
+
     public function clientOverview(Client $client, string $start, string $end): array
     {
         $accounts = $client->adAccounts()->orderBy('name')->get();
@@ -164,9 +229,9 @@ class PerformanceReadService
         return $this->accountPayload($account->loadMissing('client:id,name,objective'));
     }
 
-    public function campaigns(AdAccount $account, string $start, string $end): array
+    public function campaigns(AdAccount $account, string $start, string $end, ?array $campaignIds = null): array
     {
-        $rows = $this->aggregate($account->id, 'campaign', $start, $end, ['metric_snapshots.campaign_id'])->get();
+        $rows = $this->aggregateScope($account->id, 'campaign', $start, $end, ['metric_snapshots.campaign_id'], $campaignIds)->get();
         $models = Campaign::query()->whereIn('id', $rows->pluck('campaign_id')->filter())->get()->keyBy('id');
 
         return ['campaigns' => $rows->map(fn ($row) => [
@@ -251,6 +316,16 @@ class PerformanceReadService
         }
 
         return $groups ? $query->groupBy($groups) : $query;
+    }
+
+    private function aggregateScope(int $accountId, string $scope, string $start, string $end, array $groups = [], ?array $campaignIds = null): Builder
+    {
+        $query = $this->aggregate($accountId, $scope, $start, $end, $groups);
+        if ($campaignIds !== null) {
+            $query->whereIn('metric_snapshots.campaign_id', $campaignIds ?: [-1]);
+        }
+
+        return $query;
     }
 
     private function aggregateMany(array $accountIds, string $start, string $end, array $groups): Builder

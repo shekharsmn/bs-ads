@@ -22,6 +22,8 @@ class PerformanceController extends Controller
 
     private const REFRESH_COOLDOWN_SECONDS = 300;
 
+    private const ACCOUNT_REFRESH_COOLDOWN_KEY = 'performance:account-refresh-cooldown:';
+
     public function __construct(private readonly PerformanceReadService $performance) {}
 
     public function accounts(Request $request)
@@ -61,6 +63,32 @@ class PerformanceController extends Controller
         ], 202);
     }
 
+    public function refreshAccount(Request $request, AdAccount $account)
+    {
+        $this->authorizeAccount($request, $account);
+        abort_unless($account->status === 'active' && $account->client()->where('active', true)->exists(), 422, 'Only active ad accounts can be refreshed.');
+
+        $requestedAt = CarbonImmutable::now();
+        $availableAt = $requestedAt->addSeconds(self::REFRESH_COOLDOWN_SECONDS);
+        $cooldownKey = $this->accountRefreshCooldownKey($account);
+        if (! Cache::add($cooldownKey, $availableAt->toIso8601String(), $availableAt)) {
+            $refresh = $this->refreshCooldown($cooldownKey);
+
+            return response()->json([
+                'message' => 'This ad account refresh is cooling down.',
+                'refresh' => $refresh,
+            ], 429)->header('Retry-After', (string) max(1, $refresh['remaining_seconds']));
+        }
+
+        CollectAccountMetricsJob::dispatch($account->id, null, null, (string) Str::uuid());
+
+        return response()->json([
+            'queued_account_id' => $account->id,
+            'requested_at' => $requestedAt->toIso8601String(),
+            'refresh' => $this->refreshCooldown($cooldownKey),
+        ], 202);
+    }
+
     public function overview(Request $request, AdAccount $account)
     {
         $this->authorizeAccount($request, $account);
@@ -81,7 +109,10 @@ class PerformanceController extends Controller
     {
         $this->authorizeAccount($request, $account);
 
-        return $this->performance->account($account);
+        return [
+            ...$this->performance->account($account),
+            'refresh' => $this->refreshCooldown($this->accountRefreshCooldownKey($account)),
+        ];
     }
 
     public function campaigns(Request $request, AdAccount $account)
@@ -139,9 +170,9 @@ class PerformanceController extends Controller
         return [$data['start_date'], $data['end_date']];
     }
 
-    private function refreshCooldown(): array
+    private function refreshCooldown(string $key = self::REFRESH_COOLDOWN_KEY): array
     {
-        $value = Cache::get(self::REFRESH_COOLDOWN_KEY);
+        $value = Cache::get($key);
         if (! $value) {
             return ['available' => true, 'available_at' => null, 'remaining_seconds' => 0];
         }
@@ -149,7 +180,7 @@ class PerformanceController extends Controller
         $availableAt = CarbonImmutable::parse($value);
         $remainingSeconds = max(0, $availableAt->getTimestamp() - CarbonImmutable::now()->getTimestamp());
         if ($remainingSeconds === 0) {
-            Cache::forget(self::REFRESH_COOLDOWN_KEY);
+            Cache::forget($key);
 
             return ['available' => true, 'available_at' => null, 'remaining_seconds' => 0];
         }
@@ -159,5 +190,10 @@ class PerformanceController extends Controller
             'available_at' => $availableAt->toIso8601String(),
             'remaining_seconds' => $remainingSeconds,
         ];
+    }
+
+    private function accountRefreshCooldownKey(AdAccount $account): string
+    {
+        return self::ACCOUNT_REFRESH_COOLDOWN_KEY.$account->id;
     }
 }

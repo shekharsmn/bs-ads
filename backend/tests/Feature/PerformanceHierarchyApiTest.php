@@ -25,11 +25,13 @@ class PerformanceHierarchyApiTest extends TestCase
     {
         parent::setUp();
         Cache::forget('performance:command-center-refresh-cooldown');
+        Cache::flush();
     }
 
     protected function tearDown(): void
     {
         Cache::forget('performance:command-center-refresh-cooldown');
+        Cache::flush();
         CarbonImmutable::setTestNow();
         parent::tearDown();
     }
@@ -141,6 +143,32 @@ class PerformanceHierarchyApiTest extends TestCase
             ->assertJsonPath('refresh.remaining_seconds', 0);
         $this->actingAs($secondViewer)->postJson('/api/performance/refresh')->assertAccepted();
         Queue::assertPushed(CollectAccountMetricsJob::class, 2);
+    }
+
+    public function test_account_refresh_only_queues_the_accessible_active_account_and_has_its_own_cooldown(): void
+    {
+        CarbonImmutable::setTestNow('2026-11-04 10:00:00');
+        Queue::fake();
+        [$viewer, $account] = $this->accountFixture();
+        [, $otherAccount] = $this->accountFixture('UTC', 'other');
+
+        $this->actingAs($viewer)->postJson("/api/performance/accounts/{$account->id}/refresh")
+            ->assertAccepted()
+            ->assertJsonPath('queued_account_id', $account->id)
+            ->assertJsonPath('refresh.available', false)
+            ->assertJsonPath('refresh.available_at', '2026-11-04T10:05:00+00:00');
+
+        Queue::assertPushed(CollectAccountMetricsJob::class, 1);
+        Queue::assertPushed(CollectAccountMetricsJob::class, fn (CollectAccountMetricsJob $job) => $job->adAccountId === $account->id && filled($job->refreshToken));
+        Queue::assertNotPushed(CollectAccountMetricsJob::class, fn (CollectAccountMetricsJob $job) => $job->adAccountId === $otherAccount->id);
+
+        $this->actingAs($viewer)->getJson("/api/performance/accounts/{$account->id}")
+            ->assertOk()
+            ->assertJsonPath('refresh.remaining_seconds', 300);
+        $this->actingAs($viewer)->postJson("/api/performance/accounts/{$account->id}/refresh")
+            ->assertStatus(429)
+            ->assertHeader('Retry-After', '300');
+        $this->actingAs($viewer)->postJson("/api/performance/accounts/{$otherAccount->id}/refresh")->assertForbidden();
     }
 
     public function test_nested_hierarchy_is_access_checked_and_parent_checked(): void

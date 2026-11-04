@@ -33,4 +33,9 @@ class AdAccount extends Model
     {
         return $this->hasMany(MetricSnapshot::class);
     }
+
+    public function portalScope()
+    {
+        return $this->hasOne(ClientPortalAccountScope::class);
+    }
 }

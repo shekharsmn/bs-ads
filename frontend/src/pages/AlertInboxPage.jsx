@@ -126,6 +126,12 @@ export default function AlertInboxPage() {
   const bulk = useMutation({ mutationFn: ({ action, data = {} }) => api.bulkAlertAction(selected, action, data), onSuccess: () => finish('Selected incidents updated.'), onError: error => toast.error(error.response?.data?.message || 'Incidents could not be updated.') })
   const operate = user?.role !== 'viewer'
   const rows = alerts.data?.data || []
+  const rowIds = rows.map(alert => alert.id)
+  const selectedRowCount = rowIds.filter(alertId => selected.includes(alertId)).length
+  const allRowsSelected = rowIds.length > 0 && selectedRowCount === rowIds.length
+  const someRowsSelected = selectedRowCount > 0 && !allRowsSelected
+  const toggleRow = (alertId, checked) => setSelected(current => checked ? [...new Set([...current, alertId])] : current.filter(value => value !== alertId))
+  const toggleAllRows = checked => setSelected(current => checked ? [...new Set([...current, ...rowIds])] : current.filter(value => !rowIds.includes(value)))
   const setFilter = (key, value) => setSearch(current => { const next = new URLSearchParams(current); value ? next.set(key, value) : next.delete(key); next.delete('page'); return next }, { replace: true })
   const setScope = (clientId, accountId) => { const next = new URLSearchParams(search); clientId ? next.set('client_id', clientId) : next.delete('client_id'); accountId ? next.set('ad_account_id', accountId) : next.delete('ad_account_id'); next.delete('page'); setSearch(next, { replace: true }) }
   const saveView = () => {
@@ -149,7 +155,8 @@ export default function AlertInboxPage() {
     </div>
     {operate && selected.length > 0 && <div className="alert-bulk"><strong>{selected.length} selected</strong><button onClick={() => bulk.mutate({ action: 'acknowledge' })}><Check size={13}/> Acknowledge</button><button onClick={() => bulk.mutate({ action: 'snooze', data: { snoozed_until: new Date(Date.now() + 6 * 3600000).toISOString() } })}><Clock size={13}/> Snooze 6h</button><button onClick={() => bulk.mutate({ action: 'resolve', data: { note: 'Bulk resolved' } })}><UserCheck size={13}/> Resolve</button></div>}
     <div className={`ops-split ${id ? 'show-detail' : ''}`}><section className="ops-inbox">
-      {rows.map(alert => <div className={`alert-select-row ${id === alert.id ? 'active' : ''}`} key={alert.id}>{operate && <input type="checkbox" checked={selected.includes(alert.id)} onChange={event => setSelected(current => event.target.checked ? [...current, alert.id] : current.filter(value => value !== alert.id))} aria-label={`Select ${alert.title}`}/>}<button className={`ops-inbox-row ${id === alert.id ? 'active' : ''}`} onClick={() => navigate(`/alerts/${alert.id}?${search}`)}><i data-severity={alert.severity}/><span><strong>{alert.title}</strong><small>{alert.client.name} · {alert.campaign?.name || alert.ad_account?.name || 'Account'}{alert.assignee ? ` · ${alert.assignee.name}` : ''}</small></span><em>{alert.status}</em></button></div>)}
+      {operate && rows.length > 0 && <label className="alert-select-all"><input type="checkbox" checked={allRowsSelected} ref={input => { if (input) input.indeterminate = someRowsSelected }} onChange={event => toggleAllRows(event.target.checked)} aria-label="Select all alerts on this page"/><span>Select all</span><small>{rows.length} on this page</small></label>}
+      {rows.map(alert => <div className={`alert-select-row ${id === alert.id ? 'active' : ''}`} key={alert.id}>{operate && <input type="checkbox" checked={selected.includes(alert.id)} onChange={event => toggleRow(alert.id, event.target.checked)} aria-label={`Select ${alert.title}`}/>}<button className={`ops-inbox-row ${id === alert.id ? 'active' : ''}`} onClick={() => navigate(`/alerts/${alert.id}?${search}`)}><i data-severity={alert.severity}/><span><strong>{alert.title}</strong><small>{alert.client.name} · {alert.campaign?.name || alert.ad_account?.name || 'Account'}{alert.assignee ? ` · ${alert.assignee.name}` : ''}</small></span><em>{alert.status}</em></button></div>)}
       {!rows.length && <div className="alert-empty">No incidents match this view.</div>}
       {alerts.data?.last_page > 1 && <nav className="alert-pagination"><button disabled={page <= 1} onClick={() => setFilter('page', String(page - 1))}><ChevronLeft size={13}/></button><span>{page} / {alerts.data.last_page}</span><button disabled={page >= alerts.data.last_page} onClick={() => setFilter('page', String(page + 1))}><ChevronRight size={13}/></button></nav>}
     </section>

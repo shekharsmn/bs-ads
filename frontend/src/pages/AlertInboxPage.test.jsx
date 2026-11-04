@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { cleanup, render, screen } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { api } from '../api/client'
@@ -51,4 +51,32 @@ it('shows spend, dated windows, and linked alert hierarchy', async () => {
   expect(screen.getByRole('link', { name: /Campaign\s*Launch/ })).toHaveAttribute('href', '/command-center/clients/4/ad-accounts/8/campaigns/12')
   expect(screen.getByRole('link', { name: /Ad set\s*Prospecting/ })).toHaveAttribute('href', '/command-center/clients/4/ad-accounts/8/campaigns/12/ad-groups/15')
   expect(screen.getByRole('link', { name: /Ad\s*Creative A/ })).toHaveAttribute('href', '/command-center/clients/4/ad-accounts/8/campaigns/12/ad-groups/15/ads/19')
+})
+
+it('selects and clears every alert on the current page', async () => {
+  api.getAlerts.mockResolvedValue({
+    data: {
+      data: [
+        { id: 'incident-1', title: 'Cost per lead increased', severity: 'warning', status: 'open', client: { name: 'Acme' }, ad_account: { name: 'Acme Meta' } },
+        { id: 'incident-2', title: 'Spend dropped', severity: 'critical', status: 'open', client: { name: 'Acme' }, ad_account: { name: 'Acme Meta' } },
+      ],
+      last_page: 1,
+    },
+  })
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  render(<QueryClientProvider client={queryClient}><ToastProvider><MemoryRouter initialEntries={['/alerts']}><Routes><Route path="/alerts" element={<AlertInboxPage/>}/></Routes></MemoryRouter></ToastProvider></QueryClientProvider>)
+
+  const selectAll = await screen.findByRole('checkbox', { name: 'Select all alerts on this page' })
+  const firstAlert = screen.getByRole('checkbox', { name: 'Select Cost per lead increased' })
+  const secondAlert = screen.getByRole('checkbox', { name: 'Select Spend dropped' })
+
+  fireEvent.click(selectAll)
+  expect(firstAlert).toBeChecked()
+  expect(secondAlert).toBeChecked()
+  expect(screen.getByText('2 selected')).toBeInTheDocument()
+
+  fireEvent.click(selectAll)
+  expect(firstAlert).not.toBeChecked()
+  expect(secondAlert).not.toBeChecked()
+  expect(screen.queryByText('2 selected')).not.toBeInTheDocument()
 })

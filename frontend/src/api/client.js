@@ -26,7 +26,7 @@ client.interceptors.response.use(
   res => res,
   err => {
     if (err.response?.status === 401 && !isPublicRoute(window.location.pathname) && !window.location.pathname.startsWith('/login')) {
-      window.location.href = '/login'
+      window.location.href = window.location.pathname.startsWith('/portal') ? '/client-login' : '/login'
     }
     return Promise.reject(err)
   }
@@ -35,6 +35,8 @@ client.interceptors.response.use(
 export const api = {
   // Auth
   workspaceLoginUrl: '/api/auth/google/redirect',
+  requestClientMagicLink: (email) => client.post('/api/auth/client/magic-link', { email }),
+  consumeClientMagicLink: (token) => client.post('/api/auth/client/magic-link/consume', { token }),
   logout: () => client.post('/api/logout'),
   me: () => client.get('/api/me'),
   getActivities: (params) => client.get('/api/activities', { params }),
@@ -46,6 +48,8 @@ export const api = {
   // Performance operations
   getClients: () => client.get('/api/clients'),
   getClient: (id) => client.get(`/api/clients/${id}`),
+  getClientPortalAccess: (id) => client.get(`/api/clients/${id}/portal-access`),
+  updateClientPortalAccess: (id, data) => client.put(`/api/clients/${id}/portal-access`, data),
   createClient: (data) => client.post('/api/clients', data),
   updateClient: (id, data) => client.put(`/api/clients/${id}`, data),
   deleteClient: (id) => client.delete(`/api/clients/${id}`),
@@ -62,6 +66,7 @@ export const api = {
   googleConnectionUrl: (data) => `/api/connections/google/redirect?${new URLSearchParams(Object.fromEntries(Object.entries(data).filter(([, value]) => value !== '' && value != null)))}`,
   getPerformanceAccounts: () => client.get('/api/performance/accounts'),
   getPerformanceAccount: (id) => client.get(`/api/performance/accounts/${id}`),
+  refreshPerformanceAccount: (id) => client.post(`/api/performance/accounts/${id}/refresh`),
   getClientPerformance: (id, params) => client.get(`/api/clients/${id}/performance`, { params }),
   refreshPerformanceAccounts: () => client.post('/api/performance/refresh'),
   getAccountPerformance: (id, params) => client.get(`/api/performance/accounts/${id}/overview`, { params }),
@@ -69,6 +74,14 @@ export const api = {
   getCampaignAdGroups: (accountId, campaignId, params) => client.get(`/api/performance/accounts/${accountId}/campaigns/${campaignId}/ad-groups`, { params }),
   getAdGroupAds: (accountId, campaignId, groupId, params) => client.get(`/api/performance/accounts/${accountId}/campaigns/${campaignId}/ad-groups/${groupId}/ads`, { params }),
   getAdPerformance: (accountId, campaignId, groupId, adId, params) => client.get(`/api/performance/accounts/${accountId}/campaigns/${campaignId}/ad-groups/${groupId}/ads/${adId}`, { params }),
+  getPortalClients: () => client.get('/api/portal/clients'),
+  getPortalClientPerformance: (id, params) => client.get(`/api/portal/clients/${id}/performance`, { params }),
+  getPortalAccount: (id) => client.get(`/api/portal/accounts/${id}`),
+  getPortalAccountPerformance: (id, params) => client.get(`/api/portal/accounts/${id}/overview`, { params }),
+  getPortalAccountCampaigns: (id, params) => client.get(`/api/portal/accounts/${id}/campaigns`, { params }),
+  getPortalCampaignAdGroups: (accountId, campaignId, params) => client.get(`/api/portal/accounts/${accountId}/campaigns/${campaignId}/ad-groups`, { params }),
+  getPortalAdGroupAds: (accountId, campaignId, groupId, params) => client.get(`/api/portal/accounts/${accountId}/campaigns/${campaignId}/ad-groups/${groupId}/ads`, { params }),
+  getPortalAdPerformance: (accountId, campaignId, groupId, adId, params) => client.get(`/api/portal/accounts/${accountId}/campaigns/${campaignId}/ad-groups/${groupId}/ads/${adId}`, { params }),
   getAlerts: (params) => client.get('/api/alerts', { params }),
   getAlert: (id) => client.get(`/api/alerts/${id}`),
   alertAction: (id, action, data = {}) => client.post(`/api/alerts/${id}/${action}`, data),

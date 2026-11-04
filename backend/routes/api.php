@@ -11,6 +11,9 @@ use App\Http\Controllers\Api\AlertRuleController;
 use App\Http\Controllers\Api\AuditEventController;
 use App\Http\Controllers\Api\AuthController;
 use App\Http\Controllers\Api\ClientController;
+use App\Http\Controllers\Api\ClientMagicLinkController;
+use App\Http\Controllers\Api\ClientPortalAccessController;
+use App\Http\Controllers\Api\ClientPortalPerformanceController;
 use App\Http\Controllers\Api\ConnectionController;
 use App\Http\Controllers\Api\ConversionMappingController;
 use App\Http\Controllers\Api\DataQualityController;
@@ -36,6 +39,8 @@ use Illuminate\Support\Facades\Route;
 // Auth (guest)
 Route::get('/auth/google/redirect', [WorkspaceAuthController::class, 'redirect'])->middleware('web');
 Route::get('/auth/google/callback', [WorkspaceAuthController::class, 'callback'])->middleware('web');
+Route::post('/auth/client/magic-link', [ClientMagicLinkController::class, 'request'])->middleware(['web', 'throttle:5,1']);
+Route::post('/auth/client/magic-link/consume', [ClientMagicLinkController::class, 'consume'])->middleware(['web', 'throttle:10,1']);
 
 // Google OAuth callback (browser redirect; no session required — state is in cache)
 Route::get('/oauth/google/callback', [GoogleOAuthController::class, 'callback']);
@@ -48,6 +53,24 @@ Route::get('/public/performance-reports/{token}', [PublicPerformanceReportContro
 Route::middleware(['auth:sanctum', 'active', 'audit.mutations'])->group(function () {
     Route::post('/logout', [AuthController::class, 'logout']);
     Route::get('/me', [AuthController::class, 'me']);
+
+    Route::prefix('portal')->middleware('role:admin,client')->group(function () {
+        Route::get('/clients', [ClientPortalPerformanceController::class, 'clients']);
+        Route::get('/clients/{client}/performance', [ClientPortalPerformanceController::class, 'clientOverview']);
+        Route::get('/clients/{client}/performance/export/{format}', [ClientPortalPerformanceController::class, 'exportClient']);
+        Route::get('/accounts/{account}', [ClientPortalPerformanceController::class, 'account']);
+        Route::get('/accounts/{account}/overview', [ClientPortalPerformanceController::class, 'overview']);
+        Route::get('/accounts/{account}/campaigns', [ClientPortalPerformanceController::class, 'campaigns']);
+        Route::get('/accounts/{account}/export/{format}', [ClientPortalPerformanceController::class, 'exportAccount']);
+        Route::get('/accounts/{account}/campaigns/{campaign}/ad-groups', [ClientPortalPerformanceController::class, 'adGroups']);
+        Route::get('/accounts/{account}/campaigns/{campaign}/export/{format}', [ClientPortalPerformanceController::class, 'exportCampaign']);
+        Route::get('/accounts/{account}/campaigns/{campaign}/ad-groups/{adGroup}/ads', [ClientPortalPerformanceController::class, 'ads']);
+        Route::get('/accounts/{account}/campaigns/{campaign}/ad-groups/{adGroup}/export/{format}', [ClientPortalPerformanceController::class, 'exportAdGroup']);
+        Route::get('/accounts/{account}/campaigns/{campaign}/ad-groups/{adGroup}/ads/{ad}', [ClientPortalPerformanceController::class, 'ad']);
+        Route::get('/accounts/{account}/campaigns/{campaign}/ad-groups/{adGroup}/ads/{ad}/export/{format}', [ClientPortalPerformanceController::class, 'exportAd']);
+    });
+
+    Route::middleware('role:admin,marketer,viewer')->group(function () {
     Route::get('/operations/readiness', OperationsReadinessController::class)->middleware('role:admin');
     Route::get('/activities', [WorkflowActivityController::class, 'index']);
     Route::get('/activities/{activity}', [WorkflowActivityController::class, 'show']);
@@ -58,6 +81,8 @@ Route::middleware(['auth:sanctum', 'active', 'audit.mutations'])->group(function
     Route::get('/clients/{client}', [ClientController::class, 'show']);
     Route::post('/clients', [ClientController::class, 'store'])->middleware('role:admin');
     Route::put('/clients/{client}', [ClientController::class, 'update'])->middleware('role:admin,marketer');
+    Route::get('/clients/{client}/portal-access', [ClientPortalAccessController::class, 'show'])->middleware('role:admin');
+    Route::put('/clients/{client}/portal-access', [ClientPortalAccessController::class, 'update'])->middleware('role:admin');
     Route::delete('/clients/{client}', [ClientController::class, 'destroy'])->middleware('role:admin');
     Route::put('/clients/{client}/assignments', [ClientController::class, 'assign'])->middleware('role:admin');
     Route::post('/clients/{client}/google-chat/test', [ClientController::class, 'testChat'])->middleware('role:admin,marketer');
@@ -111,6 +136,7 @@ Route::middleware(['auth:sanctum', 'active', 'audit.mutations'])->group(function
     Route::post('/performance/refresh', [PerformanceController::class, 'refresh']);
     Route::get('/clients/{client}/performance', [PerformanceController::class, 'clientOverview']);
     Route::get('/performance/accounts/{account}', [PerformanceController::class, 'account']);
+    Route::post('/performance/accounts/{account}/refresh', [PerformanceController::class, 'refreshAccount']);
     Route::get('/performance/accounts/{account}/overview', [PerformanceController::class, 'overview']);
     Route::get('/performance/accounts/{account}/campaigns', [PerformanceController::class, 'campaigns']);
     Route::get('/performance/accounts/{account}/campaigns/{campaign}/ad-groups', [PerformanceController::class, 'adGroups']);
@@ -227,4 +253,5 @@ Route::middleware(['auth:sanctum', 'active', 'audit.mutations'])->group(function
     Route::get('/reports/{report}/status', [ReportController::class, 'status']);
     Route::post('/reports/{report}/cancel', [ReportController::class, 'cancel']);
     Route::delete('/reports/{report}', [ReportController::class, 'destroy']);
+    });
 });

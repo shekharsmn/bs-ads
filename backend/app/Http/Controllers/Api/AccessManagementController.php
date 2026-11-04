@@ -13,6 +13,7 @@ use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
+use Throwable;
 
 class AccessManagementController extends Controller
 {
@@ -30,7 +31,7 @@ class AccessManagementController extends Controller
     {
         $data = $request->validate([
             'search' => 'nullable|string|max:100', 'status' => 'nullable|in:active,disabled,pending,revoked',
-            'role' => 'nullable|in:admin,marketer,viewer', 'permission' => 'nullable|in:account,ad_library,data_inspector,performance,content',
+            'role' => 'nullable|in:admin,marketer,viewer,client', 'permission' => 'nullable|in:account,ad_library,data_inspector,performance,content',
         ]);
         $search = $data['search'] ?? null; $status = $data['status'] ?? null;
         $role = $data['role'] ?? null; $permission = $data['permission'] ?? null;
@@ -65,7 +66,8 @@ class AccessManagementController extends Controller
     public function invite(Request $request, AuditTrail $audit)
     {
         $data = $this->validatedAccess($request, true); $email = strtolower(trim($data['email']));
-        $this->validateWorkspaceEmail($email);
+        if ($data['role'] !== 'client') $this->validateWorkspaceEmail($email);
+        abort_if($data['role'] === 'client' && empty($data['client_ids']), 422, 'Client users must be assigned to at least one client.');
         abort_if(User::whereRaw('LOWER(email) = ?', [$email])->exists(), 422, 'This person already has a user account. Update or reactivate that account instead.');
         $existing = UserInvitation::whereRaw('LOWER(email) = ?', [$email])->first();
         abort_if($existing && ! $existing->revoked_at && ! $existing->accepted_at, 422, 'A pending invitation already exists for this email address.');
@@ -75,9 +77,9 @@ class AccessManagementController extends Controller
             $role = $data['role'];
             $invitation->fill([
                 'email' => $email, 'name' => trim((string) ($data['name'] ?? '')) ?: Str::headline(Str::before($email, '@')),
-                'role' => $role, 'run_performance_audits' => $role === 'admin' || ($data['run_performance_audits'] ?? false),
-                'run_content_audits' => $role === 'admin' || ($data['run_content_audits'] ?? false),
-                'use_data_inspector' => $role === 'admin' || ($data['use_data_inspector'] ?? false),
+                'role' => $role, 'run_performance_audits' => $role !== 'client' && ($role === 'admin' || ($data['run_performance_audits'] ?? false)),
+                'run_content_audits' => $role !== 'client' && ($role === 'admin' || ($data['run_content_audits'] ?? false)),
+                'use_data_inspector' => $role !== 'client' && ($role === 'admin' || ($data['use_data_inspector'] ?? false)),
                 'invited_by' => $request->user()->id, 'invited_at' => now(), 'last_sent_at' => now(), 'accepted_at' => null, 'revoked_at' => null,
             ])->save();
             $invitation->clients()->sync($data['client_ids'] ?? []);
@@ -92,10 +94,14 @@ class AccessManagementController extends Controller
     {
         abort_if($invitation->accepted_at || $invitation->revoked_at, 422, 'Only pending invitations can be edited.');
         $data = $this->validatedAccess($request); $before = $this->invitationAuditValues($invitation->load('clients:id,name'));
+        $nextRole = $data['role'] ?? $invitation->role->value;
+        abort_if(($invitation->role->value === 'client') !== ($nextRole === 'client'), 422, 'Client and workspace invitations cannot be converted into one another.');
+        abort_if($nextRole === 'client' && array_key_exists('client_ids', $data) && $data['client_ids'] === [], 422, 'Client users must be assigned to at least one client.');
         DB::transaction(function () use ($invitation, $data) {
             $role = $data['role'] ?? $invitation->role->value;
             $invitation->fill(collect($data)->except('client_ids')->all());
             if ($role === 'admin') { $invitation->run_performance_audits = true; $invitation->run_content_audits = true; $invitation->use_data_inspector = true; }
+            if ($role === 'client') { $invitation->run_performance_audits = false; $invitation->run_content_audits = false; $invitation->use_data_inspector = false; }
             $invitation->save();
             if (array_key_exists('client_ids', $data)) $invitation->clients()->sync($data['client_ids']);
         });
@@ -123,12 +129,14 @@ class AccessManagementController extends Controller
     public function update(Request $request, User $user, AuditTrail $audit)
     {
         $data = $request->validate([
-            'role' => 'sometimes|required|in:admin,marketer,viewer', 'disabled' => 'sometimes|boolean',
+            'role' => 'sometimes|required|in:admin,marketer,viewer,client', 'disabled' => 'sometimes|boolean',
             'run_performance_audits' => 'sometimes|boolean', 'run_content_audits' => 'sometimes|boolean', 'use_data_inspector' => 'sometimes|boolean',
             'client_ids' => 'sometimes|array', 'client_ids.*' => 'integer|distinct|exists:clients,id',
         ]);
         $actor = $request->user(); $before = $this->userAuditValues($user->load('clients:id,name'));
         $nextRole = $data['role'] ?? $before['role']; $nextDisabled = $data['disabled'] ?? $before['disabled'];
+        abort_if(($before['role'] === 'client') !== ($nextRole === 'client'), 422, 'Client and workspace accounts cannot be converted into one another.');
+        abort_if($nextRole === 'client' && array_key_exists('client_ids', $data) && $data['client_ids'] === [], 422, 'Client users must be assigned to at least one client.');
         abort_if($actor->is($user) && ($nextRole !== 'admin' || $nextDisabled), 422, 'You cannot remove your own admin access.');
         if (($before['role'] === 'admin' && $nextRole !== 'admin') || (! $before['disabled'] && $nextDisabled && $before['role'] === 'admin')) {
             abort_if(User::where('role', 'admin')->whereNull('disabled_at')->whereKeyNot($user->id)->doesntExist(), 422, 'At least one active administrator is required.');
@@ -136,6 +144,7 @@ class AccessManagementController extends Controller
         DB::transaction(function () use ($user, $data, $actor, $nextRole) {
             $user->fill(collect($data)->except(['disabled', 'client_ids'])->all());
             if ($nextRole === 'admin') { $user->run_performance_audits = true; $user->run_content_audits = true; $user->use_data_inspector = true; }
+            if ($nextRole === 'client') { $user->run_performance_audits = false; $user->run_content_audits = false; $user->use_data_inspector = false; }
             if (array_key_exists('disabled', $data)) { $user->disabled_at = $data['disabled'] ? now() : null; $user->disabled_by = $data['disabled'] ? $actor->id : null; }
             $user->save();
             if (array_key_exists('client_ids', $data)) $user->clients()->sync($data['client_ids']);
@@ -156,7 +165,7 @@ class AccessManagementController extends Controller
     {
         return $request->validate([
             'email' => [$creating ? 'required' : 'prohibited', 'email', 'max:255'], 'name' => 'nullable|string|max:255',
-            'role' => [$creating ? 'required' : 'sometimes', Rule::in(['admin', 'marketer', 'viewer'])],
+            'role' => [$creating ? 'required' : 'sometimes', Rule::in(['admin', 'marketer', 'viewer', 'client'])],
             'run_performance_audits' => 'sometimes|boolean', 'run_content_audits' => 'sometimes|boolean', 'use_data_inspector' => 'sometimes|boolean',
             'client_ids' => 'sometimes|array', 'client_ids.*' => 'integer|distinct|exists:clients,id',
         ]);
@@ -171,9 +180,17 @@ class AccessManagementController extends Controller
 
     private function sendInvitation(UserInvitation $invitation): void
     {
-        $loginUrl = rtrim((string) config('services.google_workspace.frontend_url'), '/').'/login?invited=1';
+        $loginUrl = $invitation->role->value === 'client'
+            ? rtrim((string) config('services.google_workspace.frontend_url'), '/').'/client-login?email='.urlencode($invitation->email)
+            : rtrim((string) config('services.google_workspace.frontend_url'), '/').'/login?invited=1';
         $role = Str::headline($invitation->role->value);
-        Mail::raw("You have been invited to SharkAds as {$role}. Sign in with your Google Workspace account: {$loginUrl}", fn ($message) => $message->to($invitation->email)->subject('You are invited to SharkAds'));
+        $instructions = $invitation->role->value === 'client' ? 'Request your secure email sign-in link' : 'Sign in with your Google Workspace account';
+        try {
+            Mail::raw("You have been invited to SharkAds as {$role}. {$instructions}: {$loginUrl}", fn ($message) => $message->to($invitation->email)->subject('You are invited to SharkAds'));
+            $invitation->update(['delivery_error' => null]);
+        } catch (Throwable $error) {
+            $invitation->update(['delivery_error' => Str::limit($error->getMessage(), 2000, '')]);
+        }
     }
 
     private function serializeUser(User $user): array
@@ -195,6 +212,7 @@ class AccessManagementController extends Controller
             'run_performance_audits' => $role === 'admin' || (bool) $invitation->run_performance_audits,
             'run_content_audits' => $role === 'admin' || (bool) $invitation->run_content_audits,
             'use_data_inspector' => $role === 'admin' || (bool) $invitation->use_data_inspector,
+            'delivery_error' => $invitation->delivery_error,
             'invited_at' => $invitation->invited_at, 'last_sent_at' => $invitation->last_sent_at, 'inviter' => $invitation->inviter];
     }
 

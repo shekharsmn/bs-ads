@@ -7,6 +7,7 @@ import PerformanceDrilldownPage from './PerformanceDrilldownPage'
 
 vi.mock('../api/client', () => ({ api: {
   getPerformanceAccounts: vi.fn(), getPerformanceAccount: vi.fn(), getAccountPerformance: vi.fn(), getAccountCampaigns: vi.fn(),
+  refreshPerformanceAccount: vi.fn(),
   getCampaignAdGroups: vi.fn(), getAdGroupAds: vi.fn(), getAdPerformance: vi.fn(),
   getAlerts: vi.fn(), getDataQualityIssues: vi.fn(), getReportSchedules: vi.fn(), getReports: vi.fn(), getConnections: vi.fn(),
 } }))
@@ -38,6 +39,7 @@ describe('performance drilldown', () => {
     localStorage.clear()
     api.getPerformanceAccounts.mockResolvedValue({ data: { accounts: [account] } })
     api.getPerformanceAccount.mockResolvedValue({ data: account })
+    api.refreshPerformanceAccount.mockResolvedValue({ data: { queued_account_id: 9, refresh: { available: false, available_at: new Date(Date.now() + 300_000).toISOString(), remaining_seconds: 300 } } })
     api.getAccountPerformance.mockResolvedValue({ data: { account, metrics, series } })
     api.getAccountCampaigns.mockResolvedValue({ data: { campaigns: [{ campaign: { id: 3, external_id: 'cmp_3', name: 'Launch', status: 'ACTIVE', type: 'OUTCOME_SALES' }, metrics }] } })
     api.getCampaignAdGroups.mockResolvedValue({ data: { campaign: { id: 3, external_id: 'cmp_3', name: 'Launch' }, metrics, series, ad_groups: [{ ad_group: { id: 4, external_id: 'set_4', name: 'Prospecting', status: 'ACTIVE' }, metrics }] } })
@@ -58,6 +60,17 @@ describe('performance drilldown', () => {
     expect(await screen.findByText('Ad sets')).toBeInTheDocument()
     expect(api.getCampaignAdGroups).toHaveBeenCalledWith('9', '3', { start_date: '2026-09-01', end_date: '2026-09-18' })
     expect(screen.getByTestId('location')).toHaveTextContent('/command-center/clients/7/ad-accounts/9/campaigns/3?range=custom&start_date=2026-09-01&end_date=2026-09-18')
+  })
+
+  it('queues a refresh for only the current ad account', async () => {
+    renderPath('/command-center/clients/7/ad-accounts/9?range=30d&start_date=2026-09-28&end_date=2026-10-27')
+    const refreshButton = await screen.findByRole('button', { name: 'Refresh data' })
+    await waitFor(() => expect(refreshButton).toBeEnabled())
+    fireEvent.click(refreshButton)
+
+    await waitFor(() => expect(api.refreshPerformanceAccount).toHaveBeenCalledWith('9'))
+    expect(await screen.findByText('Refresh queued; updating automatically.')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /Refresh in 5:00|Refresh in 4:59/ })).toBeDisabled()
   })
 
   it('links the middle breadcrumb to the client page while preserving the account period', async () => {
