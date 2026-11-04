@@ -105,6 +105,25 @@ class ClientPortalApiTest extends TestCase
         $this->actingAs($user)->getJson("/api/portal/accounts/{$account->id}/overview{$dates}")->assertNotFound();
     }
 
+    public function test_admin_client_access_payload_lists_client_users_and_pending_invitations(): void
+    {
+        [$clientUser, $client] = $this->portalFixture();
+        $admin = User::factory()->create(['role' => 'admin']);
+        $invitation = UserInvitation::create([
+            'name' => 'Pending Contact', 'email' => 'pending@outside.example', 'role' => 'client',
+            'invited_by' => $admin->id, 'invited_at' => now(), 'last_sent_at' => now(),
+        ]);
+        $invitation->clients()->attach($client);
+
+        $this->actingAs($admin)->getJson("/api/clients/{$client->id}/portal-access")
+            ->assertOk()
+            ->assertJsonPath('client_users.0.id', $clientUser->id)
+            ->assertJsonPath('client_users.0.email', $clientUser->email)
+            ->assertJsonPath('client_invitations.0.id', $invitation->id)
+            ->assertJsonPath('client_invitations.0.email', 'pending@outside.example')
+            ->assertJsonPath('client_invitations.0.status', 'pending');
+    }
+
     public function test_filtered_pdf_excel_and_csv_exports_download(): void
     {
         [$user, , $account] = $this->portalFixture();

@@ -2,10 +2,12 @@
 
 namespace App\Http\Controllers\Api;
 
+use App\Enums\UserRole;
 use App\Http\Controllers\Controller;
 use App\Models\Campaign;
 use App\Models\Client;
 use App\Models\ClientPortalAccountScope;
+use App\Models\UserInvitation;
 use App\Services\AuditTrail;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -67,10 +69,26 @@ class ClientPortalAccessController extends Controller
     {
         $scopes = $client->portalAccountScopes()->with('campaigns:id')->get()->keyBy('ad_account_id');
         $accounts = $client->adAccounts()->with(['campaigns' => fn ($query) => $query->orderBy('name')])->orderBy('name')->get();
+        $users = $client->users()->where('role', UserRole::Client->value)->orderBy('name')->get(['users.id', 'name', 'email', 'disabled_at', 'last_login_at']);
+        $invitations = UserInvitation::query()
+            ->where('role', UserRole::Client->value)
+            ->whereNull('accepted_at')
+            ->whereNull('revoked_at')
+            ->whereHas('clients', fn ($query) => $query->whereKey($client->id))
+            ->orderBy('email')
+            ->get(['id', 'name', 'email', 'delivery_error', 'last_sent_at']);
 
         return [
             'client_id' => $client->id,
             'portal_enabled' => (bool) $client->portal_enabled,
+            'client_users' => $users->map(fn ($user) => [
+                'id' => $user->id, 'name' => $user->name, 'email' => $user->email,
+                'status' => $user->disabled_at ? 'disabled' : 'active', 'last_login_at' => $user->last_login_at,
+            ])->values(),
+            'client_invitations' => $invitations->map(fn ($invitation) => [
+                'id' => $invitation->id, 'name' => $invitation->name, 'email' => $invitation->email,
+                'status' => 'pending', 'delivery_error' => $invitation->delivery_error, 'last_sent_at' => $invitation->last_sent_at,
+            ])->values(),
             'accounts' => $accounts->map(function ($account) use ($scopes) {
                 $scope = $scopes->get($account->id);
                 return [
