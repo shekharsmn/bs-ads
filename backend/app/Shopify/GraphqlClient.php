@@ -11,11 +11,12 @@ final class GraphqlClient
 
     public function query(Installation $install, string $query, array $variables = []): array
     {
+        $token = $this->tokens->access($install);
         try {
-            return $this->send($install->store->domain, $this->tokens->access($install), $query, $variables);
+            return $this->send($install->store->domain, $token, $query, $variables);
         } catch (ShopifyException $e) {
             if ($e->errorCode === 'api_http_401') {
-                $install->update(['status' => 'reconnect', 'error_code' => 'token_rejected']);
+                $this->tokens->rejectCurrentCredentials($install, 'token_rejected');
             }
             throw $e;
         }

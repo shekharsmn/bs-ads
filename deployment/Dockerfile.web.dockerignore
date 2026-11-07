@@ -10,5 +10,6 @@ backend/public/shopify
 frontend/dist
 .graphify
 SERVER_DEPLOYMENT_NOTES.md
-**/*.local.toml
+shopify-app/*.toml
+shopify-app/.shopify
 .deployment

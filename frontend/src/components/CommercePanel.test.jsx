@@ -33,6 +33,21 @@ describe('Shopify reporting boundaries', () => {
   it('shows a failed fetch as an error rather than zero sales', async () => {
     api.getShopifyConnection.mockRejectedValue(new Error('offline')); api.getShopifyReport.mockResolvedValue({ data: { store: null } }); mount(<CommercePanel clientId="2"/>); expect(await screen.findByRole('alert')).toHaveTextContent('could not be loaded')
   })
+  it('keeps custom date controls visible and only requests valid ranges', async () => {
+    const store = { id: 1, name: 'Fixture store', timezone: 'UTC' }
+    api.getShopifyConnection.mockResolvedValue({ data: { store } })
+    api.getShopifyReport.mockResolvedValue({ data: { store, orders: 1, revenue: [], trend: [], range: { from: '2026-11-01', to: '2026-11-07' }, warnings: [] } })
+    mount(<CommercePanel clientId="2"/>)
+    await screen.findByText('Orders')
+    fireEvent.change(screen.getByRole('combobox', { name: 'Period' }), { target: { value: 'custom' } })
+    fireEvent.change(screen.getByLabelText('From'), { target: { value: '2026-11-03' } })
+    fireEvent.change(screen.getByLabelText('To'), { target: { value: '2026-11-02' } })
+    expect(screen.getByRole('alert')).toHaveTextContent('end date must be on or after')
+    expect(api.getShopifyReport).toHaveBeenCalledTimes(1)
+    fireEvent.change(screen.getByLabelText('To'), { target: { value: '2026-11-04' } })
+    await waitFor(() => expect(api.getShopifyReport).toHaveBeenLastCalledWith('2', { period: 'custom', from: '2026-11-03', to: '2026-11-04' }))
+    expect(await screen.findByText('Orders')).toBeInTheDocument()
+  })
   it('opens a new tab immediately and navigates it after connection setup', async () => {
     auth.user.role = 'admin'
     api.getShopifyConnection.mockResolvedValue({ data: { store: null } }); api.getShopifyReport.mockResolvedValue({ data: { store: null } })

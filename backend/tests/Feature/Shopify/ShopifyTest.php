@@ -255,6 +255,75 @@ class ShopifyTest extends TestCase
         $this->assertSame('replacement-refresh', $install->fresh()->tokens['refresh_token']);
     }
 
+    public function test_token_refresh_does_not_restore_credentials_after_revocation(): void
+    {
+        [,,, $install] = $this->fixture();
+        $install->update(['expires_at' => now()->subMinute()]);
+        Http::fake(function () use ($install) {
+            app(\App\Shopify\InstallationService::class)->revoke($install);
+
+            return Http::response(['access_token' => 'stale-token', 'refresh_token' => 'stale-refresh', 'expires_in' => 3600, 'refresh_token_expires_in' => 7776000]);
+        });
+        try {
+            app(TokenProvider::class)->access($install);
+            $this->fail('Revoked installation returned a token.');
+        } catch (ShopifyException $e) {
+            $this->assertSame('installation_changed', $e->errorCode);
+        }
+        $this->assertSame('revoked', $install->fresh()->status);
+        $this->assertNull($install->fresh()->tokens);
+    }
+
+    public function test_refresh_response_does_not_expose_an_in_progress_checkpoint(): void
+    {
+        [$client,,, $install] = $this->fixture();
+        $run = SyncRun::create(['install_id' => $install->id, 'generation' => 1, 'kind' => 'history', 'until_at' => now(),
+            'stage' => 'download', 'status' => 'running', 'checkpoint' => ['url' => 'https://storage.googleapis.com/private-export?signature=private']]);
+        $this->actingAs(User::factory()->create(['role' => 'admin']))->postJson('/api/clients/'.$client->id.'/shopify/refresh')
+            ->assertAccepted()->assertJsonPath('run.id', $run->id)->assertJsonMissingPath('run.checkpoint');
+    }
+
+    public function test_client_portal_users_cannot_read_agency_shopify_data(): void
+    {
+        [$client] = $this->fixture();
+        $contact = User::factory()->create(['role' => 'client']);
+        $contact->clients()->attach($client);
+        $this->actingAs($contact)->getJson('/api/clients/'.$client->id.'/shopify')->assertForbidden();
+        $this->getJson('/api/clients/'.$client->id.'/shopify/report')->assertForbidden();
+        $this->getJson('/api/commerce/summary')->assertForbidden();
+    }
+
+    public function test_missing_bulk_operation_status_is_retried_instead_of_polling_forever(): void
+    {
+        [,,, $install] = $this->fixture();
+        Http::fake(['*' => Http::response(['data' => ['node' => null]])]);
+        $run = SyncRun::create(['install_id' => $install->id, 'generation' => 1, 'kind' => 'history', 'until_at' => now(),
+            'stage' => 'poll', 'operation_gid' => 'gid://shopify/BulkOperation/1']);
+        try {
+            app(SyncEngine::class)->step($run);
+            $this->fail('Unexpected export status was accepted.');
+        } catch (ShopifyException $e) {
+            $this->assertSame('export_status_unavailable', $e->errorCode);
+            $this->assertTrue($e->retryable);
+        }
+    }
+
+    public function test_truncated_bulk_result_cannot_complete_coverage(): void
+    {
+        [,,, $install] = $this->fixture();
+        $run = SyncRun::create(['install_id' => $install->id, 'generation' => 1, 'kind' => 'history', 'until_at' => now(),
+            'stage' => 'import', 'checkpoint' => ['mode' => 'bulk', 'expected_rows' => 2, 'read_rows' => 1, 'offset' => 0]]);
+        \Illuminate\Support\Facades\Storage::disk('local')->put('shopify/run-'.$run->id.'.jsonl', '');
+        try {
+            app(SyncEngine::class)->step($run);
+            $this->fail('A truncated export was accepted.');
+        } catch (ShopifyException $e) {
+            $this->assertSame('export_incomplete', $e->errorCode);
+        }
+        $this->assertSame('import', $run->fresh()->stage);
+        $this->assertFalse($install->store->fresh()->history_complete);
+    }
+
     public function test_http_200_graphql_errors_are_not_empty_success(): void
     {
         [,,,$install] = $this->fixture();
@@ -311,9 +380,13 @@ class ShopifyTest extends TestCase
         $event = WebhookEvent::create(['app_id' => $app->id, 'install_id' => $install->id, 'generation' => 1, 'domain' => $store->domain, 'topic' => 'customers/redact', 'delivery_id' => 'privacy-one', 'payload' => ['orders_to_redact' => [5]]]);
         (new \App\Shopify\Jobs\ProcessWebhook($event->id))->handle(app(\App\Shopify\SyncCoordinator::class));
         $this->assertDatabaseMissing('shop_orders', ['id' => $order->id]);
-        $run = SyncRun::create(['install_id' => $install->id, 'generation' => 1, 'kind' => 'history', 'until_at' => now(), 'stage' => 'order', 'checkpoint' => ['order_gid' => 'gid://shopify/Order/5']]);
-        app(SyncEngine::class)->step($run);
-        $this->assertSame('import', $run->fresh()->stage);
+        foreach (['order', 'sales'] as $stage) {
+            $run = SyncRun::create(['install_id' => $install->id, 'generation' => 1, 'kind' => 'history', 'until_at' => now(), 'stage' => $stage,
+                'checkpoint' => ['order_gid' => 'gid://shopify/Order/5', 'next_offset' => 100, 'order_id' => $order->id]]);
+            app(SyncEngine::class)->step($run);
+            $this->assertSame('import', $run->fresh()->stage);
+            $this->assertSame(['offset' => 100], $run->fresh()->checkpoint);
+        }
         Http::assertNothingSent();
     }
 
@@ -404,6 +477,28 @@ class ShopifyTest extends TestCase
         $this->assertSame(1, $ledger->replay());
         $this->assertDatabaseMissing('shop_orders', ['gid' => 'gid://shopify/Order/55']);
         $this->assertDatabaseHas('shop_privacy', ['request_key' => 'restore-request', 'status' => 'completed']);
+    }
+
+    public function test_shop_redaction_removes_files_and_does_not_revoke_a_later_installation_on_replay(): void
+    {
+        [, $app, $store, $install] = $this->fixture();
+        $storage = \Illuminate\Support\Facades\Storage::disk('local');
+        $ledger = app(\App\Shopify\PrivacyLedger::class);
+        $privacy = \App\Shopify\Models\PrivacyRequest::create(['app_id' => $app->id, 'domain' => $store->domain, 'request_key' => 'shop-delete', 'topic' => 'shop/redact']);
+        $export = \App\Shopify\Models\PrivacyRequest::create(['app_id' => $app->id, 'domain' => $store->domain, 'request_key' => 'data-export', 'topic' => 'customers/data_request']);
+        $run = SyncRun::create(['install_id' => $install->id, 'generation' => 1, 'kind' => 'history', 'until_at' => now(), 'status' => 'running', 'checkpoint' => ['offset' => 0]]);
+        $storage->put('shopify/privacy-'.$export->id.'.enc', 'export');
+        $storage->put('shopify/run-'.$run->id.'.jsonl', 'bulk data');
+        $ledger->record($privacy);
+        $this->assertSame(1, $ledger->replay());
+        $storage->assertMissing(['shopify/privacy-'.$export->id.'.enc', 'shopify/run-'.$run->id.'.jsonl']);
+        $this->assertSame('cancelled', $run->fresh()->status);
+        $this->assertNull($run->fresh()->checkpoint);
+        $this->assertSame('redacted', $install->fresh()->status);
+
+        $install->refresh()->update(['status' => 'active', 'generation' => 3]);
+        $this->assertSame(0, $ledger->replay());
+        $this->assertSame('active', $install->fresh()->status);
     }
 
     public function test_date_ranges_use_store_timezone_across_dst(): void

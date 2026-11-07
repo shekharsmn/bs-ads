@@ -16,7 +16,7 @@ Route::prefix('shopify/embedded')->middleware(EmbeddedAuth::class)->group(functi
     Route::get('privacy', [MerchantController::class, 'privacy']);
     Route::get('privacy/{privacy}/export', [MerchantController::class, 'exportPrivacy']);
 });
-Route::middleware(['auth:sanctum', 'active', \App\Shopify\Http\FeatureEnabled::class])->group(function () {
+Route::middleware(['auth:sanctum', 'active', 'role:admin,marketer,viewer', \App\Shopify\Http\FeatureEnabled::class])->group(function () {
     Route::match(['GET', 'POST'], 'shopify/registrations', [AgencyController::class, 'registrations'])->middleware(['role:admin', 'audit.mutations']);
     Route::patch('shopify/registrations/{registration}', [AgencyController::class, 'updateRegistration'])->middleware(['role:admin', 'audit.mutations']);
     Route::get('commerce/summary', [AgencyController::class, 'summary']);

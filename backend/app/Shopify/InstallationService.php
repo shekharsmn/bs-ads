@@ -39,7 +39,11 @@ final class InstallationService
                 }
                 $store = Store::firstOrCreate(['gid' => $shop['id']], ['domain' => $domain, 'name' => $shop['name'], 'timezone' => $shop['ianaTimezone'], 'currency' => $shop['currencyCode']]);
                 $store = Store::whereKey($store->id)->lockForUpdate()->firstOrFail();
-                $existing ??= Installation::where('app_id', $app->id)->where('store_id', $store->id)->first();
+                $current = Installation::where('app_id', $app->id)->where('store_id', $store->id)->lockForUpdate()->first();
+                if ($existing && $current?->generation !== $existing->generation) {
+                    throw new ShopifyException('installation_changed');
+                }
+                $existing = $current;
                 if ($store->domain !== $domain) {
                     Models\PrivacyRequest::where('domain', $store->domain)->update(['domain' => $domain]);
                 }

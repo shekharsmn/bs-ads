@@ -5,6 +5,7 @@ namespace App\Shopify;
 use App\Shopify\Models\AppRegistration;
 use App\Shopify\Models\Installation;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 
 final class TokenProvider
@@ -64,20 +65,34 @@ final class TokenProvider
                 return $installation->tokens['access_token'];
             }
             if (! $installation->refresh_expires_at || $installation->refresh_expires_at->isPast()) {
-                $installation->update(['status' => 'reconnect', 'error_code' => 'refresh_expired']);
+                $this->rejectCurrentCredentials($installation, 'refresh_expired');
                 throw new ShopifyException('reconnect_required');
             }
             try {
                 $data = $this->request($installation->app, $installation->store->domain, ['grant_type' => 'refresh_token', 'refresh_token' => $installation->tokens['refresh_token']]);
             } catch (ShopifyException $e) {
                 if (! $e->retryable) {
-                    $installation->update(['status' => 'reconnect', 'error_code' => $e->errorCode]);
+                    $this->rejectCurrentCredentials($installation, $e->errorCode);
                 }
                 throw $e;
             }
-            $this->save($installation, $data);
+            DB::transaction(function () use ($installation, $data) {
+                $current = Installation::whereKey($installation->id)->lockForUpdate()->firstOrFail();
+                if ($current->status !== 'active' || $current->generation !== $installation->generation ||
+                    $current->getRawOriginal('tokens') !== $installation->getRawOriginal('tokens')) {
+                    throw new ShopifyException('installation_changed');
+                }
+                $this->save($installation, $data);
+            });
 
             return $data['access_token'];
         });
+    }
+
+    public function rejectCurrentCredentials(Installation $installation, string $errorCode): void
+    {
+        Installation::whereKey($installation->id)->where('status', 'active')->where('generation', $installation->generation)
+            ->where('tokens', $installation->getRawOriginal('tokens'))
+            ->update(['status' => 'reconnect', 'error_code' => $errorCode]);
     }
 }

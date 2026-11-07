@@ -48,7 +48,10 @@ final class SyncShop implements ShouldQueue
             }
             $delay = $engine->step($run);
             if ($run->fresh()->status === 'running') {
-                self::dispatch($run->id)->delay(now()->addSeconds($delay));
+                $next = self::dispatch($run->id);
+                if ($delay > 0) {
+                    $next->delay(now()->addSeconds($delay));
+                }
             }
         } catch (ShopifyException $e) {
             if ($e->retryable) {

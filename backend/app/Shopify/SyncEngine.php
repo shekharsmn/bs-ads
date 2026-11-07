@@ -3,6 +3,7 @@
 namespace App\Shopify;
 
 use App\Shopify\Models\Order;
+use App\Shopify\Models\PrivacyRequest;
 use App\Shopify\Models\Sale;
 use App\Shopify\Models\SyncRun;
 use Illuminate\Support\Facades\DB;
@@ -23,6 +24,17 @@ final class SyncEngine
         $run->update(['status' => 'running']);
         if (! $install->app->data_approved) {
             throw new ShopifyException('data_approval_required');
+        }
+        if (! in_array('read_orders', $install->scopes ?? [], true)) {
+            throw new ShopifyException('orders_scope_required');
+        }
+        // A redaction can arrive after the order has already reached a later import stage.
+        if (isset($cp['order_gid']) && PrivacyRequest::where('domain', $install->store->domain)
+            ->where('topic', 'customers/redact')->where('status', 'completed')->whereJsonContains('order_gids', $cp['order_gid'])->exists()) {
+            $this->finishCheckpointOrder($cp);
+            $run->update(['stage' => 'import', 'checkpoint' => $cp]);
+
+            return 0;
         }
         if ($stage === 'start') {
             $shop = $this->api->query($install, 'query StoreMetadata { shop { id name ianaTimezone currencyCode plan { partnerDevelopment } } }')['shop'] ?? [];
@@ -47,18 +59,28 @@ final class SyncEngine
                 if (! $id) {
                     throw new ShopifyException('export_not_started');
                 }
-                $run->update(['operation_gid' => $id]);
+                $run->operation_gid = $id;
                 $stage = 'poll';
             }
         } elseif ($stage === 'poll') {
-            $operation = $this->api->query($install, 'query Operation($id: ID!) { node(id: $id) { ... on BulkOperation { id status url errorCode } } }', ['id' => $run->operation_gid])['node'] ?? [];
+            $operation = $this->api->query($install, 'query Operation($id: ID!) { node(id: $id) { ... on BulkOperation { id status url objectCount } } }', ['id' => $run->operation_gid])['node'] ?? [];
             if (in_array($operation['status'] ?? '', ['FAILED', 'CANCELED', 'EXPIRED'], true)) {
                 throw new ShopifyException('export_failed');
             }
-            if (($operation['status'] ?? '') !== 'COMPLETED') {
+            if (in_array($operation['status'] ?? '', ['CREATED', 'RUNNING', 'CANCELING'], true)) {
                 return 15;
             }
+            if (($operation['status'] ?? '') !== 'COMPLETED') {
+                throw new ShopifyException('export_status_unavailable', true);
+            }
+            if (! ctype_digit((string) ($operation['objectCount'] ?? ''))) {
+                throw new ShopifyException('export_count_unavailable', true);
+            }
+            $cp['expected_rows'] = (int) $operation['objectCount'];
             if (empty($operation['url'])) {
+                if ($cp['expected_rows'] > 0) {
+                    throw new ShopifyException('export_url_unavailable', true);
+                }
                 $stage = 'catchup';
             } else {
                 $cp['url'] = $operation['url'];
@@ -95,6 +117,7 @@ final class SyncEngine
             }
             unset($cp['url']);
             $cp['offset'] = 0;
+            $cp['read_rows'] = 0;
             $stage = 'import';
         } elseif ($stage === 'import') {
             if (($cp['mode'] ?? '') === 'cursor') {
@@ -127,6 +150,9 @@ final class SyncEngine
                     fseek($handle, $cp['offset'] ?? 0);
                     $line = fgets($handle, 1048577);
                     if ($line === false) {
+                        if (! feof($handle) || (isset($cp['expected_rows']) && $cp['expected_rows'] !== ($cp['read_rows'] ?? 0))) {
+                            throw new ShopifyException('export_incomplete');
+                        }
                         $stage = 'catchup';
                     } else {
                         if (strlen($line) > 1048576) {
@@ -138,6 +164,7 @@ final class SyncEngine
                         }
                         $cp['order_gid'] = $record['id'];
                         $cp['next_offset'] = ftell($handle);
+                        $cp['read_rows'] = ($cp['read_rows'] ?? 0) + 1;
                         $stage = 'order';
                     }
                 } finally {
@@ -145,15 +172,6 @@ final class SyncEngine
                 }
             }
         } elseif ($stage === 'order') {
-            $redacted = \App\Shopify\Models\PrivacyRequest::where('domain', $install->store->domain)
-                ->where('topic', 'customers/redact')->where('status', 'completed')->whereJsonContains('order_gids', $cp['order_gid'])->exists();
-            if ($redacted) {
-                $cp['offset'] = $cp['next_offset'] ?? 0;
-                unset($cp['order_gid']);
-                $run->update(['stage' => 'import', 'checkpoint' => $cp]);
-
-                return 1;
-            }
             $order = $this->api->query($install, file_get_contents(resource_path('shopify/2026-10/order.graphql')), ['id' => $cp['order_gid']])['order'] ?? null;
             if (! $order) {
                 throw new ShopifyException('order_unavailable');
@@ -231,10 +249,7 @@ final class SyncEngine
                     Sale::where('order_id', $row->id)->where('sync_key', '!=', $cp['snapshot'])->delete();
                 });
                 $run->increment('records');
-                $cp['offset'] = $cp['next_offset'] ?? 0;
-                foreach (['order', 'order_gid', 'order_id', 'snapshot', 'agreements', 'agreement_cursor', 'sale_cursor'] as $key) {
-                    unset($cp[$key]);
-                }
+                $this->finishCheckpointOrder($cp);
                 $stage = 'import';
             }
         } elseif ($stage === 'catchup') {
@@ -245,7 +260,7 @@ final class SyncEngine
             $from = $run->until_at->subMinutes(5);
             $until = now();
             $cp = ['mode' => 'cursor', 'catching_up' => true, 'cursor' => null, 'filter' => 'created_at:>='.$until->subDays(60)->toIso8601String().' updated_at:>='.$from->toIso8601String().' updated_at:<'.$until->toIso8601String()];
-            $run->update(['until_at' => $until]);
+            $run->until_at = $until;
             $stage = 'import';
         } elseif ($stage === 'complete') {
             $this->coordinator->complete($run);
@@ -254,7 +269,17 @@ final class SyncEngine
         }
         $run->update(['stage' => $stage, 'checkpoint' => $cp]);
 
-        return 1;
+        return 0;
+    }
+
+    private function finishCheckpointOrder(array &$checkpoint): void
+    {
+        if (isset($checkpoint['next_offset'])) {
+            $checkpoint['offset'] = $checkpoint['next_offset'];
+        }
+        foreach (['order', 'order_gid', 'order_id', 'snapshot', 'agreements', 'agreements_next', 'agreement_cursor', 'sale_cursor', 'next_offset'] as $key) {
+            unset($checkpoint[$key]);
+        }
     }
 
     private function path(SyncRun $run): string

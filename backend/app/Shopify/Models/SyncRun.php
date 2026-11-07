@@ -10,7 +10,7 @@ class SyncRun extends Model
 
     protected $guarded = ['id'];
 
-    protected $hidden = [];
+    protected $hidden = ['checkpoint'];
 
     protected function casts(): array
     {
