@@ -1,0 +1,25 @@
+client_id = "REPLACE_WITH_DEVELOPMENT_CLIENT_ID"
+name = "SharkAds Development"
+application_url = "https://REPLACE_WITH_HTTPS_DEV_HOST/shopify/app/development"
+embedded = true
+
+[build]
+automatically_update_urls_on_dev = false
+
+[access_scopes]
+scopes = "read_orders"
+use_legacy_install_flow = false
+
+[auth]
+redirect_urls = ["https://REPLACE_WITH_HTTPS_DEV_HOST/shopify/app/development"]
+
+[webhooks]
+api_version = "2026-10"
+
+[[webhooks.subscriptions]]
+topics = ["orders/create", "orders/updated", "orders/paid", "orders/cancelled", "orders/delete", "refunds/create", "app/uninstalled", "app/scopes_update"]
+uri = "https://REPLACE_WITH_HTTPS_DEV_HOST/api/shopify/webhooks/development"
+
+[[webhooks.subscriptions]]
+compliance_topics = ["customers/data_request", "customers/redact", "shop/redact"]
+uri = "https://REPLACE_WITH_HTTPS_DEV_HOST/api/shopify/webhooks/development"

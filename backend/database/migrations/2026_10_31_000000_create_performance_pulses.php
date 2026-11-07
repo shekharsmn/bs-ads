@@ -32,7 +32,7 @@ return new class extends Migration
                 $table->foreignId('notification_destination_id');
                 $table->primary(['performance_pulse_id', 'notification_destination_id'], 'pulse_destination_primary');
                 $table->foreign('performance_pulse_id', 'pulse_destination_pulse_fk')->references('id')->on('performance_pulses')->cascadeOnDelete();
-                $table->foreign('notification_destination_id', 'pulse_destination_notification_fk')->references('id')->on('notification_destinations')->cascadeOnDelete();
+                $table->foreign('notification_destination_id', 'pulse_dest_notif_fk')->references('id')->on('notification_destinations')->cascadeOnDelete();
             });
         }
 
@@ -46,7 +46,7 @@ return new class extends Migration
 
         if (! $this->hasForeignKeyFor('performance_pulse_destination', 'notification_destination_id')) {
             Schema::table('performance_pulse_destination', function (Blueprint $table) {
-                $table->foreign('notification_destination_id', 'pulse_destination_notification_fk')->references('id')->on('notification_destinations')->cascadeOnDelete();
+                $table->foreign('notification_destination_id', 'pulse_dest_notif_fk')->references('id')->on('notification_destinations')->cascadeOnDelete();
             });
         }
 

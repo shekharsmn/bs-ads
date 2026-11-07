@@ -32,6 +32,7 @@ export default defineConfig({
       // when `php artisan serve` is listening only on 127.0.0.1.
       '/sanctum': 'http://127.0.0.1:8000',
       '/api': 'http://127.0.0.1:8000',
+      '/shopify': 'http://127.0.0.1:8000',
     },
   },
 })
