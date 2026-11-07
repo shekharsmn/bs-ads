@@ -8,6 +8,11 @@ return new class extends Migration
 {
     public function up(): void
     {
+        // MySQL may use the old unique index to support client_id's FK.
+        // Install its replacement before dropping that index (SQLite doesn't expose this dependency).
+        if (! Schema::hasIndex('report_schedules', 'report_schedules_client_id_support_index')) {
+            Schema::table('report_schedules', fn (Blueprint $table) => $table->index('client_id', 'report_schedules_client_id_support_index'));
+        }
         Schema::table('report_schedules', function (Blueprint $table) {
             $table->dropUnique('report_schedules_client_id_frequency_unique');
             $table->foreignId('ad_account_id')->nullable()->after('client_id')->constrained()->cascadeOnDelete();

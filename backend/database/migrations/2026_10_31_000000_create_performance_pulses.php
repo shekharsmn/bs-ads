@@ -29,10 +29,12 @@ return new class extends Migration
         if (! Schema::hasTable('performance_pulse_destination')) {
             Schema::create('performance_pulse_destination', function (Blueprint $table) {
                 $table->foreignId('performance_pulse_id')->constrained()->cascadeOnDelete();
-                $table->foreignId('notification_destination_id')->constrained()->cascadeOnDelete();
+                $table->unsignedBigInteger('notification_destination_id');
                 $table->primary(['performance_pulse_id', 'notification_destination_id'], 'pulse_destination_primary');
             });
         }
+
+        \App\Support\SchemaRepair::foreign('performance_pulse_destination', 'notification_destination_id', 'notification_destinations', 'pulse_dest_notif_fk');
 
         if (! Schema::hasTable('performance_pulse_runs')) {
             Schema::create('performance_pulse_runs', function (Blueprint $table) {

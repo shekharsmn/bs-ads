@@ -33,6 +33,11 @@ client.interceptors.response.use(
 )
 
 export const api = {
+  getShopifyConnection: id => client.get(`/api/clients/${id}/shopify`),
+  connectShopify: id => client.post(`/api/clients/${id}/shopify/connect`),
+  getShopifyReport: (id, params) => client.get(`/api/clients/${id}/shopify/report`, { params }),
+  refreshShopify: id => client.post(`/api/clients/${id}/shopify/refresh`),
+  disconnectShopify: id => client.delete(`/api/clients/${id}/shopify`),
   // Auth
   workspaceLoginUrl: '/api/auth/google/redirect',
   logout: () => client.post('/api/logout'),

@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<phpunit bootstrap="vendor/autoload.php" colors="true">
+  <testsuites><testsuite name="MySQL"><directory>tests/MySql</directory></testsuite></testsuites>
+  <php>
+    <env name="APP_ENV" value="testing" force="true"/>
+    <env name="APP_KEY" value="base64:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=" force="true"/>
+    <env name="DB_CONNECTION" value="mysql" force="true"/>
+    <env name="DB_HOST" value="127.0.0.1" force="true"/>
+    <env name="DB_PORT" value="43316" force="true"/>
+    <env name="DB_DATABASE" value="bs_ads_shopify_test" force="true"/>
+    <env name="DB_USERNAME" value="bs_ads_test" force="true"/>
+    <env name="DB_PASSWORD" value="local-disposable-only" force="true"/>
+    <env name="DB_SOCKET" value="" force="true"/><env name="DB_URL" value="" force="true"/>
+    <env name="CACHE_STORE" value="array" force="true"/><env name="QUEUE_CONNECTION" value="sync" force="true"/>
+  </php>
+</phpunit>

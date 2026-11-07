@@ -43,12 +43,16 @@ elif name == 'docker':
         if args[1] == 'inspect': sys.exit(1)
         if args[1] == 'build': sys.exit(int(os.environ.get('FAIL_BUILD', '0')))
     elif args[0] == 'inspect':
-        print('\n'.join(['true false healthy'] * 8))
+        print('\n'.join(['true false healthy'] * 9))
     elif args[0] == 'compose':
-        if 'config' in args and '--no-env-resolution' in args:
+        if 'config' in args and '--services' in args:
+            print('worker-shopify')
+        elif 'config' in args and '--format' in args:
+            print(json.dumps({'services': {'worker-core': {'image': 'previous', 'user': '33:33', 'cgroup_parent': 'bs-ads.slice'}}}))
+        elif 'config' in args and '--no-env-resolution' in args:
             print('services: {} # generated fixture')
         elif 'ps' in args and '-aq' in args:
-            print('\n'.join('container' + str(i) for i in range(8)))
+            print('\n'.join('container' + str(i) for i in range(9)))
         elif 'run' in args:
             if 'migrate' in args: sys.exit(int(os.environ.get('FAIL_MIGRATION', '0')))
             if 'config:cache' in args: sys.exit(int(os.environ.get('FAIL_CACHE', '0')))
@@ -74,6 +78,11 @@ class DeploymentTest(unittest.TestCase):
         self.state = self.root / '.deployment'
         self.state.mkdir()
         (self.root / 'backend').mkdir()
+        (self.root / 'deployment').mkdir()
+        for name in ['Dockerfile.php', 'Dockerfile.web']:
+            (self.root / 'deployment' / name).write_text('fixture build file')
+        for name in ['php.ini', 'fpm.conf']:
+            (self.root / 'deployment' / name).write_text('fixture runtime')
         script = Path(__file__).resolve().parents[1] / 'deploy-prod.sh'
         shutil.copy2(script, self.root / 'deploy-prod.sh')
         for file in ['compose.yaml', 'runtime.env', 'scraper.env', 'Dockerfile.php', 'Dockerfile.web']:
@@ -104,7 +113,7 @@ class DeploymentTest(unittest.TestCase):
         return [call for call in self.calls if all(word in call for word in words)]
 
     def assert_isolated(self):
-        allowed = {'php', 'web', 'scheduler', 'worker-core', 'worker-audits', 'worker-library', 'worker-analysis', 'scraper'}
+        allowed = {'php', 'web', 'scheduler', 'worker-core', 'worker-audits', 'worker-library', 'worker-analysis', 'scraper', 'worker-shopify'}
         for call in self.matching('docker', 'compose'):
             if call == ['docker', 'compose', 'version']:
                 continue

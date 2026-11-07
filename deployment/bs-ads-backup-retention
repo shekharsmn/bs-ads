@@ -1,0 +1,2 @@
+# BS Ads release database backups expire after 30 days. No shared-service commands.
+17 2 * * * root /bin/bash /opt/bs-ads/deployment/prune-backups.sh

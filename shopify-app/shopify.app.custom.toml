@@ -1,0 +1,24 @@
+client_id = "REPLACE_WITH_CUSTOM_CLIENT_ID"
+name = "SharkAds Client"
+application_url = "https://sharkads.brandshark.in/shopify/app/REPLACE_WITH_REGISTRATION_SLUG"
+embedded = true
+
+[build]
+
+[access_scopes]
+scopes = "read_orders"
+use_legacy_install_flow = false
+
+[auth]
+redirect_urls = ["https://sharkads.brandshark.in/shopify/app/REPLACE_WITH_REGISTRATION_SLUG"]
+
+[webhooks]
+api_version = "2026-10"
+
+[[webhooks.subscriptions]]
+topics = ["orders/create", "orders/updated", "orders/paid", "orders/cancelled", "orders/delete", "refunds/create", "app/uninstalled", "app/scopes_update"]
+uri = "https://sharkads.brandshark.in/api/shopify/webhooks/REPLACE_WITH_REGISTRATION_SLUG"
+
+[[webhooks.subscriptions]]
+compliance_topics = ["customers/data_request", "customers/redact", "shop/redact"]
+uri = "https://sharkads.brandshark.in/api/shopify/webhooks/REPLACE_WITH_REGISTRATION_SLUG"

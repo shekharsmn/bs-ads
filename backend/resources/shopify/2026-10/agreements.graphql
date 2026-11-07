@@ -1,0 +1,9 @@
+query OrderAgreements($id: ID!, $after: String) {
+  order(id: $id) {
+    id updatedAt
+    agreements(first: 50, after: $after) {
+      edges { cursor node { id happenedAt } }
+      pageInfo { hasNextPage endCursor }
+    }
+  }
+}

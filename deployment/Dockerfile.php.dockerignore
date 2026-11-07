@@ -1,0 +1,16 @@
+**/.env
+**/.env.*
+!**/.env.example
+.git
+**/node_modules
+**/vendor
+**/storage
+**/bootstrap/cache
+backend/public/shopify
+frontend/dist
+.graphify
+SERVER_DEPLOYMENT_NOTES.md
+**/*.local.toml
+.deployment/*
+!.deployment/php.ini
+!.deployment/fpm.conf

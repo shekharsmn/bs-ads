@@ -221,3 +221,5 @@ Route::middleware(['auth:sanctum', 'active', 'audit.mutations'])->group(function
     Route::post('/reports/{report}/cancel', [ReportController::class, 'cancel']);
     Route::delete('/reports/{report}', [ReportController::class, 'destroy']);
 });
+
+require __DIR__.'/shopify.php';

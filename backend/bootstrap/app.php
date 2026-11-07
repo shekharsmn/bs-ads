@@ -11,6 +11,7 @@ return Application::configure(basePath: dirname(__DIR__))
         commands: __DIR__.'/../routes/console.php',
         health: '/up',
     )
+    ->withCommands([\App\Shopify\Console\MaintainShopify::class, \App\Shopify\Console\ReplayPrivacy::class, \App\Shopify\Console\RetryWebhook::class, \App\Shopify\Console\ConfigureApp::class])
     ->withMiddleware(function (Middleware $middleware): void {
         $middleware->alias([
             'role' => \App\Http\Middleware\RequireRole::class,
@@ -18,11 +19,13 @@ return Application::configure(basePath: dirname(__DIR__))
             'audit.mutations' => \App\Http\Middleware\AuditMutations::class,
         ]);
         $middleware->api(prepend: [
-            \Laravel\Sanctum\Http\Middleware\EnsureFrontendRequestsAreStateful::class,
+            \App\Http\Middleware\AgencyStatefulRequests::class,
         ]);
 
         $middleware->prepend(\Illuminate\Http\Middleware\HandleCors::class);
     })
     ->withExceptions(function (Exceptions $exceptions): void {
-        //
+        $exceptions->render(function (\App\Shopify\ShopifyException $e, \Illuminate\Http\Request $request) {
+            return response()->json(['message' => $e->errorCode], $e->retryable ? 503 : 422);
+        });
     })->create();

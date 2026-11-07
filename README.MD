@@ -6,6 +6,7 @@ Brandshark Pulse is an internal multi-client reporting and alert layer for Googl
 
 - `backend/`: Laravel 12 API, queue jobs, scheduler, normalized metrics, alert engine, Google Chat delivery and report snapshots.
 - `frontend/`: React/Vite operator console for clients, connections, performance, alert handling, rules and reports.
+- `shopify-app/`: isolated Shopify merchant UI and registration templates; Laravel remains its backend. Setup and release gates: [Shopify integration](shopify-app/README.md).
 - `.graphify/`: local generated code graph; intentionally ignored by Git.
 
 Credentials and Google Chat webhook URLs are encrypted at rest and omitted from API responses. Metric APIs return separate currency blocks and never sum unlike currencies.
@@ -50,7 +51,7 @@ The first verified user from the configured Workspace domain becomes Admin. Late
 ### Production deployments (existing BS Ads server)
 
 Run as root inside `/opt/bs-ads`. The production script uses the existing
-`.deployment/compose.yaml` and Dockerfiles; it does not provision a new server.
+`.deployment/compose.yaml` and the versioned `deployment/` Dockerfiles; it does not provision a new server.
 
 ```bash
 git pull --ff-only
@@ -164,3 +165,7 @@ cd frontend && npm run build
 ```
 
 Backend tests cover Workspace-domain access, RBAC and client isolation, encryption/redaction, currency separation, rule operators, two-strike incident/recovery behavior, and audited alert actions.
+
+## Shopify commerce
+
+The Shopify integration is enabled by default, with no extra environment setting required. It imports orders created within the last 60 days through the GraphQL Admin API and reports store-level order count and net merchandise sales separately from Google/Meta attributed results. Follow [the Shopify setup guide](shopify-app/README.md) for registration, approvals, installation, linking, tests and custom-to-public migration. The merchant app has its own frontend build; no additional production Node server is required.

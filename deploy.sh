@@ -25,7 +25,7 @@ php artisan serve --host=127.0.0.1 --port=8000 &
 PID_API=$!
 echo -e "${GREEN}[API]     Laravel → http://localhost:8000  (pid $PID_API)${NC}"
 
-QUEUES="notifications,collection,audits,reports,ad-library,ad-library-analysis,default"
+QUEUES="shopify-sync,notifications,collection,audits,reports,ad-library,ad-library-analysis,default"
 run_queue_worker() {
     while true; do
         if DB_QUEUE_RETRY_AFTER="${DB_QUEUE_RETRY_AFTER:-1200}" php artisan queue:work --queue="$QUEUES" --timeout=1000 --sleep=3 --tries=3; then

@@ -71,6 +71,7 @@ class AuthController extends Controller
             'run_content_audits' => $user->canRunContentAudits(),
             'use_data_inspector' => $user->canUseDataInspector(),
         ], 'features' => [
+            'shopify' => (bool) config('shopify.enabled'),
             'ad_library' => (bool) config('services.ad_library.enabled'),
             'ad_library_audits' => (bool) config('services.ad_library.enabled') && (bool) config('ad_library_audit.enabled'),
         ]]);

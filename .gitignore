@@ -15,3 +15,11 @@ backend/storage/framework/sessions/
 backend/storage/framework/views/
 backend/bootstrap/cache/
 .graphify/
+
+shopify-app/node_modules/
+shopify-app/.env
+shopify-app/shopify.app.*.local.toml
+backend/public/shopify/
+backend/public/shopify.hot
+frontend/test-results/
+frontend/playwright-report/
