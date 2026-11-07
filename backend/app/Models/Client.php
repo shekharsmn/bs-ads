@@ -6,14 +6,14 @@ use Illuminate\Database\Eloquent\Model;
 
 class Client extends Model
 {
-    protected $fillable = ['name', 'slug', 'timezone', 'currency', 'objective', 'goals', 'chat_visibility', 'google_chat_webhook', 'active'];
+    protected $fillable = ['name', 'slug', 'timezone', 'currency', 'objective', 'goals', 'chat_visibility', 'google_chat_webhook', 'active', 'portal_enabled'];
 
     protected $hidden = ['google_chat_webhook'];
     protected $appends = ['google_chat_webhook_configured'];
 
     protected function casts(): array
     {
-        return ['goals' => 'array', 'google_chat_webhook' => 'encrypted', 'active' => 'boolean'];
+        return ['goals' => 'array', 'google_chat_webhook' => 'encrypted', 'active' => 'boolean', 'portal_enabled' => 'boolean'];
     }
 
     public function users() { return $this->belongsToMany(User::class)->withTimestamps(); }
@@ -26,5 +26,6 @@ class Client extends Model
     public function reportRuns() { return $this->hasMany(ReportRun::class); }
     public function adLibrarySearches() { return $this->hasMany(AdLibrarySearch::class, 'related_client_id'); }
     public function adLibraryAudits() { return $this->hasMany(AdLibraryAudit::class, 'related_client_id'); }
+    public function portalAccountScopes() { return $this->hasMany(ClientPortalAccountScope::class); }
     public function getGoogleChatWebhookConfiguredAttribute(): bool { return filled($this->google_chat_webhook); }
 }

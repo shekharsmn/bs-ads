@@ -28,13 +28,27 @@ return new class extends Migration
 
         if (! Schema::hasTable('performance_pulse_destination')) {
             Schema::create('performance_pulse_destination', function (Blueprint $table) {
-                $table->foreignId('performance_pulse_id')->constrained()->cascadeOnDelete();
-                $table->unsignedBigInteger('notification_destination_id');
+                $table->foreignId('performance_pulse_id');
+                $table->foreignId('notification_destination_id');
                 $table->primary(['performance_pulse_id', 'notification_destination_id'], 'pulse_destination_primary');
+                $table->foreign('performance_pulse_id', 'pulse_destination_pulse_fk')->references('id')->on('performance_pulses')->cascadeOnDelete();
+                $table->foreign('notification_destination_id', 'pulse_dest_notif_fk')->references('id')->on('notification_destinations')->cascadeOnDelete();
             });
         }
 
-        \App\Support\SchemaRepair::foreign('performance_pulse_destination', 'notification_destination_id', 'notification_destinations', 'pulse_dest_notif_fk');
+        // MySQL commits CREATE TABLE before adding its foreign keys. Restore
+        // either constraint when retrying after a partially committed failure.
+        if (! $this->hasForeignKeyFor('performance_pulse_destination', 'performance_pulse_id')) {
+            Schema::table('performance_pulse_destination', function (Blueprint $table) {
+                $table->foreign('performance_pulse_id', 'pulse_destination_pulse_fk')->references('id')->on('performance_pulses')->cascadeOnDelete();
+            });
+        }
+
+        if (! $this->hasForeignKeyFor('performance_pulse_destination', 'notification_destination_id')) {
+            Schema::table('performance_pulse_destination', function (Blueprint $table) {
+                $table->foreign('notification_destination_id', 'pulse_dest_notif_fk')->references('id')->on('notification_destinations')->cascadeOnDelete();
+            });
+        }
 
         if (! Schema::hasTable('performance_pulse_runs')) {
             Schema::create('performance_pulse_runs', function (Blueprint $table) {
@@ -84,5 +98,11 @@ return new class extends Migration
         Schema::dropIfExists('performance_pulse_runs');
         Schema::dropIfExists('performance_pulse_destination');
         Schema::dropIfExists('performance_pulses');
+    }
+
+    private function hasForeignKeyFor(string $table, string $column): bool
+    {
+        return collect(Schema::getForeignKeys($table))
+            ->contains(fn (array $foreignKey) => $foreignKey['columns'] === [$column]);
     }
 };

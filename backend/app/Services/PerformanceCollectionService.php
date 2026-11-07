@@ -9,17 +9,23 @@ use App\Models\AdGroup;
 use App\Models\Campaign;
 use App\Models\ConversionMapping;
 use App\Models\MetricSnapshot;
+use Carbon\CarbonImmutable;
 use Google\Ads\GoogleAds\V23\Services\SearchGoogleAdsStreamRequest;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 
 class PerformanceCollectionService
 {
+    private const INITIAL_COLLECTION_DAYS = 30;
+
+    private const INCREMENTAL_COLLECTION_DAYS = 14;
+
     public function collect(AdAccount $account, ?string $start = null, ?string $end = null): void
     {
         $account->loadMissing(['connection', 'client']);
-        $end ??= now($account->timezone)->toDateString();
-        $start ??= now($account->timezone)->subDays($account->last_collected_at ? 14 : 89)->toDateString();
+        $end ??= now($account->timezone)->subDay()->toDateString();
+        $windowDays = $account->last_collected_at ? self::INCREMENTAL_COLLECTION_DAYS : self::INITIAL_COLLECTION_DAYS;
+        $start ??= CarbonImmutable::parse($end, $account->timezone)->subDays($windowDays - 1)->toDateString();
         $rows = $account->platform === Platform::Google ? $this->google($account, $start, $end) : $this->meta($account, $start, $end);
         $hierarchy = $account->platform === Platform::Google ? $this->googleHierarchy($account, $start, $end) : $this->metaHierarchy($account, $start, $end);
         DB::transaction(function () use ($account, $rows, $hierarchy) {

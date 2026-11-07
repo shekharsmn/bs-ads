@@ -33,6 +33,9 @@ const AdLibraryAuditReportPage = lazy(() => import('./pages/AdLibraryAuditReport
 const AiModelSettingsPage = lazy(() => import('./pages/AiModelSettingsPage'))
 const PerformanceDrilldownPage = lazy(() => import('./pages/PerformanceDrilldownPage'))
 const LegacyPerformanceRedirect = lazy(() => import('./pages/LegacyPerformanceRedirect'))
+const ClientLoginPage = lazy(() => import('./pages/ClientLoginPage'))
+const ClientPortalPage = lazy(() => import('./pages/ClientPortalPage'))
+const ClientPortalDrilldownPage = lazy(() => import('./pages/ClientPortalDrilldownPage'))
 
 function RouteFallback() { return <div className="route-loading" role="status"><span/>Loading workspace…</div> }
 
@@ -68,8 +71,20 @@ function ProtectedRoute({ children }) {
 function GuestRoute({ children }) {
   const { user, loading } = useAuth()
   if (loading) return null
-  if (user) return <Navigate to={commandCenterPath} replace />
+  if (user) return <Navigate to={user.role === 'client' ? '/portal' : commandCenterPath} replace />
   return children
+}
+
+function WorkspaceRoute({ children }) {
+  const { user } = useAuth()
+  return user?.role === 'client' ? <Navigate to="/portal" replace /> : children
+}
+
+function ClientRoute({ children }) {
+  const { user, loading } = useAuth()
+  if (loading) return <RouteFallback/>
+  if (!user) return <Navigate to="/client-login" replace />
+  return user.role === 'client' ? children : <Navigate to={commandCenterPath} replace />
 }
 
 function AdminRoute({ children }) {
@@ -87,9 +102,21 @@ export default function App() {
             <Route path="/share/reports/:token" element={<PublicReportPage />} />
             <Route path="/shared/reports/:token" element={<PublicPerformanceReportPage />} />
             <Route path="/login" element={<GuestRoute><LoginPage /></GuestRoute>} />
+            <Route path="/client-login" element={<ClientLoginPage />} />
+            <Route path="/portal" element={<ClientRoute><ClientPortalPage /></ClientRoute>} />
+            <Route path="/portal/clients/:clientId" element={<ClientRoute><ClientPortalPage /></ClientRoute>} />
+            <Route path="/portal/clients/:clientId/accounts/:accountId" element={<ClientRoute><ClientPortalDrilldownPage /></ClientRoute>} />
+            <Route path="/portal/clients/:clientId/accounts/:accountId/campaigns/:campaignId" element={<ClientRoute><ClientPortalDrilldownPage /></ClientRoute>} />
+            <Route path="/portal/clients/:clientId/accounts/:accountId/campaigns/:campaignId/ad-groups/:groupId" element={<ClientRoute><ClientPortalDrilldownPage /></ClientRoute>} />
+            <Route path="/portal/clients/:clientId/accounts/:accountId/campaigns/:campaignId/ad-groups/:groupId/ads/:adId" element={<ClientRoute><ClientPortalDrilldownPage /></ClientRoute>} />
+            <Route path="/portal/preview/clients/:clientId" element={<ProtectedRoute><AdminRoute><ClientPortalPage preview /></AdminRoute></ProtectedRoute>} />
+            <Route path="/portal/preview/clients/:clientId/accounts/:accountId" element={<ProtectedRoute><AdminRoute><ClientPortalDrilldownPage preview /></AdminRoute></ProtectedRoute>} />
+            <Route path="/portal/preview/clients/:clientId/accounts/:accountId/campaigns/:campaignId" element={<ProtectedRoute><AdminRoute><ClientPortalDrilldownPage preview /></AdminRoute></ProtectedRoute>} />
+            <Route path="/portal/preview/clients/:clientId/accounts/:accountId/campaigns/:campaignId/ad-groups/:groupId" element={<ProtectedRoute><AdminRoute><ClientPortalDrilldownPage preview /></AdminRoute></ProtectedRoute>} />
+            <Route path="/portal/preview/clients/:clientId/accounts/:accountId/campaigns/:campaignId/ad-groups/:groupId/ads/:adId" element={<ProtectedRoute><AdminRoute><ClientPortalDrilldownPage preview /></AdminRoute></ProtectedRoute>} />
             <Route
               path="/"
-              element={<ProtectedRoute><Layout /></ProtectedRoute>}
+              element={<ProtectedRoute><WorkspaceRoute><Layout /></WorkspaceRoute></ProtectedRoute>}
             >
               <Route index element={<Navigate to={commandCenterPath} replace />} />
               <Route path="command-center" element={<Dashboard />} />
@@ -121,6 +148,7 @@ export default function App() {
               <Route path="users" element={<AdminRoute><UsersPage /></AdminRoute>} />
               <Route path="data-health" element={<DataHealthPage />} />
               <Route path="settings/ai-models" element={<AdminRoute><AiModelSettingsPage /></AdminRoute>} />
+              <Route path="settings/email-integration" element={<AdminRoute><AiModelSettingsPage /></AdminRoute>} />
               <Route path="ad-library" element={<AdLibraryPage />} />
               <Route path="ad-library/audits" element={<AdLibraryAuditPage />} />
               <Route path="ad-library/audits/:id" element={<AdLibraryAuditPage />} />

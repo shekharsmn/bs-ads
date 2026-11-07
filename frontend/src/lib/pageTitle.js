@@ -1,5 +1,8 @@
 const routeTitles = [
   [/^\/login\/?$/, 'Sign in'],
+  [/^\/client-login\/?$/, 'Client sign in'],
+  [/^\/portal\//, 'Client Performance'],
+  [/^\/portal\/?$/, 'Client Performance'],
   [/^\/privacy-policy\/?$/, 'Privacy Policy'],
   [/^\/command-center\/clients\/[^/]+\/ad-accounts\//, 'Account Performance'],
   [/^\/command-center\/?$/, 'Command Center'],
@@ -19,7 +22,7 @@ const routeTitles = [
   [/^\/governance\/?$/, 'Governance'],
   [/^\/users\/?$/, 'Users'],
   [/^\/data-health\/?$/, 'Data Health'],
-  [/^\/settings\/ai-models\/?$/, 'AI Model Settings'],
+  [/^\/settings\/(ai-models|email-integration)\/?$/, 'Settings'],
   [/^\/ad-library\/audits\/[^/]+\/report\/?$/, 'Content Audit Report'],
   [/^\/ad-library\/audits\//, 'Content Audit'],
   [/^\/ad-library\/audits\/?$/, 'Content Audits'],

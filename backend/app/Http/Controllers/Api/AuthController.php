@@ -61,7 +61,7 @@ class AuthController extends Controller
     {
         $user = $request->user();
 
-        return response()->json(['user' => $user->load('clients:id,name,slug'), 'permissions' => [
+        return response()->json(['user' => $user->load('clients:id,name,slug'), 'home_path' => $user->isClient() ? '/portal' : '/command-center', 'permissions' => [
             'manage_clients' => $user->isAdmin(),
             'manage_connections' => $user->isAdmin(),
             'manage_ai_models' => $user->isAdmin(),

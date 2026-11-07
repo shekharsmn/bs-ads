@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers\Api;
 
+use App\Enums\UserRole;
 use App\Http\Controllers\Controller;
 use App\Models\User;
 use App\Models\UserInvitation;
@@ -72,6 +73,7 @@ class WorkspaceAuthController extends Controller
             && hash_equals($bootstrapEmail, $email)
             && User::query()->where('role', 'admin')->whereNull('disabled_at')->doesntExist();
         $invitation = UserInvitation::where('email', $email)->first();
+        abort_if($invitation?->role === UserRole::Client || User::query()->where('email', $email)->where('role', UserRole::Client->value)->exists(), 403, 'Client accounts sign in with an emailed magic link.');
         abort_if($invitation?->revoked_at && ! $invitation->accepted_at, 403, 'This invitation has been revoked. Ask an administrator to restore access.');
         $pendingInvitation = $invitation && ! $invitation->accepted_at && ! $invitation->revoked_at ? $invitation : null;
         $user = DB::transaction(function () use ($email, $profile, $shouldBootstrap, $pendingInvitation) {

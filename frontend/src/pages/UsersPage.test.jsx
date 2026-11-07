@@ -48,4 +48,20 @@ describe('user management', () => {
       email: 'new@brandshark.com', role: 'marketer', client_ids: [5], run_content_audits: true, use_data_inspector: true,
     })))
   })
+
+  it('creates an external client invitation with portal-only access', async () => {
+    renderPage()
+    await screen.findByText('Morgan')
+    fireEvent.click(screen.getByRole('button', { name: 'Invite user' }))
+    fireEvent.change(screen.getByLabelText('Role'), { target: { value: 'client' } })
+    fireEvent.change(screen.getByLabelText('Client email'), { target: { value: 'client@outside.example' } })
+    fireEvent.click(screen.getAllByText('Acme').at(-1))
+    expect(screen.queryByText('Tool permissions')).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Send invitation' }))
+
+    await waitFor(() => expect(api.inviteUser).toHaveBeenCalledWith(expect.objectContaining({
+      email: 'client@outside.example', role: 'client', client_ids: [4], run_performance_audits: false,
+      run_content_audits: false, use_data_inspector: false,
+    })))
+  })
 })

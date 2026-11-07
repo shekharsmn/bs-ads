@@ -10,6 +10,8 @@ describe('pageTitle', () => {
     ['/reports/42', 'Account Audit Report · SharkAds'],
     ['/ad-library/audits/7/report', 'Content Audit Report · SharkAds'],
     ['/users', 'Users · SharkAds'],
+    ['/settings/ai-models', 'Settings · SharkAds'],
+    ['/settings/email-integration', 'Settings · SharkAds'],
   ])('maps %s to %s', (path, expected) => expect(pageTitle(path)).toBe(expected))
 
   it('uses the product name for unknown routes', () => {

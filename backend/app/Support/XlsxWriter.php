@@ -93,10 +93,13 @@ final class XlsxWriter
                 $reference = self::columnName($columnIndex + 1).($rowIndex + 1);
                 $plain = (string) ($value ?? '');
                 $isHyperlink = $rowIndex > 0 && self::isWebUrl($plain);
-                $style = $rowIndex === 0 ? 1 : ($isHyperlink ? 3 : 2);
+                $isNumber = $rowIndex > 0 && (is_int($value) || is_float($value));
+                $style = $rowIndex === 0 ? 1 : ($isHyperlink ? 3 : ($isNumber ? 4 : 2));
                 $text = self::xml($plain);
                 $widths[$columnIndex] = max($widths[$columnIndex], min(48, mb_strlen(preg_replace('/\s+/u', ' ', $plain)) + 2));
-                $cells[] = "<c r=\"{$reference}\" t=\"inlineStr\" s=\"{$style}\"><is><t xml:space=\"preserve\">{$text}</t></is></c>";
+                $cells[] = $isNumber
+                    ? "<c r=\"{$reference}\" t=\"n\" s=\"{$style}\"><v>".self::xml((string) $value).'</v></c>'
+                    : "<c r=\"{$reference}\" t=\"inlineStr\" s=\"{$style}\"><is><t xml:space=\"preserve\">{$text}</t></is></c>";
                 if ($isHyperlink) {
                     $hyperlinks[] = ['reference' => $reference, 'target' => $plain];
                 }
@@ -218,11 +221,12 @@ final class XlsxWriter
     {
         return '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
             .'<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
+            .'<numFmts count="1"><numFmt numFmtId="164" formatCode="#,##0.00"/></numFmts>'
             .'<fonts count="4"><font><sz val="11"/><name val="Aptos"/></font><font><b/><color rgb="FFFFFFFF"/><sz val="11"/><name val="Aptos Display"/></font><font><sz val="11"/><name val="Aptos"/></font><font><u/><color rgb="FF2563EB"/><sz val="11"/><name val="Aptos"/></font></fonts>'
             .'<fills count="3"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill><fill><patternFill patternType="solid"><fgColor rgb="FF1D4ED8"/><bgColor indexed="64"/></patternFill></fill></fills>'
             .'<borders count="2"><border><left/><right/><top/><bottom/><diagonal/></border><border><left/><right/><top/><bottom style="thin"><color rgb="FFDCE3EC"/></bottom><diagonal/></border></borders>'
             .'<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>'
-            .'<cellXfs count="4"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/><xf numFmtId="0" fontId="1" fillId="2" borderId="0" xfId="0" applyFont="1" applyFill="1" applyAlignment="1"><alignment vertical="center"/></xf><xf numFmtId="0" fontId="2" fillId="0" borderId="1" xfId="0" applyAlignment="1"><alignment vertical="top" wrapText="1"/></xf><xf numFmtId="0" fontId="3" fillId="0" borderId="1" xfId="0" applyFont="1" applyAlignment="1"><alignment vertical="top" wrapText="1"/></xf></cellXfs>'
+            .'<cellXfs count="5"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/><xf numFmtId="0" fontId="1" fillId="2" borderId="0" xfId="0" applyFont="1" applyFill="1" applyAlignment="1"><alignment vertical="center"/></xf><xf numFmtId="0" fontId="2" fillId="0" borderId="1" xfId="0" applyAlignment="1"><alignment vertical="top" wrapText="1"/></xf><xf numFmtId="0" fontId="3" fillId="0" borderId="1" xfId="0" applyFont="1" applyAlignment="1"><alignment vertical="top" wrapText="1"/></xf><xf numFmtId="164" fontId="2" fillId="0" borderId="1" xfId="0" applyNumberFormat="1" applyAlignment="1"><alignment vertical="top"/></xf></cellXfs>'
             .'<cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles>'
             .'</styleSheet>';
     }
