@@ -1,7 +1,7 @@
 <?php
 
 return [
-    'enabled' => (bool) env('SHOPIFY_ENABLED', true),
+    'enabled' => (bool) env('SHOPIFY_ENABLED', false),
     'api_version' => '2026-10',
     'queue' => 'shopify-sync',
     'http_timeout' => 20,

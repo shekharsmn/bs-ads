@@ -120,11 +120,6 @@ main() {
     cp "$STATE/runtime.env" "$RELEASE/runtime.before.env"
     cp "$STATE/scraper.env" "$RELEASE/scraper.before.env"
     exec > >(tee -a "$RELEASE/deploy.log") 2>&1
-    # Install only our named retention job; do not edit another application's cron.
-    # Kept separate from schema rollback: database snapshots contain protected data.
-    if [[ "$ROOT" == /opt/bs-ads && -f "$ROOT/deployment/bs-ads-backup-retention" ]]; then
-        install -o root -g root -m 644 "$ROOT/deployment/bs-ads-backup-retention" /etc/cron.d/bs-ads-backup-retention
-    fi
     trap cleanup EXIT
     trap 'exit 130' INT
     trap 'exit 143' TERM
@@ -246,6 +241,11 @@ PHP
                 git -C "$ROOT" rev-parse HEAD >"$RELEASE/revision"
                 cp "$RELEASE/revision" "$STATE/deployed-revision.next"
                 mv "$STATE/deployed-revision.next" "$STATE/deployed-revision"
+                # Apply host configuration only after the application deployment is healthy.
+                # Install only our named retention job; never edit another application's cron.
+                if [[ "$ROOT" == /opt/bs-ads && -f "$ROOT/deployment/bs-ads-backup-retention" ]]; then
+                    install -o root -g root -m 644 "$ROOT/deployment/bs-ads-backup-retention" /etc/cron.d/bs-ads-backup-retention
+                fi
             fi
             SUCCESS=1
             printf '\nBS Ads is ready. Release files: %s\n' "$RELEASE"

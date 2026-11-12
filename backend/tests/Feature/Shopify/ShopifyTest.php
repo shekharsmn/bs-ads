@@ -27,6 +27,13 @@ class ShopifyTest extends TestCase
 {
     use RefreshDatabase;
 
+    public function test_shopify_is_opt_in_by_default(): void
+    {
+        $config = require config_path('shopify.php');
+
+        $this->assertFalse($config['enabled']);
+    }
+
     protected function setUp(): void
     {
         parent::setUp();

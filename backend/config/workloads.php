@@ -2,7 +2,7 @@
 
 return [
     'queues' => array_filter([
-        'shopify' => env('SHOPIFY_ENABLED', true) ? 'shopify-sync' : null,
+        'shopify' => env('SHOPIFY_ENABLED', false) ? 'shopify-sync' : null,
         'notifications' => env('QUEUE_NOTIFICATIONS', 'notifications'),
         'collection' => env('QUEUE_COLLECTION', 'collection'),
         'reports' => env('QUEUE_REPORTS', 'reports'),
