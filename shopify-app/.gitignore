@@ -1,0 +1,5 @@
+node_modules/
+.env
+shopify.app.*.local.toml
+shopify.app.*-local.toml
+shopify.app.skin-mummalocal.toml

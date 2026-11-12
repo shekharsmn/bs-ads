@@ -53,3 +53,8 @@ Schedule::command('ai:monitor-budgets')
     ->hourlyAt(35)
     ->onOneServer()
     ->withoutOverlapping(55);
+
+Schedule::command('shopify:maintain --kind=inbox')->everyMinute()->withoutOverlapping(2);
+Schedule::command('shopify:maintain')->everyFifteenMinutes()->withoutOverlapping(10);
+Schedule::command('shopify:maintain --kind=recent')->dailyAt('03:10')->withoutOverlapping(20);
+Schedule::command('shopify:maintain --kind=reconcile')->weeklyOn(0, '04:10')->withoutOverlapping(20);

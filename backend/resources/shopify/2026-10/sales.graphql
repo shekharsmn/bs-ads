@@ -1,0 +1,18 @@
+query AgreementSales($id: ID!, $agreementAfter: String, $after: String) {
+  order(id: $id) {
+    agreements(first: 1, after: $agreementAfter) {
+      nodes {
+        id
+        sales(first: 100, after: $after) {
+          nodes {
+            id actionType lineType
+            totalAmount { shopMoney { amount currencyCode } }
+            totalTaxAmount { shopMoney { amount currencyCode } }
+            totalDiscountAmountBeforeTaxes { shopMoney { amount currencyCode } }
+          }
+          pageInfo { hasNextPage endCursor }
+        }
+      }
+    }
+  }
+}

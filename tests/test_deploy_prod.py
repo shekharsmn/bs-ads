@@ -43,15 +43,22 @@ elif name == 'docker':
         if args[1] == 'inspect': sys.exit(1)
         if args[1] == 'build': sys.exit(int(os.environ.get('FAIL_BUILD', '0')))
     elif args[0] == 'inspect':
-        print('\n'.join(['true false healthy'] * 8))
+        print('\n'.join(['true false healthy'] * len(args[3:])))
     elif args[0] == 'compose':
-        if 'config' in args and '--no-env-resolution' in args:
+        if 'config' in args and '--services' in args:
+            if not os.environ.get('LEGACY_COMPOSE'):
+                print('worker-shopify')
+        elif 'config' in args and '--format' in args:
+            print(json.dumps({'services': {'worker-core': {'image': 'previous', 'user': '33:33', 'cgroup_parent': 'bs-ads.slice'}}}))
+        elif 'config' in args and '--no-env-resolution' in args:
             print('services: {} # generated fixture')
         elif 'ps' in args and '-aq' in args:
-            print('\n'.join('container' + str(i) for i in range(8)))
+            print('\n'.join('container' + str(i) for i, _ in enumerate(args[args.index('-aq') + 1:])))
         elif 'run' in args:
             if 'migrate' in args: sys.exit(int(os.environ.get('FAIL_MIGRATION', '0')))
             if 'config:cache' in args: sys.exit(int(os.environ.get('FAIL_CACHE', '0')))
+            if 'shopify:replay-privacy' in args and os.environ.get('LEGACY_IMAGE'):
+                sys.exit(1)
             if args[-2:] == ['php', 'php']:
                 content = sys.stdin.read()
                 if 'Refusing to deploy' in content:
@@ -74,6 +81,11 @@ class DeploymentTest(unittest.TestCase):
         self.state = self.root / '.deployment'
         self.state.mkdir()
         (self.root / 'backend').mkdir()
+        (self.root / 'deployment').mkdir()
+        for name in ['Dockerfile.php', 'Dockerfile.web']:
+            (self.root / 'deployment' / name).write_text('fixture build file')
+        for name in ['php.ini', 'fpm.conf']:
+            (self.root / 'deployment' / name).write_text('fixture runtime')
         script = Path(__file__).resolve().parents[1] / 'deploy-prod.sh'
         shutil.copy2(script, self.root / 'deploy-prod.sh')
         for file in ['compose.yaml', 'runtime.env', 'scraper.env', 'Dockerfile.php', 'Dockerfile.web']:
@@ -104,7 +116,7 @@ class DeploymentTest(unittest.TestCase):
         return [call for call in self.calls if all(word in call for word in words)]
 
     def assert_isolated(self):
-        allowed = {'php', 'web', 'scheduler', 'worker-core', 'worker-audits', 'worker-library', 'worker-analysis', 'scraper'}
+        allowed = {'php', 'web', 'scheduler', 'worker-core', 'worker-audits', 'worker-library', 'worker-analysis', 'scraper', 'worker-shopify'}
         for call in self.matching('docker', 'compose'):
             if call == ['docker', 'compose', 'version']:
                 continue
@@ -129,6 +141,7 @@ class DeploymentTest(unittest.TestCase):
         migrate = self.matching('artisan', 'migrate')[0]
         self.assertLess(self.calls.index(build[-1]), self.calls.index(down))
         self.assertLess(self.calls.index(backup), self.calls.index(migrate))
+        self.assertLess(self.calls.index(migrate), self.calls.index(self.matching('artisan', 'shopify:replay-privacy')[0]))
         self.assertEqual(backup[-1], 'bs_ads')
         self.assertTrue(self.matching('artisan', 'config:cache'))
         self.assertTrue(self.matching('artisan', 'route:cache'))
@@ -144,7 +157,9 @@ class DeploymentTest(unittest.TestCase):
         self.assert_isolated()
 
     def test_restart_refreshes_existing_images_without_build_or_migration(self):
-        self.assertEqual(self.run_script('restart'), 0, self.output)
+        self.assertEqual(self.run_script('restart', LEGACY_COMPOSE='1', LEGACY_IMAGE='1'), 0, self.output)
+        self.assertFalse(self.matching('artisan', 'shopify:replay-privacy'))
+        self.assertFalse(self.matching('docker', 'compose', 'up', 'worker-shopify'))
         self.assertFalse(self.matching('docker', 'buildx'))
         self.assertFalse(self.matching('mysqldump'))
         self.assertFalse(self.matching('artisan', 'migrate'))

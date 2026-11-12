@@ -1,7 +1,8 @@
 <?php
 
 return [
-    'queues' => [
+    'queues' => array_filter([
+        'shopify' => env('SHOPIFY_ENABLED', true) ? 'shopify-sync' : null,
         'notifications' => env('QUEUE_NOTIFICATIONS', 'notifications'),
         'collection' => env('QUEUE_COLLECTION', 'collection'),
         'reports' => env('QUEUE_REPORTS', 'reports'),
@@ -9,7 +10,7 @@ return [
         'ad_library' => env('QUEUE_AD_LIBRARY', 'ad-library'),
         'ad_library_analysis' => env('QUEUE_AD_LIBRARY_ANALYSIS', 'ad-library-analysis'),
         'default' => env('QUEUE_DEFAULT', 'default'),
-    ],
+    ]),
     'policies' => [
         'notifications' => ['timeout' => 30, 'tries' => 3, 'backoff' => [30, 120, 600]],
         'collection' => ['timeout' => 300, 'tries' => 1, 'backoff' => 60],

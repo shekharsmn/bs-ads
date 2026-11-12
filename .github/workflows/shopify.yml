@@ -1,0 +1,65 @@
+name: Application and Shopify checks
+on:
+  push:
+  pull_request:
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:8.0.46
+        env:
+          MYSQL_RANDOM_ROOT_PASSWORD: 'yes'
+          MYSQL_DATABASE: bs_ads_shopify_test
+          MYSQL_USER: bs_ads_test
+          MYSQL_PASSWORD: local-disposable-only
+        ports: ['43316:3306']
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -u bs_ads_test -plocal-disposable-only --silent"
+          --health-interval=5s --health-timeout=5s --health-retries=30
+    env:
+      APP_KEY: 'base64:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA='
+      AD_LIBRARY_ENABLED: 'true'
+      AD_LIBRARY_AUDITS_ENABLED: 'true'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+          extensions: bcmath, pdo_mysql, pdo_sqlite, mbstring, zip
+          coverage: none
+      - run: composer install --no-interaction --prefer-dist
+        working-directory: backend
+      - run: php artisan test
+        working-directory: backend
+      - run: php vendor/bin/phpunit -c phpunit.mysql.xml
+        working-directory: backend
+      - run: sudo python3 tests/test_deploy_prod.py
+  frontend:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        directory: [frontend, shopify-app]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: '${{ matrix.directory }}/package-lock.json'
+      - run: npm ci
+        working-directory: '${{ matrix.directory }}'
+      - run: npm run lint
+        working-directory: '${{ matrix.directory }}'
+      - run: npm test -- --maxWorkers=2
+        working-directory: '${{ matrix.directory }}'
+      - run: npm run build
+        working-directory: '${{ matrix.directory }}'
+      - run: npx playwright install --with-deps chromium
+        if: matrix.directory == 'frontend'
+        working-directory: frontend
+      - run: npm run test:e2e -- e2e/shopify-commerce.spec.js --workers=1
+        if: matrix.directory == 'frontend'
+        working-directory: frontend
+        env:
+          PLAYWRIGHT_CHANNEL: chromium

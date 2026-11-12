@@ -15,6 +15,8 @@ MAINTENANCE=0
 RUNTIME_CHANGED=0
 BUILDER_USED=0
 SUCCESS=0
+PREVIOUS_APP=("${APP[@]}")
+SHOP_WORKER_NEW=0
 
 usage() {
     printf 'Usage: bash deploy-prod.sh [deploy|restart]\n\n'
@@ -38,7 +40,8 @@ cleanup() {
         cp "$RELEASE/scraper.before.env" "$STATE/scraper.env"
         cp "$RELEASE/compose.before.yaml" "$COMPOSE"
         if (( MAINTENANCE )); then
-            dc up -d --no-deps --force-recreate "${APP[@]}"
+            if (( SHOP_WORKER_NEW )); then next stop worker-shopify; fi
+            dc up -d --no-deps --force-recreate "${PREVIOUS_APP[@]}"
             dc exec -T --user 33:33 php php artisan up
             printf 'Migrations were NOT reversed. Database backup: %s/database.sql\n' "$RELEASE" >&2
         fi
@@ -103,12 +106,25 @@ main() {
     # Prevent overlapping builds, migrations, and restarts for this app.
     exec 9>"$STATE/deploy.lock"
     flock -n 9 || die 'Another BS Ads deployment is running.'
+    local services
+    services="$(dc config --services)"
+    if grep -Fxq worker-shopify <<<"$services"; then
+        APP+=(worker-shopify); WORKERS+=(worker-shopify); PREVIOUS_APP+=(worker-shopify)
+    elif [[ "$MODE" == deploy ]]; then
+        APP+=(worker-shopify); SHOP_WORKER_NEW=1
+    fi
     RUN_ID="$(git -C "$ROOT" rev-parse --short=12 HEAD)-$(date -u +%Y%m%dT%H%M%SZ)-$$"
     RELEASE="$STATE/releases/$RUN_ID"
     mkdir -m 700 "$RELEASE"
     cp "$COMPOSE" "$RELEASE/compose.before.yaml"
     cp "$STATE/runtime.env" "$RELEASE/runtime.before.env"
     cp "$STATE/scraper.env" "$RELEASE/scraper.before.env"
+    exec > >(tee -a "$RELEASE/deploy.log") 2>&1
+    # Install only our named retention job; do not edit another application's cron.
+    # Kept separate from schema rollback: database snapshots contain protected data.
+    if [[ "$ROOT" == /opt/bs-ads && -f "$ROOT/deployment/bs-ads-backup-retention" ]]; then
+        install -o root -g root -m 644 "$ROOT/deployment/bs-ads-backup-retention" /etc/cron.d/bs-ads-backup-retention
+    fi
     trap cleanup EXIT
     trap 'exit 130' INT
     trap 'exit 143' TERM
@@ -123,7 +139,7 @@ main() {
         fi
         [[ -z "$source_status" ]] || \
             die 'Refusing to deploy tracked or untracked source changes.'
-        for file in .dockerignore .deployment/Dockerfile.php .deployment/Dockerfile.web; do
+        for file in deployment/Dockerfile.php deployment/Dockerfile.web deployment/php.ini deployment/fpm.conf; do
             [[ -f "$ROOT/$file" ]] || die "Missing build file: $file"
         done
         if [[ -f "$STATE/deployed-revision" ]]; then previous="$(cat "$STATE/deployed-revision")"; fi
@@ -137,8 +153,8 @@ main() {
                 --driver-opt memory=768m --driver-opt cpu-quota=100000 --driver-opt cpu-period=100000
         fi
         BUILDER_USED=1
-        build_image php "$STATE/Dockerfile.php" "$ROOT"
-        build_image web "$STATE/Dockerfile.web" "$ROOT"
+        build_image php "$ROOT/deployment/Dockerfile.php" "$ROOT"
+        build_image web "$ROOT/deployment/Dockerfile.web" "$ROOT"
         if (( update_scraper )); then
             build_image scraper "$ROOT/services/meta-ad-library-scraper/Dockerfile" "$ROOT/services/meta-ad-library-scraper"
         fi
@@ -148,14 +164,22 @@ main() {
 
     step 'Preparing isolated BS Ads configuration'
     # This override retains the existing ports, limits, networks, and storage.
-    python3 - "$RELEASE/override.json" "$RUN_ID" "$MODE" "$update_scraper" <<'PY'
+    if [[ "$MODE" == deploy ]]; then
+        dc config --no-env-resolution --format json >"$RELEASE/base.json"
+    fi
+    python3 - "$RELEASE/override.json" "$RUN_ID" "$MODE" "$update_scraper" "$RELEASE/base.json" <<'PY'
 import json, sys
-path, tag, mode, scraper = sys.argv[1:]
+path, tag, mode, scraper, base_path = sys.argv[1:]
 services = {}
 if mode == 'deploy':
     for service in ['php', 'worker-core', 'worker-audits', 'worker-library', 'worker-analysis', 'scheduler']:
         services[service] = {'image': 'bs-ads-php:' + tag}
     services['web'] = {'image': 'bs-ads-web:' + tag}
+    with open(base_path) as f: base = json.load(f)
+    worker = dict(base['services']['worker-core'])
+    worker.update({'image': 'bs-ads-php:' + tag, 'command': ['php','artisan','queue:work','--queue=shopify-sync','--timeout=90','--tries=5','--sleep=3','--max-time=3600'], 'stop_grace_period': '110s', 'mem_limit': '192m'})
+    worker.pop('container_name', None)
+    services['worker-shopify'] = worker
     if scraper == '1': services['scraper'] = {'image': 'bs-ads-scraper:' + tag}
 with open(path, 'w') as f:
     json.dump({'services': services, 'volumes': {'bootstrap-cache': {'name': 'bs-ads_bootstrap-cache-' + tag}}}, f)
@@ -197,22 +221,9 @@ PHP
         step 'Backing up bs_ads and running pending migrations'
         mysqldump --protocol=SOCKET --socket=/var/run/mysqld/mysqld.sock \
             --single-transaction --no-tablespaces --routines --triggers bs_ads >"$RELEASE/database.sql"
-        # Support the legacy MySQL FK while its unique index is replaced.
-        next run --rm --no-deps -T --user 33:33 php php <<'PHP'
-<?php
-require 'vendor/autoload.php';
-$app = require 'bootstrap/app.php';
-$app->make(Illuminate\Contracts\Console\Kernel::class)->bootstrap();
-use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Schema;
-if (Schema::hasTable('report_schedules') && Schema::hasTable('migrations') &&
-    !DB::table('migrations')->where('migration', '2026_10_29_000000_add_account_scope_to_performance_reports')->exists() &&
-    !Schema::hasIndex('report_schedules', 'report_schedules_client_id_support_index')) {
-    Schema::table('report_schedules', fn ($table) => $table->index('client_id', 'report_schedules_client_id_support_index'));
-}
-PHP
         artisan migrate --force --no-interaction
         artisan db:seed --class=AlertTemplateSeeder --force --no-interaction
+        artisan shopify:replay-privacy
     fi
     step 'Refreshing caches and starting BS Ads'
     artisan config:cache
@@ -220,9 +231,12 @@ PHP
     artisan view:cache
     cp "$RELEASE/compose.yaml" "$COMPOSE"
     STARTED="$(date +%s)"
-    if [[ "$MODE" == restart ]]; then dc up -d --no-deps --force-recreate "${APP[@]}"
-    else dc up -d --no-deps "${APP[@]}"; fi
+    if [[ "$MODE" == restart ]]; then dc up -d --no-deps --force-recreate php web scraper
+    else dc up -d --no-deps php web scraper; fi
     dc exec -T --user 33:33 php php artisan up
+    local start_workers=(worker-core worker-audits worker-library worker-analysis scheduler)
+    if [[ "$MODE" == deploy ]] || grep -Fxq worker-shopify <<<"$services"; then start_workers+=(worker-shopify); fi
+    dc up -d --no-deps --force-recreate "${start_workers[@]}"
     step 'Checking web, database, cache, scheduler and queues'
     local deadline=$((SECONDS + 120))
     while (( SECONDS < deadline )); do
