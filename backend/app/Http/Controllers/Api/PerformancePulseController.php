@@ -9,6 +9,7 @@ use App\Models\Client;
 use App\Models\NotificationDestination;
 use App\Models\PerformancePulse;
 use App\Models\PerformancePulseRun;
+use App\Models\PerformancePulseScope;
 use App\Services\AuditTrail;
 use App\Services\ClientAccess;
 use App\Services\ClientScopeResolver;
@@ -38,8 +39,17 @@ class PerformancePulseController extends Controller
         return PerformancePulse::query()->whereIn('client_id', $clientIds)
             ->when($filters['client_id'] ?? null, fn ($query, $id) => $query->where('client_id', $id))
             ->when($filters['ad_account_id'] ?? null, fn ($query, $id) => $query->where('ad_account_id', $id))
-            ->when($filters['campaign_id'] ?? null, fn ($query, $id) => $query->where('campaign_id', $id))
-            ->with(['client:id,name,objective', 'adAccount:id,client_id,name,platform,currency,timezone', 'campaign:id,ad_account_id,name', 'destinations:id,client_id,name,channel,enabled'])
+            ->when($filters['campaign_id'] ?? null, fn ($query, $id) => $query->where(function ($scopeQuery) use ($id) {
+                $scopeQuery->whereHas('scopes', fn ($query) => $query->where('campaign_id', $id))
+                    ->orWhere(function ($legacyQuery) use ($id) {
+                        $legacyQuery->whereDoesntHave('scopes')->where('campaign_id', $id);
+                    });
+            }))
+            ->with([
+                'client:id,name,objective', 'adAccount:id,client_id,name,platform,currency,timezone',
+                'campaign:id,ad_account_id,name', 'scopes.campaign:id,ad_account_id,name,status,type',
+                'destinations:id,client_id,name,channel,enabled',
+            ])
             ->with(['runs' => fn ($query) => $query->latest()->limit(10)->with(['triggeredBy:id,name', 'deliveries.destination:id,name,channel'])])
             ->latest()->get();
     }
@@ -50,6 +60,7 @@ class PerformancePulseController extends Controller
         $scope = $this->scopes->resolve($request->user(), $data);
 
         return [
+            'account' => $scope->adAccount?->only(['id', 'name', 'platform', 'timezone']),
             'destinations' => NotificationDestination::query()->where('client_id', $scope->client->id)->where('enabled', true)->orderByRaw("channel = 'google_chat' desc")->orderBy('name')->get(['id', 'name', 'channel', 'enabled']),
             'campaigns' => $scope->adAccount ? Campaign::query()->where('ad_account_id', $scope->adAccount->id)->orderBy('name')->get(['id', 'ad_account_id', 'name', 'status', 'type']) : [],
             'legacy_google_chat_configured' => $scope->client->google_chat_webhook_configured,
@@ -60,16 +71,20 @@ class PerformancePulseController extends Controller
     {
         $data = $this->validated($request);
         $scope = $this->scopes->resolve($request->user(), $data, manage: true);
-        $this->ensureUniqueScope($scope->client->id, $scope->adAccount->id, $scope->campaign?->id);
+        $scopeRows = $this->scopeRows($this->scopeSelection($data), $scope->adAccount->id);
+        $this->ensureScopesAvailable($scopeRows);
         $destinationIds = $this->destinationIds($scope->client, $data['destination_ids'] ?? null, $request);
         $this->ensureEnabledHasDestination($data['enabled'] ?? false, $destinationIds);
-        $pulse = DB::transaction(function () use ($data, $scope, $destinationIds, $request) {
+
+        $pulse = DB::transaction(function () use ($data, $scope, $scopeRows, $destinationIds, $request) {
             $pulse = PerformancePulse::create([
-                ...collect($data)->except('destination_ids')->all(),
-                'client_id' => $scope->client->id, 'ad_account_id' => $scope->adAccount->id, 'campaign_id' => $scope->campaign?->id,
-                'scope_key' => $scope->campaign ? 'campaign:'.$scope->campaign->id : 'account:'.$scope->adAccount->id,
+                ...collect($data)->except(['campaign_id', 'include_ad_account', 'campaign_ids', 'destination_ids'])->all(),
+                'client_id' => $scope->client->id, 'ad_account_id' => $scope->adAccount->id,
+                'campaign_id' => null, 'scope_key' => 'pulse:'.Str::uuid(),
+                'include_campaign_breakdown' => $this->hasAccountScope($scopeRows) && ($data['include_campaign_breakdown'] ?? false),
                 'enabled' => $data['enabled'] ?? false, 'created_by' => $request->user()->id,
             ]);
+            $pulse->scopes()->createMany($scopeRows);
             $pulse->destinations()->sync($destinationIds);
 
             return $pulse;
@@ -82,32 +97,35 @@ class PerformancePulseController extends Controller
     public function update(Request $request, PerformancePulse $performancePulse, AuditTrail $audit)
     {
         ClientAccess::authorize($request->user(), $performancePulse->client_id, true);
-        $data = $this->validated($request, true, $performancePulse);
-        $scopeData = [
+        $data = $this->validated($request, true);
+        $scope = $this->scopes->resolve($request->user(), [
             'client_id' => $performancePulse->client_id,
             'ad_account_id' => $data['ad_account_id'] ?? $performancePulse->ad_account_id,
-            'campaign_id' => array_key_exists('campaign_id', $data) ? $data['campaign_id'] : $performancePulse->campaign_id,
-        ];
-        $scope = $this->scopes->resolve($request->user(), $scopeData, manage: true);
-        $this->ensureUniqueScope($scope->client->id, $scope->adAccount->id, $scope->campaign?->id, $performancePulse->id);
+        ], manage: true);
+        $scopeRows = $this->scopeRows($this->scopeSelection($data, $performancePulse), $scope->adAccount->id);
+        $this->ensureScopesAvailable($scopeRows, $performancePulse->id);
         $destinationIds = array_key_exists('destination_ids', $data)
             ? $this->destinationIds($scope->client, $data['destination_ids'], $request)
             : $performancePulse->destinations()->pluck('notification_destinations.id')->all();
         $this->ensureEnabledHasDestination($data['enabled'] ?? $performancePulse->enabled, $destinationIds);
         $before = $this->auditValues($performancePulse);
-        DB::transaction(function () use ($data, $scope, $performancePulse, $destinationIds) {
+
+        DB::transaction(function () use ($data, $scope, $scopeRows, $performancePulse, $destinationIds) {
             $performancePulse->update([
-                ...collect($data)->except('destination_ids')->all(),
-                'ad_account_id' => $scope->adAccount->id, 'campaign_id' => $scope->campaign?->id,
-                'scope_key' => $scope->campaign ? 'campaign:'.$scope->campaign->id : 'account:'.$scope->adAccount->id,
+                ...collect($data)->except(['campaign_id', 'include_ad_account', 'campaign_ids', 'destination_ids'])->all(),
+                'ad_account_id' => $scope->adAccount->id, 'campaign_id' => null,
+                'include_campaign_breakdown' => $this->hasAccountScope($scopeRows) && ($data['include_campaign_breakdown'] ?? $performancePulse->include_campaign_breakdown),
             ]);
+            $performancePulse->scopes()->delete();
+            $performancePulse->scopes()->createMany($scopeRows);
             if (array_key_exists('destination_ids', $data)) {
                 $performancePulse->destinations()->sync($destinationIds);
             }
         });
-        $audit->record('performance_pulse.updated', $performancePulse, $before, $this->auditValues($performancePulse->fresh()), $performancePulse->client_id, $request->user(), $request);
+        $fresh = $performancePulse->fresh();
+        $audit->record('performance_pulse.updated', $fresh, $before, $this->auditValues($fresh), $fresh->client_id, $request->user(), $request);
 
-        return $this->payload($performancePulse->fresh());
+        return $this->payload($fresh);
     }
 
     public function destroy(Request $request, PerformancePulse $performancePulse, AuditTrail $audit)
@@ -141,20 +159,78 @@ class PerformancePulseController extends Controller
         return $performancePulse->runs()->with(['triggeredBy:id,name', 'deliveries.destination:id,name,channel'])->latest()->paginate(50);
     }
 
-    private function validated(Request $request, bool $partial = false, ?PerformancePulse $pulse = null): array
+    private function validated(Request $request, bool $partial = false): array
     {
         $required = $partial ? 'sometimes|' : '';
 
         return $request->validate([
             'client_id' => $partial ? 'prohibited' : 'required|integer|exists:clients,id',
             'ad_account_id' => $required.'required|integer|exists:ad_accounts,id',
-            'campaign_id' => 'nullable|integer|exists:campaigns,id',
+            'campaign_id' => 'sometimes|nullable|integer|exists:campaigns,id',
+            'include_ad_account' => 'sometimes|boolean', 'campaign_ids' => 'sometimes|array',
+            'campaign_ids.*' => 'integer|distinct|exists:campaigns,id',
             'periods' => $required.'required|array|size:2',
             'periods.*' => ['required', 'distinct', Rule::in(self::PERIODS)],
             'local_time' => $required.'required|date_format:H:i',
             'include_campaign_breakdown' => 'sometimes|boolean', 'enabled' => 'sometimes|boolean',
             'destination_ids' => 'sometimes|array', 'destination_ids.*' => 'integer|distinct|exists:notification_destinations,id',
         ]);
+    }
+
+    private function scopeSelection(array $data, ?PerformancePulse $pulse = null): array
+    {
+        if (array_key_exists('include_ad_account', $data) || array_key_exists('campaign_ids', $data)) {
+            return [
+                'include_ad_account' => (bool) ($data['include_ad_account'] ?? false),
+                'campaign_ids' => collect($data['campaign_ids'] ?? [])->map(fn ($id) => (int) $id)->unique()->values()->all(),
+            ];
+        }
+        if (array_key_exists('campaign_id', $data)) {
+            return ['include_ad_account' => $data['campaign_id'] === null, 'campaign_ids' => $data['campaign_id'] === null ? [] : [(int) $data['campaign_id']]];
+        }
+        if ($pulse) {
+            $pulse->loadMissing('scopes');
+            if ($pulse->scopes->isNotEmpty()) {
+                return [
+                    'include_ad_account' => $pulse->scopes->contains(fn (PerformancePulseScope $scope) => $scope->campaign_id === null),
+                    'campaign_ids' => $pulse->scopes->whereNotNull('campaign_id')->pluck('campaign_id')->map(fn ($id) => (int) $id)->values()->all(),
+                ];
+            }
+
+            return ['include_ad_account' => $pulse->campaign_id === null, 'campaign_ids' => $pulse->campaign_id === null ? [] : [(int) $pulse->campaign_id]];
+        }
+
+        return ['include_ad_account' => true, 'campaign_ids' => []];
+    }
+
+    private function scopeRows(array $selection, int $accountId): array
+    {
+        $campaignIds = collect($selection['campaign_ids'])->map(fn ($id) => (int) $id)->unique()->values();
+        if (! $selection['include_ad_account'] && $campaignIds->isEmpty()) {
+            throw ValidationException::withMessages(['scopes' => 'Choose the ad account or at least one campaign.']);
+        }
+        $campaigns = Campaign::query()->where('ad_account_id', $accountId)->whereIn('id', $campaignIds)->pluck('id');
+        if ($campaigns->count() !== $campaignIds->count()) {
+            throw ValidationException::withMessages(['campaign_ids' => 'Every campaign must belong to the selected ad account.']);
+        }
+
+        return collect($selection['include_ad_account'] ? [['campaign_id' => null, 'scope_key' => 'account:'.$accountId]] : [])
+            ->concat($campaignIds->map(fn ($id) => ['campaign_id' => $id, 'scope_key' => 'campaign:'.$id]))->values()->all();
+    }
+
+    private function ensureScopesAvailable(array $scopeRows, ?int $ignorePulseId = null): void
+    {
+        $scopeKeys = collect($scopeRows)->pluck('scope_key');
+        $exists = PerformancePulseScope::query()->whereIn('scope_key', $scopeKeys)
+            ->when($ignorePulseId, fn ($query, $id) => $query->where('performance_pulse_id', '!=', $id))->exists();
+        if ($exists) {
+            throw ValidationException::withMessages(['scopes' => 'A selected account or campaign already belongs to another Performance Pulse.']);
+        }
+    }
+
+    private function hasAccountScope(array $scopeRows): bool
+    {
+        return collect($scopeRows)->contains(fn (array $scope) => $scope['campaign_id'] === null);
     }
 
     private function destinationIds(Client $client, ?array $ids, Request $request): array
@@ -190,21 +266,20 @@ class PerformancePulseController extends Controller
 
     private function payload(PerformancePulse $pulse): PerformancePulse
     {
-        return $pulse->load(['client:id,name,objective', 'adAccount:id,client_id,name,platform,currency,timezone', 'campaign:id,ad_account_id,name', 'destinations:id,client_id,name,channel,enabled']);
-    }
-
-    private function ensureUniqueScope(int $clientId, int $accountId, ?int $campaignId, ?int $ignoreId = null): void
-    {
-        $scopeKey = $campaignId ? 'campaign:'.$campaignId : 'account:'.$accountId;
-        $exists = PerformancePulse::where('client_id', $clientId)->where('scope_key', $scopeKey)
-            ->when($ignoreId, fn ($query, $id) => $query->where('id', '!=', $id))->exists();
-        if ($exists) {
-            throw ValidationException::withMessages(['scope' => 'A Performance Pulse already exists for this account or campaign.']);
-        }
+        return $pulse->load([
+            'client:id,name,objective', 'adAccount:id,client_id,name,platform,currency,timezone',
+            'campaign:id,ad_account_id,name', 'scopes.campaign:id,ad_account_id,name,status,type',
+            'destinations:id,client_id,name,channel,enabled',
+        ]);
     }
 
     private function auditValues(PerformancePulse $pulse): array
     {
-        return $pulse->only(['client_id', 'ad_account_id', 'campaign_id', 'periods', 'local_time', 'include_campaign_breakdown', 'enabled']);
+        $pulse->loadMissing('scopes');
+
+        return [
+            ...$pulse->only(['client_id', 'ad_account_id', 'campaign_id', 'periods', 'local_time', 'include_campaign_breakdown', 'enabled']),
+            'scope_keys' => $pulse->scopes->pluck('scope_key')->values()->all(),
+        ];
     }
 }

@@ -30,7 +30,7 @@ class GeneratePerformancePulseJob implements ShouldBeUnique, ShouldQueue
 
     public function handle(PerformancePulseRenderer $renderer): void
     {
-        $run = PerformancePulseRun::with(['pulse.client', 'pulse.adAccount', 'pulse.campaign', 'pulse.destinations'])->findOrFail($this->runId);
+        $run = PerformancePulseRun::with(['pulse.client', 'pulse.adAccount', 'pulse.campaign', 'pulse.scopes.campaign', 'pulse.destinations'])->findOrFail($this->runId);
         if (in_array($run->status, ['queued', 'delivered'], true)) {
             return;
         }

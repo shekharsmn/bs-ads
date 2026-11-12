@@ -9,7 +9,7 @@ import ScheduledReportsPage from './ScheduledReportsPage'
 vi.mock('../api/client', () => ({ api: {
   getClients: vi.fn(), getReportTemplates: vi.fn(), getReportSchedules: vi.fn(), getReports: vi.fn(),
   getPerformancePulses: vi.fn(), getPerformancePulseOptions: vi.fn(), createPerformancePulse: vi.fn(),
-  updatePerformancePulse: vi.fn(), deletePerformancePulse: vi.fn(), sendPerformancePulse: vi.fn(), createNotificationDestination: vi.fn(),
+  updatePerformancePulse: vi.fn(), deletePerformancePulse: vi.fn(), sendPerformancePulse: vi.fn(), getPerformancePulseRuns: vi.fn(), createNotificationDestination: vi.fn(),
 } }))
 vi.mock('../context/AuthContext', () => ({ useAuth: () => ({ user: { id: 1, role: 'marketer' } }) }))
 
@@ -33,9 +33,10 @@ describe('Performance Pulse reports tab', () => {
     api.getReportSchedules.mockResolvedValue({ data: { schedules: [], runs: [] } })
     api.getReports.mockResolvedValue({ data: { data: [] } })
     api.getPerformancePulses.mockResolvedValue({ data: [] })
-    api.getPerformancePulseOptions.mockResolvedValue({ data: { destinations: [{ id: 4, name: 'Morning Chat', channel: 'google_chat', enabled: true }], campaigns: [{ id: 12, name: 'Lead Search' }], legacy_google_chat_configured: false } })
+    api.getPerformancePulseOptions.mockResolvedValue({ data: { account: { id: 9, name: 'Kosala Ads' }, destinations: [{ id: 4, name: 'Morning Chat', channel: 'google_chat', enabled: true }], campaigns: [{ id: 12, name: 'Lead Search', status: 'active' }, { id: 13, name: 'Brand Search', status: 'active' }], legacy_google_chat_configured: false } })
     api.createPerformancePulse.mockResolvedValue({ data: { id: 20 } })
     api.updatePerformancePulse.mockResolvedValue({ data: { id: 20 } })
+    api.getPerformancePulseRuns.mockResolvedValue({ data: { data: [] } })
     api.createNotificationDestination.mockResolvedValue({ data: { id: 8, name: 'Pulse Slack', channel: 'slack', enabled: true } })
   })
 
@@ -48,18 +49,29 @@ describe('Performance Pulse reports tab', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Create Performance Pulse' }))
 
     await waitFor(() => expect(api.createPerformancePulse).toHaveBeenCalledWith(expect.objectContaining({
-      client_id: 7, ad_account_id: 9, campaign_id: null, periods: ['yesterday', 'month_to_date'],
+      client_id: 7, ad_account_id: 9, include_ad_account: true, campaign_ids: [], periods: ['yesterday', 'month_to_date'],
       destination_ids: [4], enabled: false,
     })))
   })
 
-  it('allows campaign scope and removes the account breakdown option', async () => {
+  it('allows the ad account and multiple campaign scopes in one create action', async () => {
     renderPage()
     await openCreatePulse()
     expect(await screen.findByText('Morning Chat')).toBeInTheDocument()
-    const scope = await screen.findByLabelText('Scope')
-    fireEvent.change(scope, { target: { value: '12' } })
-    expect(screen.queryByText('Include campaign breakdown')).not.toBeInTheDocument()
+    fireEvent.change(screen.getByRole('searchbox', { name: 'Search campaigns' }), { target: { value: 'Brand' } })
+    expect(screen.queryByRole('checkbox', { name: /Lead Search/ })).not.toBeInTheDocument()
+    expect(screen.getByRole('checkbox', { name: /Brand Search/ })).toBeInTheDocument()
+    fireEvent.change(screen.getByRole('searchbox', { name: 'Search campaigns' }), { target: { value: '' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Select all' }))
+    expect(screen.getByRole('checkbox', { name: /Lead Search/ })).toBeChecked()
+    expect(screen.getByRole('checkbox', { name: /Brand Search/ })).toBeChecked()
+    expect(screen.getByRole('checkbox', { name: /Kosala Ads/ })).toBeChecked()
+    expect(screen.getByText('1 Performance Pulse will report on 3 scopes')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Create Performance Pulse' }))
+
+    await waitFor(() => expect(api.createPerformancePulse).toHaveBeenCalledWith(expect.objectContaining({
+      include_ad_account: true, campaign_ids: [12, 13],
+    })))
   })
 
   it('does not resend the prohibited client id when editing a pulse', async () => {
@@ -74,10 +86,14 @@ describe('Performance Pulse reports tab', () => {
 
     fireEvent.click(await screen.findByRole('button', { name: 'Edit' }))
     expect(await screen.findByRole('dialog', { name: 'Edit Performance Pulse' })).toBeInTheDocument()
+    expect(await screen.findByRole('checkbox', { name: /Kosala Ads/ })).toBeChecked()
+    fireEvent.change(screen.getByRole('searchbox', { name: 'Search campaigns' }), { target: { value: 'Brand' } })
+    fireEvent.click(screen.getByRole('checkbox', { name: /Brand Search/ }))
+    expect(screen.getByText('1 Performance Pulse will report on 2 scopes')).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: 'Save changes' }))
 
     await waitFor(() => expect(api.updatePerformancePulse).toHaveBeenCalledWith(20, expect.objectContaining({
-      ad_account_id: 9, campaign_id: null, destination_ids: [4],
+      ad_account_id: 9, include_ad_account: true, campaign_ids: [13], destination_ids: [4],
     })))
     expect(api.updatePerformancePulse.mock.calls.at(-1)[1]).not.toHaveProperty('client_id')
   })
@@ -94,6 +110,31 @@ describe('Performance Pulse reports tab', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Edit' }))
     expect(await screen.findByRole('dialog', { name: 'Edit Performance Pulse' })).toBeInTheDocument()
     await waitFor(() => expect(api.getPerformancePulseOptions).toHaveBeenCalledWith({ client_id: 7, ad_account_id: 9 }))
+  })
+
+  it('moves run history out of the pulse card and loads it in a dialog', async () => {
+    api.getPerformancePulses.mockResolvedValue({ data: [{
+      id: 20, enabled: true, local_time: '09:00:00', periods: ['yesterday', 'month_to_date'],
+      client: { id: 7, name: 'Kosala' }, ad_account: { id: 9, name: 'Kosala Ads', platform: 'google', timezone: 'Asia/Kolkata' },
+      campaign: null, destinations: [{ id: 4, name: 'Morning Chat', channel: 'google_chat' }],
+      runs: [{ id: 50, trigger: 'manual', status: 'delivered', reporting_date: '2026-11-09', created_at: '2026-11-10T03:30:00Z', deliveries: [] }],
+    }] })
+    api.getPerformancePulseRuns.mockResolvedValue({ data: { data: [{
+      id: 50, trigger: 'manual', status: 'delivered', reporting_date: '2026-11-09', created_at: '2026-11-10T03:30:00Z',
+      triggered_by: { id: 1, name: 'Marketer' }, deliveries: [{ id: 60, part_number: 1, part_count: 1, status: 'delivered', destination: { name: 'Morning Chat' } }],
+    }] } })
+    renderPage()
+
+    expect(await screen.findByRole('button', { name: 'View history (1)' })).toBeInTheDocument()
+    expect(screen.queryByText(/Sent now · 2026-11-09/)).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'View history (1)' }))
+
+    expect(await screen.findByRole('dialog', { name: 'Performance Pulse history' })).toBeInTheDocument()
+    await waitFor(() => expect(api.getPerformancePulseRuns).toHaveBeenCalledWith(20, { page: 1 }))
+    expect(await screen.findByText('Sent now · 2026-11-09')).toBeInTheDocument()
+    expect(screen.getByText(/Morning Chat · part 1\/1/)).toBeInTheDocument()
+    fireEvent.keyDown(document, { key: 'Escape' })
+    expect(screen.queryByRole('dialog', { name: 'Performance Pulse history' })).not.toBeInTheDocument()
   })
 
   it('allows the default destination to be unchecked on a new paused pulse', async () => {

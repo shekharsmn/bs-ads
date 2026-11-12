@@ -38,6 +38,11 @@ class PerformancePulse extends Model
         return $this->belongsToMany(NotificationDestination::class, 'performance_pulse_destination');
     }
 
+    public function scopes()
+    {
+        return $this->hasMany(PerformancePulseScope::class);
+    }
+
     public function runs()
     {
         return $this->hasMany(PerformancePulseRun::class);

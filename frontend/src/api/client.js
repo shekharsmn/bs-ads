@@ -131,6 +131,7 @@ export const api = {
   getUserDirectory: (params) => client.get('/api/user-management', { params }),
   inviteUser: (data) => client.post('/api/user-management/invitations', data),
   updateUserInvitation: (id, data) => client.put(`/api/user-management/invitations/${id}`, data),
+  deleteUserInvitation: (id) => client.delete(`/api/user-management/invitations/${id}`),
   resendUserInvitation: (id) => client.post(`/api/user-management/invitations/${id}/resend`),
   revokeUserInvitation: (id) => client.post(`/api/user-management/invitations/${id}/revoke`),
   getAuditEvents: (params) => client.get('/api/audit-events', { params }),

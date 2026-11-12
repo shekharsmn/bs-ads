@@ -35,10 +35,15 @@ class UserManagementApiTest extends TestCase
         $this->assertDatabaseHas('audit_events', ['action' => 'access.invitation_created', 'entity_id' => (string) $id]);
 
         $this->actingAs($admin)->putJson('/api/user-management/invitations/'.$id, [
-            'role' => 'marketer', 'client_ids' => [], 'run_performance_audits' => false, 'run_content_audits' => true, 'use_data_inspector' => false,
-        ])->assertOk()->assertJsonPath('role', 'marketer')->assertJsonPath('run_content_audits', true)->assertJsonPath('use_data_inspector', false);
+            'name' => 'Morgan Edited', 'email' => 'edited@brandshark.com', 'role' => 'marketer', 'client_ids' => [],
+            'run_performance_audits' => false, 'run_content_audits' => true, 'use_data_inspector' => false,
+        ])->assertOk()->assertJsonPath('email', 'edited@brandshark.com')->assertJsonPath('role', 'marketer')
+            ->assertJsonPath('run_content_audits', true)->assertJsonPath('use_data_inspector', false);
         $this->actingAs($admin)->postJson('/api/user-management/invitations/'.$id.'/resend')->assertOk();
         $this->actingAs($admin)->postJson('/api/user-management/invitations/'.$id.'/revoke')->assertOk()->assertJsonPath('status', 'revoked');
+        $this->actingAs($admin)->deleteJson('/api/user-management/invitations/'.$id)->assertNoContent();
+        $this->assertDatabaseMissing('user_invitations', ['id' => $id]);
+        $this->assertDatabaseHas('audit_events', ['action' => 'access.invitation_deleted', 'entity_id' => (string) $id]);
     }
 
     public function test_invites_are_domain_limited_unique_and_admin_only(): void

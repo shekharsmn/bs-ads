@@ -93,13 +93,21 @@ class AccessManagementController extends Controller
     public function updateInvitation(Request $request, UserInvitation $invitation, AuditTrail $audit)
     {
         abort_if($invitation->accepted_at || $invitation->revoked_at, 422, 'Only pending invitations can be edited.');
-        $data = $this->validatedAccess($request); $before = $this->invitationAuditValues($invitation->load('clients:id,name'));
+        $data = $this->validatedAccess($request, false, $invitation->id); $before = $this->invitationAuditValues($invitation->load('clients:id,name'));
         $nextRole = $data['role'] ?? $invitation->role->value;
+        $nextEmail = strtolower(trim((string) ($data['email'] ?? $invitation->email)));
         abort_if(($invitation->role->value === 'client') !== ($nextRole === 'client'), 422, 'Client and workspace invitations cannot be converted into one another.');
         abort_if($nextRole === 'client' && array_key_exists('client_ids', $data) && $data['client_ids'] === [], 422, 'Client users must be assigned to at least one client.');
-        DB::transaction(function () use ($invitation, $data) {
+        abort_if(User::whereRaw('LOWER(email) = ?', [$nextEmail])->exists(), 422, 'This person already has a user account. Update or reactivate that account instead.');
+        abort_if(UserInvitation::whereKeyNot($invitation->id)->whereRaw('LOWER(email) = ?', [$nextEmail])->exists(), 422, 'Another invitation already uses this email address.');
+        if ($nextRole !== 'client') $this->validateWorkspaceEmail($nextEmail);
+        DB::transaction(function () use ($invitation, $data, $nextEmail) {
             $role = $data['role'] ?? $invitation->role->value;
+            if ($nextEmail !== strtolower($invitation->email) && Schema::hasTable('client_login_tokens')) {
+                DB::table('client_login_tokens')->where('user_invitation_id', $invitation->id)->delete();
+            }
             $invitation->fill(collect($data)->except('client_ids')->all());
+            $invitation->email = $nextEmail;
             if ($role === 'admin') { $invitation->run_performance_audits = true; $invitation->run_content_audits = true; $invitation->use_data_inspector = true; }
             if ($role === 'client') { $invitation->run_performance_audits = false; $invitation->run_content_audits = false; $invitation->use_data_inspector = false; }
             $invitation->save();
@@ -108,6 +116,17 @@ class AccessManagementController extends Controller
         $invitation = $invitation->fresh(['clients:id,name', 'inviter:id,name']);
         $audit->record('access.invitation_updated', $invitation, $before, $this->invitationAuditValues($invitation), null, $request->user(), $request);
         return $this->serializeInvitation($invitation);
+    }
+
+    public function destroyInvitation(Request $request, UserInvitation $invitation, AuditTrail $audit)
+    {
+        $before = $this->invitationAuditValues($invitation->load('clients:id,name'));
+        DB::transaction(function () use ($request, $invitation, $audit, $before) {
+            $audit->record('access.invitation_deleted', $invitation, $before, [], null, $request->user(), $request);
+            $invitation->delete();
+        });
+
+        return response()->noContent();
     }
 
     public function resend(Request $request, UserInvitation $invitation, AuditTrail $audit)
@@ -161,10 +180,10 @@ class AccessManagementController extends Controller
         return AuditEvent::with('actor:id,name,email')->where('entity_type', User::class)->where('entity_id', (string) $user->id)->latest('id')->paginate(30);
     }
 
-    private function validatedAccess(Request $request, bool $creating = false): array
+    private function validatedAccess(Request $request, bool $creating = false, ?int $invitationId = null): array
     {
         return $request->validate([
-            'email' => [$creating ? 'required' : 'prohibited', 'email', 'max:255'], 'name' => 'nullable|string|max:255',
+            'email' => [$creating ? 'required' : 'sometimes', 'email', 'max:255', Rule::unique('user_invitations', 'email')->ignore($invitationId)], 'name' => 'nullable|string|max:255',
             'role' => [$creating ? 'required' : 'sometimes', Rule::in(['admin', 'marketer', 'viewer', 'client'])],
             'run_performance_audits' => 'sometimes|boolean', 'run_content_audits' => 'sometimes|boolean', 'use_data_inspector' => 'sometimes|boolean',
             'client_ids' => 'sometimes|array', 'client_ids.*' => 'integer|distinct|exists:clients,id',
@@ -223,7 +242,7 @@ class AccessManagementController extends Controller
 
     private function invitationAuditValues(UserInvitation $invitation): array
     {
-        return ['email' => $invitation->email, 'role' => $invitation->role->value, 'run_performance_audits' => (bool) $invitation->run_performance_audits, 'run_content_audits' => (bool) $invitation->run_content_audits, 'use_data_inspector' => (bool) $invitation->use_data_inspector, 'client_ids' => $invitation->clients->pluck('id')->all(), 'status' => $invitation->status()];
+        return ['name' => $invitation->name, 'email' => $invitation->email, 'role' => $invitation->role->value, 'run_performance_audits' => (bool) $invitation->run_performance_audits, 'run_content_audits' => (bool) $invitation->run_content_audits, 'use_data_inspector' => (bool) $invitation->use_data_inspector, 'client_ids' => $invitation->clients->pluck('id')->all(), 'status' => $invitation->status()];
     }
 
     private function userUpdateAction(array $before, array $after): string

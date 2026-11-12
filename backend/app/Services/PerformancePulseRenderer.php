@@ -20,61 +20,66 @@ class PerformancePulseRenderer
 
     public function render(PerformancePulse $pulse, CarbonImmutable $reportingDate): array
     {
-        $pulse->loadMissing(['client', 'adAccount', 'campaign']);
+        $pulse->loadMissing(['client', 'adAccount', 'campaign', 'scopes.campaign']);
         $ranges = collect($pulse->periods)->mapWithKeys(fn (string $period) => [$period => $this->range($period, $reportingDate)]);
         $start = $ranges->min(fn (array $range) => $range['start']);
         $end = $ranges->max(fn (array $range) => $range['end']);
+        $scopeReports = $this->selectedScopes($pulse)->map(function (array $scope) use ($pulse, $ranges, $start, $end) {
+            $campaignRows = $this->campaignRows($pulse, $start, $end, $scope['campaign_id']);
+            $accountRows = $scope['type'] === 'account' && $campaignRows->isEmpty() && $pulse->client->objective !== 'both'
+                ? $this->accountRows($pulse, $start, $end)
+                : collect();
+            $classifications = $this->classifications($pulse, $campaignRows);
+            $objectives = $pulse->client->objective === 'both' ? ['lead_gen', 'ecommerce'] : [$pulse->client->objective];
+            $sections = [];
+            $missing = [];
 
-        $campaignRows = $this->campaignRows($pulse, $start, $end);
-        $accountRows = $campaignRows->isEmpty() && $pulse->client->objective !== 'both'
-            ? $this->accountRows($pulse, $start, $end)
-            : collect();
-        $classifications = $this->classifications($pulse, $campaignRows);
-        $objectives = $pulse->client->objective === 'both' ? ['lead_gen', 'ecommerce'] : [$pulse->client->objective];
-        $sections = [];
-        $missing = [];
-
-        foreach ($objectives as $objective) {
-            $objectiveRows = $campaignRows->filter(fn ($row) => ($classifications[(int) $row->campaign_id] ?? $objective) === $objective);
-            if ($campaignRows->isEmpty()) {
-                $objectiveRows = $accountRows;
-            }
-            $periods = [];
-            foreach ($ranges as $key => $range) {
-                $rows = $objectiveRows->filter(function ($row) use ($range) {
-                    $date = CarbonImmutable::parse($row->metric_date)->toDateString();
-
-                    return $date >= $range['start'] && $date <= $range['end'];
-                });
-                if ($rows->isEmpty()) {
-                    $missing[] = self::PERIOD_LABELS[$key];
+            foreach ($objectives as $objective) {
+                $objectiveRows = $campaignRows->filter(fn ($row) => ($classifications[(int) $row->campaign_id] ?? $objective) === $objective);
+                if ($campaignRows->isEmpty()) {
+                    $objectiveRows = $accountRows;
                 }
-                $periods[$key] = [
-                    'label' => self::PERIOD_LABELS[$key],
-                    'start' => $range['start'],
-                    'end' => $range['end'],
-                    'metrics' => $this->totals($rows),
-                    'campaigns' => $this->campaignBreakdown($rows),
-                ];
-            }
-            $spend = collect($periods)->sum(fn (array $period) => $period['metrics']['spend']);
-            if ($pulse->client->objective !== 'both' || $spend > 0) {
-                $sections[] = ['objective' => $objective, 'periods' => $periods];
-            }
-        }
+                $periods = [];
+                foreach ($ranges as $key => $range) {
+                    $rows = $objectiveRows->filter(function ($row) use ($range) {
+                        $date = CarbonImmutable::parse($row->metric_date)->toDateString();
 
-        $freshness = $campaignRows->concat($accountRows)->max('freshness');
-        $warningParts = [];
-        if ($campaignRows->isEmpty() && $accountRows->isEmpty()) {
-            $warningParts[] = 'No performance data is available for the selected periods.';
-        } elseif ($missing) {
-            $warningParts[] = 'Some selected periods have no reported rows: '.implode(', ', array_values(array_unique($missing))).'.';
-        }
+                        return $date >= $range['start'] && $date <= $range['end'];
+                    });
+                    if ($rows->isEmpty()) {
+                        $missing[] = self::PERIOD_LABELS[$key];
+                    }
+                    $periods[$key] = [
+                        'label' => self::PERIOD_LABELS[$key], 'start' => $range['start'], 'end' => $range['end'],
+                        'metrics' => $this->totals($rows), 'campaigns' => $this->campaignBreakdown($rows),
+                    ];
+                }
+                $spend = collect($periods)->sum(fn (array $period) => $period['metrics']['spend']);
+                if ($pulse->client->objective !== 'both' || $spend > 0) {
+                    $sections[] = ['objective' => $objective, 'periods' => $periods];
+                }
+            }
+
+            $warning = null;
+            if ($campaignRows->isEmpty() && $accountRows->isEmpty()) {
+                $warning = 'No performance data is available for the selected periods.';
+            } elseif ($missing) {
+                $warning = 'Some selected periods have no reported rows: '.implode(', ', array_values(array_unique($missing))).'.';
+            }
+
+            return [
+                ...$scope, 'sections' => $sections, 'warning' => $warning,
+                'freshness_at' => $campaignRows->concat($accountRows)->max('freshness'),
+            ];
+        })->values();
+        $freshness = $scopeReports->max('freshness_at');
+        $warningParts = $scopeReports->pluck('warning')->filter()->unique()->values();
         if (filled($pulse->adAccount->last_error)) {
-            $warningParts[] = 'The latest account collection reported an error.';
+            $warningParts->push('The latest account collection reported an error.');
         }
-        $warning = $warningParts ? implode(' ', $warningParts) : null;
-        $text = $this->message($pulse, $sections, $warning, $freshness);
+        $warning = $warningParts->isEmpty() ? null : $warningParts->implode(' ');
+        $text = $this->message($pulse, $scopeReports->all(), $warning, $freshness);
+        $firstScope = $scopeReports->first();
 
         return [
             'title' => 'Performance Pulse · '.$pulse->client->name,
@@ -82,13 +87,31 @@ class PerformancePulseRenderer
             'snapshot' => [
                 'client' => $pulse->client->only(['id', 'name', 'objective']),
                 'ad_account' => $pulse->adAccount->only(['id', 'name', 'platform', 'currency', 'timezone']),
-                'campaign' => $pulse->campaign?->only(['id', 'name']),
-                'sections' => $sections,
+                'campaign' => count($scopeReports) === 1 && $firstScope['campaign_id'] ? ['id' => $firstScope['campaign_id'], 'name' => $firstScope['label']] : null,
+                'scopes' => $scopeReports->map(fn (array $scope) => collect($scope)->except(['warning', 'freshness_at'])->all())->all(),
+                'sections' => $firstScope['sections'] ?? [],
                 'generated_at' => now()->toIso8601String(),
             ],
             'warning' => $warning,
             'freshness_at' => $freshness,
         ];
+    }
+
+    private function selectedScopes(PerformancePulse $pulse): Collection
+    {
+        if ($pulse->scopes->isNotEmpty()) {
+            return $pulse->scopes->map(fn ($scope) => [
+                'type' => $scope->campaign_id ? 'campaign' : 'account',
+                'campaign_id' => $scope->campaign_id ? (int) $scope->campaign_id : null,
+                'label' => $scope->campaign?->name ?: $pulse->adAccount->name,
+            ]);
+        }
+
+        return collect([[
+            'type' => $pulse->campaign_id ? 'campaign' : 'account',
+            'campaign_id' => $pulse->campaign_id ? (int) $pulse->campaign_id : null,
+            'label' => $pulse->campaign?->name ?: $pulse->adAccount->name,
+        ]]);
     }
 
     private function range(string $period, CarbonImmutable $reportingDate): array
@@ -104,13 +127,13 @@ class PerformancePulseRenderer
         return ['start' => $start->toDateString(), 'end' => $end];
     }
 
-    private function campaignRows(PerformancePulse $pulse, string $start, string $end): Collection
+    private function campaignRows(PerformancePulse $pulse, string $start, string $end, ?int $campaignId = null): Collection
     {
         return DB::table('metric_snapshots')
             ->join('campaigns', 'campaigns.id', '=', 'metric_snapshots.campaign_id')
             ->where('metric_snapshots.ad_account_id', $pulse->ad_account_id)
             ->where('metric_snapshots.scope', 'campaign')
-            ->when($pulse->campaign_id, fn ($query, $id) => $query->where('metric_snapshots.campaign_id', $id))
+            ->when($campaignId, fn ($query, $id) => $query->where('metric_snapshots.campaign_id', $id))
             ->whereDate('metric_snapshots.metric_date', '>=', $start)->whereDate('metric_snapshots.metric_date', '<=', $end)
             ->groupBy('metric_snapshots.campaign_id', 'campaigns.name', 'campaigns.type', 'metric_snapshots.metric_date')
             ->orderBy('campaigns.name')
@@ -171,33 +194,40 @@ class PerformancePulseRenderer
         })->filter(fn (array $campaign) => $campaign['metrics']['spend'] > 0)->sortByDesc(fn (array $campaign) => $campaign['metrics']['spend'])->values()->all();
     }
 
-    private function message(PerformancePulse $pulse, array $sections, ?string $warning, mixed $freshness): string
+    private function message(PerformancePulse $pulse, array $scopeReports, ?string $warning, mixed $freshness): string
     {
         $platform = $pulse->adAccount->platform instanceof \BackedEnum ? $pulse->adAccount->platform->value : $pulse->adAccount->platform;
-        $lines = ['*'.$pulse->client->name.'*', '', 'For: '.($pulse->campaign?->name ?: $pulse->adAccount->name), 'Type: '.ucfirst((string) $platform)];
-        foreach ($sections as $sectionIndex => $section) {
-            if (count($sections) > 1) {
-                $lines[] = '';
-                $lines[] = '*'.($section['objective'] === 'ecommerce' ? 'E-commerce' : 'Lead generation').'*';
-            }
-            foreach (array_values($section['periods']) as $index => $period) {
-                $lines[] = '';
-                $lines[] = ($index + 1).'. *Period: '.$this->periodHeading($period).'*';
-                $lines = [...$lines, ...$this->metricLines($section['objective'], $period['metrics'], $pulse->adAccount->currency)];
-                if ($pulse->include_campaign_breakdown && ! $pulse->campaign_id && $period['campaigns']) {
+        $lines = ['*'.$pulse->client->name.'*', '', 'Account: '.$pulse->adAccount->name, 'Type: '.ucfirst((string) $platform)];
+        foreach ($scopeReports as $scopeIndex => $scopeReport) {
+            $sections = $scopeReport['sections'];
+            $lines[] = '';
+            $lines[] = count($scopeReports) > 1
+                ? '*Scope '.($scopeIndex + 1).' of '.count($scopeReports).': '.$scopeReport['label'].'*'
+                : 'For: '.$scopeReport['label'];
+            foreach ($sections as $section) {
+                if (count($sections) > 1) {
                     $lines[] = '';
-                    $lines[] = '*Campaign breakdown*';
-                    foreach ($period['campaigns'] as $campaign) {
+                    $lines[] = '*'.($section['objective'] === 'ecommerce' ? 'E-commerce' : 'Lead generation').'*';
+                }
+                foreach (array_values($section['periods']) as $index => $period) {
+                    $lines[] = '';
+                    $lines[] = ($index + 1).'. *Period: '.$this->periodHeading($period).'*';
+                    $lines = [...$lines, ...$this->metricLines($section['objective'], $period['metrics'], $pulse->adAccount->currency)];
+                    if ($pulse->include_campaign_breakdown && $scopeReport['type'] === 'account' && $period['campaigns']) {
                         $lines[] = '';
-                        $lines[] = $campaign['name'];
-                        $lines = [...$lines, ...$this->metricLines($section['objective'], $campaign['metrics'], $pulse->adAccount->currency)];
+                        $lines[] = '*Campaign breakdown*';
+                        foreach ($period['campaigns'] as $campaign) {
+                            $lines[] = '';
+                            $lines[] = $campaign['name'];
+                            $lines = [...$lines, ...$this->metricLines($section['objective'], $campaign['metrics'], $pulse->adAccount->currency)];
+                        }
                     }
                 }
             }
-        }
-        if (! $sections) {
-            $lines[] = '';
-            $lines[] = 'No positive spend was reported for the selected periods.';
+            if (! $sections) {
+                $lines[] = '';
+                $lines[] = 'No positive spend was reported for the selected periods.';
+            }
         }
         if ($warning) {
             $lines[] = '';

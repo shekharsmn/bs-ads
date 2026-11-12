@@ -16,6 +16,7 @@ use App\Models\User;
 use App\Services\PerformancePulseRenderer;
 use Carbon\CarbonImmutable;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Facades\Schema;
@@ -78,6 +79,84 @@ class PerformancePulseTest extends TestCase
 
         $this->actingAs($user)->putJson('/api/performance-pulses/'.$pulseId, ['enabled' => true])
             ->assertUnprocessable()->assertJsonValidationErrors('destination_ids');
+    }
+
+    public function test_manager_can_create_one_pulse_with_account_and_multiple_campaign_scopes(): void
+    {
+        [$user, $client, $account] = $this->fixture('both');
+        $lead = Campaign::create(['ad_account_id' => $account->id, 'external_id' => 'lead', 'name' => 'Lead Search', 'type' => 'LEAD_GENERATION']);
+        $sales = Campaign::create(['ad_account_id' => $account->id, 'external_id' => 'sales', 'name' => 'Shopping', 'type' => 'SHOPPING']);
+        $destination = NotificationDestination::create(['client_id' => $client->id, 'name' => 'Morning chat', 'channel' => 'google_chat', 'configuration' => ['url' => 'https://chat.googleapis.com/v1/spaces/test/messages'], 'enabled' => true]);
+
+        $response = $this->actingAs($user)->postJson('/api/performance-pulses', [
+            'client_id' => $client->id,
+            'ad_account_id' => $account->id,
+            'include_ad_account' => true,
+            'campaign_ids' => [$lead->id, $sales->id],
+            'periods' => ['yesterday', 'month_to_date'],
+            'local_time' => '09:00',
+            'include_campaign_breakdown' => true,
+            'destination_ids' => [$destination->id],
+            'enabled' => false,
+        ])->assertCreated()->assertJsonCount(3, 'scopes');
+
+        $pulseId = $response->json('id');
+        $this->assertDatabaseHas('performance_pulses', ['id' => $pulseId, 'ad_account_id' => $account->id, 'include_campaign_breakdown' => true]);
+        $this->assertDatabaseHas('performance_pulse_scopes', ['performance_pulse_id' => $pulseId, 'scope_key' => 'account:'.$account->id]);
+        $this->assertDatabaseHas('performance_pulse_scopes', ['performance_pulse_id' => $pulseId, 'scope_key' => 'campaign:'.$lead->id]);
+        $this->assertDatabaseHas('performance_pulse_scopes', ['performance_pulse_id' => $pulseId, 'scope_key' => 'campaign:'.$sales->id]);
+        $this->assertSame(1, PerformancePulse::count());
+        $this->assertSame(1, DB::table('performance_pulse_destination')->where('notification_destination_id', $destination->id)->count());
+    }
+
+    public function test_multi_scope_create_rejects_campaigns_from_another_account_without_creating_a_pulse(): void
+    {
+        [$user, $client, $account] = $this->fixture();
+        [, , $otherAccount] = $this->fixture('lead_gen', 'other');
+        $otherCampaign = Campaign::create(['ad_account_id' => $otherAccount->id, 'external_id' => 'other', 'name' => 'Other Campaign']);
+
+        $this->actingAs($user)->postJson('/api/performance-pulses', [
+            'client_id' => $client->id,
+            'ad_account_id' => $account->id,
+            'include_ad_account' => true,
+            'campaign_ids' => [$otherCampaign->id],
+            'periods' => ['yesterday', 'month_to_date'],
+            'local_time' => '09:00',
+            'destination_ids' => [],
+        ])->assertUnprocessable()->assertJsonValidationErrors('campaign_ids');
+
+        $this->assertDatabaseCount('performance_pulses', 0);
+        $this->assertDatabaseCount('performance_pulse_scopes', 0);
+    }
+
+    public function test_one_rendered_pulse_contains_every_selected_scope(): void
+    {
+        [, $client, $account] = $this->fixture();
+        $lead = Campaign::create(['ad_account_id' => $account->id, 'external_id' => 'lead', 'name' => 'Lead Search']);
+        $brand = Campaign::create(['ad_account_id' => $account->id, 'external_id' => 'brand', 'name' => 'Brand Search']);
+        foreach ([$lead, $brand] as $campaign) {
+            MetricSnapshot::create([
+                'ad_account_id' => $account->id, 'campaign_id' => $campaign->id, 'scope' => 'campaign',
+                'scope_key' => 'campaign:'.$campaign->id, 'metric_date' => '2026-10-29', 'currency' => 'INR',
+                'spend' => 100, 'leads' => 2, 'collected_at' => '2026-10-30 01:00:00',
+            ]);
+        }
+        $pulse = PerformancePulse::create([
+            'client_id' => $client->id, 'ad_account_id' => $account->id, 'scope_key' => 'pulse:test',
+            'periods' => ['yesterday', 'last_7_days'], 'local_time' => '09:00',
+        ]);
+        $pulse->scopes()->createMany([
+            ['campaign_id' => null, 'scope_key' => 'account:'.$account->id],
+            ['campaign_id' => $lead->id, 'scope_key' => 'campaign:'.$lead->id],
+            ['campaign_id' => $brand->id, 'scope_key' => 'campaign:'.$brand->id],
+        ]);
+
+        $result = app(PerformancePulseRenderer::class)->render($pulse, CarbonImmutable::parse('2026-10-29', 'Asia/Kolkata'));
+
+        $this->assertCount(3, $result['snapshot']['scopes']);
+        $this->assertStringContainsString('Scope 1 of 3: Acme Ads', $result['texts'][0]);
+        $this->assertStringContainsString('Scope 2 of 3: Lead Search', $result['texts'][0]);
+        $this->assertStringContainsString('Scope 3 of 3: Brand Search', $result['texts'][0]);
     }
 
     public function test_scope_and_destination_must_belong_to_the_same_client(): void

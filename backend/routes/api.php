@@ -97,6 +97,7 @@ Route::middleware(['auth:sanctum', 'active', 'audit.mutations'])->group(function
     Route::get('/user-management', [AccessManagementController::class, 'directory'])->middleware('role:admin');
     Route::post('/user-management/invitations', [AccessManagementController::class, 'invite'])->middleware('role:admin');
     Route::put('/user-management/invitations/{invitation}', [AccessManagementController::class, 'updateInvitation'])->middleware('role:admin');
+    Route::delete('/user-management/invitations/{invitation}', [AccessManagementController::class, 'destroyInvitation'])->middleware('role:admin');
     Route::post('/user-management/invitations/{invitation}/resend', [AccessManagementController::class, 'resend'])->middleware('role:admin');
     Route::post('/user-management/invitations/{invitation}/revoke', [AccessManagementController::class, 'revoke'])->middleware('role:admin');
     Route::get('/audit-events', [AuditEventController::class, 'index'])->middleware('role:admin');

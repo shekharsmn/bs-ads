@@ -2,12 +2,12 @@ import { useEffect, useId, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useSearchParams } from 'react-router-dom'
-import { BellRing, CalendarClock, ExternalLink, FileCheck, FileText, LoaderCircle, Palette, Pencil, Plus, Send, Trash2, X } from 'lucide-react'
+import { BellRing, CalendarClock, Check, ExternalLink, FileCheck, FileText, History, LoaderCircle, Palette, Pencil, Plus, Search, Send, Trash2, X } from 'lucide-react'
 import { api } from '../api/client'
 import { useAuth } from '../context/AuthContext'
 import { Page } from './ClientsPage'
 import { useToast } from '../context/ToastContext'
-import { AsyncStateNotice } from '../components/ui/AsyncState'
+import { AsyncState, AsyncStateNotice } from '../components/ui/AsyncState'
 import ScopeFilterBar from '../components/ScopeFilterBar'
 
 const PERIODS = [{ value: 'last_7d', label: 'Last 7 days' }, { value: 'last_30d', label: 'Last 30 days' }, { value: 'month_to_date', label: 'Month to date' }]
@@ -63,12 +63,19 @@ export default function ScheduledReportsPage() {
 function TemplateSelect({ templates, value, onChange }) { return <select className="ops-select" aria-label="Report template" value={value} onChange={event => onChange(event.target.value)}><option value="">Standard template</option>{templates.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select> }
 function TemplateEditor({ value, onChange, onSave, saving }) { return <section className="report-template-editor"><div className="report-template-fields"><label><span>Name</span><input value={value.name} onChange={event => onChange({ ...value, name: event.target.value })}/></label><label><span>Report brand</span><input value={value.brand_name} onChange={event => onChange({ ...value, brand_name: event.target.value })}/></label><label><span>Accent</span><input type="color" value={value.brand_color} onChange={event => onChange({ ...value, brand_color: event.target.value })}/></label><label><span>Logo URL</span><input type="url" value={value.logo_url} onChange={event => onChange({ ...value, logo_url: event.target.value })}/></label></div><div className="report-template-sections">{['summary', 'trends', 'campaigns', 'alerts'].map(section => <label key={section}><input type="checkbox" checked={value.sections.includes(section)} onChange={event => onChange({ ...value, sections: event.target.checked ? [...value.sections, section] : value.sections.filter(item => item !== section) })}/><span>{section}</span></label>)}</div><button className="ops-primary" disabled={!value.name.trim() || !value.sections.length || saving} onClick={onSave}>{saving ? 'Saving…' : 'Save template'}</button></section> }
 
-const emptyPulse = { campaign_id: '', periods: ['yesterday', 'month_to_date'], local_time: '09:00', include_campaign_breakdown: false, destination_ids: null, enabled: false }
+const emptyPulse = { include_ad_account: true, campaign_ids: [], periods: ['yesterday', 'month_to_date'], local_time: '09:00', include_campaign_breakdown: false, destination_ids: null, enabled: false }
 const emptyPulseDestination = { name: '', channel: 'google_chat', endpoint: '', secret: '' }
+const pulseScopes = pulse => pulse.scopes?.length ? pulse.scopes : [{ campaign_id: pulse.campaign_id, scope_key: pulse.scope_key || (pulse.campaign_id ? `campaign:${pulse.campaign_id}` : `account:${pulse.ad_account_id || pulse.ad_account?.id}`), campaign: pulse.campaign }]
+const pulseScopeSummary = pulse => {
+  const scopes = pulseScopes(pulse); const account = scopes.some(item => !item.campaign_id); const campaigns = scopes.filter(item => item.campaign_id)
+  return `${account ? 'Ad account' : ''}${account && campaigns.length ? ' + ' : ''}${campaigns.length ? `${campaigns.length} ${campaigns.length === 1 ? 'campaign' : 'campaigns'}` : ''}`
+}
 
 function PerformancePulsePanel({ clientId, accountId, canManage }) {
   const qc = useQueryClient(); const toast = useToast(); const [editingId, setEditingId] = useState(null); const [form, setForm] = useState(emptyPulse)
   const [editorOpen, setEditorOpen] = useState(false); const [editorScope, setEditorScope] = useState({ clientId: '', accountId: '' })
+  const [historyPulse, setHistoryPulse] = useState(null)
+  const [scopeSearch, setScopeSearch] = useState('')
   const [showDestinationForm, setShowDestinationForm] = useState(false); const [destinationForm, setDestinationForm] = useState(emptyPulseDestination)
   const scope = { client_id: clientId || undefined, ad_account_id: accountId || undefined }
   const hasCreationScope = Boolean(clientId && accountId)
@@ -81,9 +88,14 @@ function PerformancePulsePanel({ clientId, accountId, canManage }) {
   const canUseLegacyDefault = !options.data?.destinations?.length && options.data?.legacy_google_chat_configured
   const usesLegacyDefault = canUseLegacyDefault && form.destination_ids === null
   const hasSelectedDestination = destinationIds.length > 0 || usesLegacyDefault
+  const configuredScopeKeys = new Set((pulses.data || []).filter(pulse => pulse.id !== editingId).flatMap(pulse => pulseScopes(pulse).map(item => item.scope_key)))
+  const campaignOptions = options.data?.campaigns || []
+  const availableCampaignIds = campaignOptions.filter(campaign => !configuredScopeKeys.has(`campaign:${campaign.id}`)).map(campaign => campaign.id)
+  const filteredCampaigns = campaignOptions.filter(campaign => campaign.name.toLowerCase().includes(scopeSearch.trim().toLowerCase()))
+  const selectedScopeCount = Number(form.include_ad_account) + form.campaign_ids.length
   const save = useMutation({
     mutationFn: payload => editingId ? api.updatePerformancePulse(editingId, payload) : api.createPerformancePulse(payload),
-    onSuccess: () => { refresh(); closeEditor(); toast.success('Performance Pulse saved.') },
+    onSuccess: () => { refresh(); closeEditor(); toast.success(editingId ? 'Performance Pulse saved.' : 'Performance Pulse created.') },
     onError: error => toast.error(error.response?.data?.message || Object.values(error.response?.data?.errors || {})[0]?.[0] || 'Unable to save Performance Pulse.'),
   })
   const send = useMutation({ mutationFn: id => api.sendPerformancePulse(id), onSuccess: () => { refresh(); toast.success('Performance Pulse queued.') }, onError: error => toast.error(error.response?.data?.message || 'Unable to send Performance Pulse.') })
@@ -103,17 +115,24 @@ function PerformancePulsePanel({ clientId, accountId, canManage }) {
     },
     onError: error => toast.error(Object.values(error.response?.data?.errors || {})[0]?.[0] || error.response?.data?.message || 'Unable to create destination.'),
   })
-  const closeEditor = () => { setEditorOpen(false); setEditingId(null); setForm(emptyPulse); setShowDestinationForm(false); setDestinationForm(emptyPulseDestination) }
-  const create = () => { setEditingId(null); setEditorScope({ clientId, accountId }); setForm(emptyPulse); setEditorOpen(true) }
+  const closeEditor = () => { setEditorOpen(false); setEditingId(null); setForm(emptyPulse); setScopeSearch(''); setShowDestinationForm(false); setDestinationForm(emptyPulseDestination) }
+  const create = () => {
+    setEditingId(null); setEditorScope({ clientId, accountId })
+    setForm({ ...emptyPulse, include_ad_account: !configuredScopeKeys.has(`account:${accountId}`) })
+    setScopeSearch('')
+    setEditorOpen(true)
+  }
   const edit = pulse => {
+    const scopes = pulseScopes(pulse)
     setEditingId(pulse.id)
+    setScopeSearch('')
     setEditorScope({ clientId: pulse.client_id || pulse.client?.id, accountId: pulse.ad_account_id || pulse.ad_account?.id })
-    setForm({ campaign_id: pulse.campaign_id || '', periods: pulse.periods, local_time: pulse.local_time.slice(0, 5), include_campaign_breakdown: pulse.include_campaign_breakdown, destination_ids: pulse.destinations.map(item => item.id), enabled: pulse.enabled })
+    setForm({ include_ad_account: scopes.some(item => !item.campaign_id), campaign_ids: scopes.filter(item => item.campaign_id).map(item => Number(item.campaign_id)), periods: pulse.periods, local_time: pulse.local_time.slice(0, 5), include_campaign_breakdown: pulse.include_campaign_breakdown, destination_ids: pulse.destinations.map(item => item.id), enabled: pulse.enabled })
     setEditorOpen(true)
   }
   const submit = event => {
     event.preventDefault()
-    const payload = { ...form, ad_account_id: Number(editorScope.accountId), campaign_id: form.campaign_id ? Number(form.campaign_id) : null }
+    const payload = { ...form, ad_account_id: Number(editorScope.accountId), campaign_ids: form.campaign_ids.map(Number) }
     if (!editingId) payload.client_id = Number(editorScope.clientId)
     if (form.destination_ids !== null) payload.destination_ids = destinationIds.map(Number)
     else if (destinationIds.length) payload.destination_ids = destinationIds.map(Number)
@@ -121,6 +140,7 @@ function PerformancePulsePanel({ clientId, accountId, canManage }) {
     save.mutate(payload)
   }
   const toggleDestination = (id, checked) => setForm(current => ({ ...current, destination_ids: checked ? [...new Set([...destinationIds, id])] : destinationIds.filter(value => value !== id) }))
+  const toggleCampaignScope = (id, checked) => setForm(current => ({ ...current, campaign_ids: checked ? [...new Set([...current.campaign_ids, id])] : current.campaign_ids.filter(value => value !== id) }))
   const destinationReady = destinationForm.name.trim() && destinationForm.endpoint.trim()
 
   return <section className="pulse-panel">
@@ -128,21 +148,24 @@ function PerformancePulsePanel({ clientId, accountId, canManage }) {
     {canManage && !hasCreationScope && <p className="report-notice">Showing configured Performance Pulses. Choose a client and ad account to create a new one.</p>}
     <div className="report-section-head pulse-list-head"><div><h2>{clientId || accountId ? 'Configured pulses' : 'All configured pulses'}</h2><p>Send instantly or manage the daily schedule independently.</p></div>{canManage && hasCreationScope && <button className="ops-primary" onClick={create}><Plus size={14}/> Add Performance Pulse</button>}</div>
     <div className="pulse-list">{(pulses.data || []).map(pulse => <article key={pulse.id} className="pulse-card">
-      <header><span><BellRing size={16}/></span><div><strong>{pulse.campaign?.name || pulse.ad_account.name}</strong><small>{pulse.client.name} · {pulse.ad_account.platform} · {pulse.local_time.slice(0, 5)} {pulse.ad_account.timezone} · {pulse.periods.map(value => PULSE_PERIODS.find(item => item.value === value)?.label).join(' + ')}</small></div><em data-status={pulse.enabled ? 'active' : 'paused'}>{pulse.enabled ? 'Active' : 'Paused'}</em></header>
+      <header><span><BellRing size={16}/></span><div><strong>{pulse.ad_account.name}</strong><small>{pulseScopeSummary(pulse)} · {pulse.client.name} · {pulse.ad_account.platform} · {pulse.local_time.slice(0, 5)} {pulse.ad_account.timezone} · {pulse.periods.map(value => PULSE_PERIODS.find(item => item.value === value)?.label).join(' + ')}</small></div><em data-status={pulse.enabled ? 'active' : 'paused'}>{pulse.enabled ? 'Active' : 'Paused'}</em></header>
       <div className="destination-events">{pulse.destinations.map(item => <small key={item.id}>{item.name} · {item.channel.replaceAll('_', ' ')}</small>)}{!pulse.destinations.length && <small>No destination selected</small>}</div>
-      {canManage && <div className="pulse-actions"><button onClick={() => send.mutate(pulse.id)} disabled={send.isPending || !pulse.destinations.length} title={!pulse.destinations.length ? 'Add a destination before sending.' : undefined}><Send size={13}/> Send now</button><button onClick={() => update.mutate({ id: pulse.id, data: { enabled: !pulse.enabled } })} disabled={!pulse.enabled && !pulse.destinations.length} title={!pulse.enabled && !pulse.destinations.length ? 'Add a destination before enabling.' : undefined}>{pulse.enabled ? 'Pause' : 'Enable'}</button><button onClick={() => edit(pulse)}><Pencil size={13}/> Edit</button><button className="icon-danger" aria-label={`Delete ${pulse.campaign?.name || pulse.ad_account.name}`} onClick={() => remove.mutate(pulse.id)}><Trash2 size={13}/></button></div>}
-      <div className="pulse-history">{(pulse.runs || []).map(run => <div key={run.id}><span><strong>{run.trigger === 'manual' ? 'Sent now' : 'Scheduled'} · {run.reporting_date?.slice(0, 10)}</strong><small>{new Date(run.created_at).toLocaleString()}{run.warning ? ` · ${run.warning}` : ''}</small></span><em data-status={run.status}>{run.status}</em><div>{(run.deliveries || []).map(delivery => <small key={delivery.id}>{delivery.destination?.name} · part {delivery.part_number || 1}/{delivery.part_count || 1} · {delivery.status}</small>)}</div></div>)}</div>
+      <div className="pulse-actions">{canManage && <><button className="pulse-action-primary" onClick={() => send.mutate(pulse.id)} disabled={send.isPending || !pulse.destinations.length} title={!pulse.destinations.length ? 'Add a destination before sending.' : undefined}><Send size={13}/> Send now</button><button onClick={() => update.mutate({ id: pulse.id, data: { enabled: !pulse.enabled } })} disabled={!pulse.enabled && !pulse.destinations.length} title={!pulse.enabled && !pulse.destinations.length ? 'Add a destination before enabling.' : undefined}>{pulse.enabled ? 'Pause' : 'Enable'}</button><button onClick={() => edit(pulse)}><Pencil size={13}/> Edit</button><button className="icon-danger" aria-label={`Delete ${pulse.ad_account.name}`} onClick={() => remove.mutate(pulse.id)}><Trash2 size={13}/></button></>}<button className="pulse-history-trigger" onClick={() => setHistoryPulse(pulse)}><History size={13}/> View history{pulse.runs?.length ? ` (${pulse.runs.length}${pulse.runs.length === 10 ? '+' : ''})` : ''}</button></div>
     </article>)}{!pulses.isLoading && !(pulses.data || []).length && <p className="scoped-empty">No Performance Pulses are configured for this scope.</p>}</div>
-    <PulseEditorDialog open={editorOpen} editing={Boolean(editingId)} busy={save.isPending} submitDisabled={form.periods[0] === form.periods[1] || (form.enabled && !hasSelectedDestination)} onClose={closeEditor} onSubmit={submit}>
+    <PulseHistoryDialog pulse={historyPulse} onClose={() => setHistoryPulse(null)}/>
+    <PulseEditorDialog open={editorOpen} editing={Boolean(editingId)} busy={save.isPending} submitLabel={editingId ? 'Save changes' : 'Create Performance Pulse'} submitDisabled={!selectedScopeCount || form.periods[0] === form.periods[1] || (form.enabled && !hasSelectedDestination)} onClose={closeEditor} onSubmit={submit}>
       <AsyncStateNotice queries={[options]}/>
       <section className="pulse-dialog-section">
-        <div className="pulse-dialog-section-head"><span>1</span><div><h3>Scope and comparison</h3><p>Select the level to report and two completed periods to compare.</p></div></div>
-        <div className="pulse-fields">
-          <label><span>Scope</span><select value={form.campaign_id} onChange={event => setForm({ ...form, campaign_id: event.target.value, include_campaign_breakdown: event.target.value ? false : form.include_campaign_breakdown })}><option value="">Ad account</option>{(options.data?.campaigns || []).map(campaign => <option key={campaign.id} value={campaign.id}>{campaign.name}</option>)}</select></label>
-          {[0, 1].map(index => <label key={index}><span>Period {index + 1}</span><select value={form.periods[index]} onChange={event => setForm({ ...form, periods: form.periods.map((value, itemIndex) => itemIndex === index ? event.target.value : value) })}>{PULSE_PERIODS.map(period => <option key={period.value} value={period.value} disabled={form.periods[1 - index] === period.value}>{period.label}</option>)}</select></label>)}
-          <label><span>Daily time</span><input type="time" required value={form.local_time} onChange={event => setForm({ ...form, local_time: event.target.value })}/><small>Account timezone</small></label>
+        <div className="pulse-dialog-section-head"><span>1</span><div><h3>Scopes and comparison</h3><p>Choose every scope this single Pulse should report on, then select two completed periods to compare.</p></div></div>
+        <div className="pulse-scope-workspace">
+          <label className={`pulse-account-scope ${form.include_ad_account ? 'selected' : ''}${configuredScopeKeys.has(`account:${editorScope.accountId}`) ? ' unavailable' : ''}`}><input type="checkbox" checked={form.include_ad_account} disabled={configuredScopeKeys.has(`account:${editorScope.accountId}`)} onChange={event => setForm({ ...form, include_ad_account: event.target.checked, include_campaign_breakdown: event.target.checked ? form.include_campaign_breakdown : false })}/><span className="pulse-scope-check"><Check size={13}/></span><span><strong>{options.data?.account?.name || 'Ad account'}</strong><small>{configuredScopeKeys.has(`account:${editorScope.accountId}`) ? 'Already used by another Pulse' : 'Include account-level totals in this report'}</small></span><em>Ad account</em></label>
+          <div className="pulse-campaign-heading"><div><strong>Campaigns</strong><small>Select any campaigns to include in the same report.</small></div><div><button type="button" disabled={!availableCampaignIds.length || availableCampaignIds.every(id => form.campaign_ids.includes(id))} onClick={() => setForm(current => ({ ...current, campaign_ids: availableCampaignIds }))}>Select all</button><button type="button" disabled={!form.campaign_ids.length} onClick={() => setForm(current => ({ ...current, campaign_ids: [] }))}>Clear</button></div></div>
+          <label className="pulse-scope-search"><Search size={14}/><input type="search" aria-label="Search campaigns" value={scopeSearch} placeholder="Search campaigns…" onChange={event => setScopeSearch(event.target.value)}/><span>{form.campaign_ids.length}/{availableCampaignIds.length} selected</span></label>
+          <fieldset className="pulse-campaign-scopes" aria-label="Campaign scopes">{filteredCampaigns.map(campaign => { const unavailable = configuredScopeKeys.has(`campaign:${campaign.id}`); const selected = form.campaign_ids.includes(campaign.id); return <label className={`${selected ? 'selected' : ''}${unavailable ? ' unavailable' : ''}`} key={campaign.id}><input type="checkbox" checked={selected} disabled={unavailable} onChange={event => toggleCampaignScope(campaign.id, event.target.checked)}/><span className="pulse-scope-check"><Check size={12}/></span><span><strong>{campaign.name}</strong><small>{unavailable ? 'Already used by another Pulse' : campaign.status || 'Campaign'}</small></span><i data-status={campaign.status || 'unknown'}/></label> })}{!filteredCampaigns.length && <p>{options.isPending ? 'Loading campaigns…' : campaignOptions.length ? `No campaigns match “${scopeSearch}”.` : 'No campaigns are available for this account.'}</p>}</fieldset>
+          <div className={`pulse-scope-summary ${selectedScopeCount ? '' : 'empty'}`} role="status" aria-live="polite"><span><Check size={14}/></span><div><strong>{selectedScopeCount ? `1 Performance Pulse will report on ${selectedScopeCount} ${selectedScopeCount === 1 ? 'scope' : 'scopes'}` : 'Choose at least one scope'}</strong><small>{selectedScopeCount ? `${form.include_ad_account ? 'Ad account' : ''}${form.include_ad_account && form.campaign_ids.length ? ' + ' : ''}${form.campaign_ids.length ? `${form.campaign_ids.length} ${form.campaign_ids.length === 1 ? 'campaign' : 'campaigns'}` : ''}` : 'Select the account, campaigns, or both.'}</small></div></div>
         </div>
-        {!form.campaign_id && <label className="pulse-option-row"><input type="checkbox" checked={form.include_campaign_breakdown} onChange={event => setForm({ ...form, include_campaign_breakdown: event.target.checked })}/><span><strong>Include campaign breakdown</strong><small>Add campaign detail after the account totals.</small></span></label>}
+        <div className="pulse-fields pulse-comparison-fields">{[0, 1].map(index => <label key={index}><span>Period {index + 1}</span><select value={form.periods[index]} onChange={event => setForm({ ...form, periods: form.periods.map((value, itemIndex) => itemIndex === index ? event.target.value : value) })}>{PULSE_PERIODS.map(period => <option key={period.value} value={period.value} disabled={form.periods[1 - index] === period.value}>{period.label}</option>)}</select></label>)}<label><span>Daily time</span><input type="time" required value={form.local_time} onChange={event => setForm({ ...form, local_time: event.target.value })}/><small>Account timezone</small></label></div>
+        {form.include_ad_account && <label className="pulse-option-row"><input type="checkbox" checked={form.include_campaign_breakdown} onChange={event => setForm({ ...form, include_campaign_breakdown: event.target.checked })}/><span><strong>Include campaign breakdown</strong><small>Add campaign detail after the account totals.</small></span></label>}
       </section>
       <section className="pulse-dialog-section">
         <div className="pulse-dialog-section-head"><span>2</span><div><h3>Delivery</h3><p>Choose where the Performance Pulse should be sent.</p></div></div>
@@ -162,7 +185,57 @@ function PerformancePulsePanel({ clientId, accountId, canManage }) {
   </section>
 }
 
-function PulseEditorDialog({ open, editing, busy, submitDisabled, onClose, onSubmit, children }) {
+function PulseHistoryDialog({ pulse, onClose }) {
+  const dialogRef = useRef(null)
+  const closeRef = useRef(null)
+  const titleId = useId()
+  const history = useQuery({
+    queryKey: ['performance-pulse-runs', pulse?.id],
+    queryFn: () => api.getPerformancePulseRuns(pulse.id, { page: 1 }).then(response => response.data),
+    enabled: Boolean(pulse),
+    refetchInterval: query => query.state.data?.data?.some(run => ['pending', 'generating', 'queued'].includes(run.status)) ? 3000 : false,
+  })
+  useEffect(() => {
+    if (!pulse) return undefined
+    const previouslyFocused = document.activeElement
+    const root = document.getElementById('root')
+    const previousOverflow = document.body.style.overflow
+    const previousInert = root?.inert
+    if (root) root.inert = true
+    document.body.style.overflow = 'hidden'
+    const frame = requestAnimationFrame(() => closeRef.current?.focus())
+    const handleKeyDown = event => {
+      if (event.key === 'Escape') { event.preventDefault(); onClose(); return }
+      if (event.key !== 'Tab') return
+      const focusable = [...(dialogRef.current?.querySelectorAll('button:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])') || [])]
+      if (!focusable.length) return
+      const first = focusable[0]; const last = focusable[focusable.length - 1]
+      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus() }
+      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus() }
+    }
+    document.addEventListener('keydown', handleKeyDown)
+    return () => {
+      cancelAnimationFrame(frame); document.removeEventListener('keydown', handleKeyDown); document.body.style.overflow = previousOverflow
+      if (root) root.inert = previousInert || false
+      previouslyFocused?.focus?.()
+    }
+  }, [pulse, onClose])
+  if (!pulse) return null
+
+  const runs = history.data?.data || []
+  const pulseName = `${pulse.ad_account.name} · ${pulseScopeSummary(pulse)}`
+  return createPortal(<div className="pulse-dialog-backdrop" role="presentation" onMouseDown={event => event.target === event.currentTarget && onClose()}>
+    <section ref={dialogRef} className="pulse-dialog pulse-history-dialog" role="dialog" aria-modal="true" aria-labelledby={titleId}>
+      <header><div className="pulse-dialog-title"><span><History size={18}/></span><div><p>Delivery activity</p><h2 id={titleId}>Performance Pulse history</h2><small>{pulseName} · Latest 50 runs</small></div></div><button ref={closeRef} type="button" aria-label="Close Performance Pulse history" onClick={onClose}><X size={18}/></button></header>
+      <div className="pulse-dialog-body"><AsyncState query={history} loadingText="Loading run history…" errorText="Run history could not be loaded." empty={!history.isPending && !runs.length} emptyText="This Performance Pulse has not run yet.">
+        <div className="pulse-history-list">{runs.map(run => <article key={run.id}><div className="pulse-history-marker" data-status={run.status}/><div className="pulse-history-summary"><strong>{run.trigger === 'manual' ? 'Sent now' : 'Scheduled run'} · {run.reporting_date?.slice(0, 10)}</strong><small>{new Date(run.created_at).toLocaleString()}{run.triggered_by?.name ? ` · by ${run.triggered_by.name}` : ''}</small>{run.warning && <p>{run.warning}</p>}</div><em data-status={run.status}>{run.status}</em>{Boolean(run.deliveries?.length) && <div className="pulse-history-deliveries">{run.deliveries.map(delivery => <small key={delivery.id}>{delivery.destination?.name || 'Destination'} · part {delivery.part_number || 1}/{delivery.part_count || 1} · <span data-status={delivery.status}>{delivery.status}</span></small>)}</div>}</article>)}</div>
+      </AsyncState></div>
+      <footer><span><History size={14}/> Runs are shown newest first</span><div><button type="button" className="pulse-dialog-cancel" onClick={onClose}>Close</button></div></footer>
+    </section>
+  </div>, document.body)
+}
+
+function PulseEditorDialog({ open, editing, busy, submitLabel, submitDisabled, onClose, onSubmit, children }) {
   const dialogRef = useRef(null)
   const closeRef = useRef(null)
   const titleId = useId()
@@ -200,7 +273,7 @@ function PulseEditorDialog({ open, editing, busy, submitDisabled, onClose, onSub
     <form ref={dialogRef} className="pulse-dialog" role="dialog" aria-modal="true" aria-labelledby={titleId} onSubmit={onSubmit}>
       <header><div className="pulse-dialog-title"><span><BellRing size={18}/></span><div><p>{editing ? 'Update delivery' : 'Daily performance briefing'}</p><h2 id={titleId}>{editing ? 'Edit Performance Pulse' : 'New Performance Pulse'}</h2><small>Compare completed periods and deliver the result on your schedule.</small></div></div><button ref={closeRef} type="button" aria-label="Close Performance Pulse dialog" disabled={busy} onClick={onClose}><X size={18}/></button></header>
       <div className="pulse-dialog-body">{children}</div>
-      <footer><span><CalendarClock size={14}/> Uses the selected ad account’s timezone</span><div><button type="button" className="pulse-dialog-cancel" disabled={busy} onClick={onClose}>Cancel</button><button className="ops-primary" disabled={busy || submitDisabled}>{busy ? 'Saving…' : editing ? 'Save changes' : 'Create Performance Pulse'}</button></div></footer>
+      <footer><span><CalendarClock size={14}/> Uses the selected ad account’s timezone</span><div><button type="button" className="pulse-dialog-cancel" disabled={busy} onClick={onClose}>Cancel</button><button className="ops-primary" disabled={busy || submitDisabled}>{busy ? 'Saving…' : submitLabel}</button></div></footer>
     </form>
   </div>, document.body)
 }
