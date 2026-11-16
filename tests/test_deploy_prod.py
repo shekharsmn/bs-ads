@@ -43,11 +43,13 @@ elif name == 'docker':
         if args[1] == 'inspect': sys.exit(1)
         if args[1] == 'build': sys.exit(int(os.environ.get('FAIL_BUILD', '0')))
     elif args[0] == 'inspect':
-        print('\n'.join(['true false healthy'] * len(args[3:])))
+        print('\n'.join(['worker true false healthy'] * len(args[3:])))
     elif args[0] == 'compose':
         if 'config' in args and '--services' in args:
             if not os.environ.get('LEGACY_COMPOSE'):
                 print('worker-shopify')
+            if os.environ.get('SPLIT_COMPOSE'):
+                print('worker-collection\nworker-reports')
         elif 'config' in args and '--format' in args:
             print(json.dumps({'services': {'worker-core': {'image': 'previous', 'user': '33:33', 'cgroup_parent': 'bs-ads.slice'}}}))
         elif 'config' in args and '--no-env-resolution' in args:
@@ -116,7 +118,7 @@ class DeploymentTest(unittest.TestCase):
         return [call for call in self.calls if all(word in call for word in words)]
 
     def assert_isolated(self):
-        allowed = {'php', 'web', 'scheduler', 'worker-core', 'worker-audits', 'worker-library', 'worker-analysis', 'scraper', 'worker-shopify'}
+        allowed = {'php', 'web', 'scheduler', 'worker-core', 'worker-audits', 'worker-library', 'worker-analysis', 'scraper', 'worker-shopify', 'worker-collection', 'worker-reports'}
         for call in self.matching('docker', 'compose'):
             if call == ['docker', 'compose', 'version']:
                 continue
@@ -205,7 +207,30 @@ class DeploymentTest(unittest.TestCase):
         path.write_text(path.read_text().replace('SECONDS + 120', 'SECONDS + 0'))
         self.assertNotEqual(self.run_script(), 0)
         self.assertTrue(self.matching('docker', 'up', '--force-recreate'))
+        self.assertTrue(self.matching('docker', 'stop', 'worker-collection', 'worker-reports'))
         self.assertEqual((self.state / 'compose.yaml').read_text(), 'original-compose.yaml\n')
+
+    def test_first_split_worker_deploy_compacts_after_backup_and_before_worker_start(self):
+        self.assertEqual(self.run_script(), 0, self.output)
+        calls = self.calls
+        preview, apply = [i for i, call in enumerate(calls) if 'operations:compact-queues' in call]
+        backup = next(i for i, call in enumerate(calls) if call[0] == 'mysqldump')
+        start = next(i for i, call in enumerate(calls) if 'up' in call and 'worker-collection' in call)
+        self.assertLess(preview, backup)
+        self.assertLess(backup, apply)
+        self.assertLess(apply, start)
+        self.assertIn('--apply', calls[apply])
+        release = next((self.state / 'releases').iterdir())
+        definitions = json.loads((release / 'override.json').read_text())['services']
+        self.assertIn('--queue=notifications,default', definitions['worker-core']['command'])
+        self.assertIn('--queue=collection', definitions['worker-collection']['command'])
+        self.assertIn('--queue=reports', definitions['worker-reports']['command'])
+        self.assert_isolated()
+
+    def test_restart_uses_existing_split_workers_without_compaction(self):
+        self.assertEqual(self.run_script('restart', SPLIT_COMPOSE='1'), 0, self.output)
+        self.assertTrue(self.matching('docker', 'up', 'worker-collection', 'worker-reports'))
+        self.assertFalse(self.matching('artisan', 'operations:compact-queues'))
 
     def test_changed_scraper_gets_its_own_image(self):
         self.assertEqual(self.run_script(SCRAPER_CHANGED='1'), 0, self.output)
