@@ -18,6 +18,8 @@ class SendNotificationJob implements ShouldBeUnique, ShouldQueue
 
     public int $tries = 3;
 
+    public int $timeout = 30;
+
     public array $backoff = [30, 120, 600];
 
     public function __construct(public readonly int $deliveryId)

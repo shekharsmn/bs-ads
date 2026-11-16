@@ -2,7 +2,7 @@
 
 namespace App\Console\Commands;
 
-use App\Jobs\CollectAccountMetricsJob;
+use App\Services\WorkloadQueue;
 use App\Models\AdAccount;
 use Carbon\CarbonImmutable;
 use Illuminate\Console\Command;
@@ -13,19 +13,16 @@ class BackfillPerformanceHierarchy extends Command
 
     protected $description = 'Backfill campaign, ad group/ad set, and ad performance for active accounts';
 
-    public function handle(): int
+    public function handle(WorkloadQueue $queue): int
     {
         $days = max(1, min(365, (int) $this->option('days')));
         $count = 0;
         AdAccount::query()->where('status', 'active')->whereHas('client', fn ($query) => $query->where('active', true))
-            ->orderBy('id')->chunkById(100, function ($accounts) use ($days, &$count) {
+            ->orderBy('id')->chunkById(100, function ($accounts) use ($days, &$count, $queue) {
                 foreach ($accounts as $account) {
                     $end = CarbonImmutable::now($account->timezone)->subDay()->toDateString();
                     $start = CarbonImmutable::parse($end, $account->timezone)->subDays($days - 1)->toDateString();
-                    $this->option('sync')
-                        ? CollectAccountMetricsJob::dispatchSync($account->id, $start, $end)
-                        : CollectAccountMetricsJob::dispatch($account->id, $start, $end);
-                    $count++;
+                    $count += (int) $queue->collection($account->id, $start, $end, sync: $this->option('sync'));
                 }
             });
         $this->info("Dispatched {$count} hierarchy backfill job(s) for {$days} completed day(s).");

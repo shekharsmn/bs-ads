@@ -1,6 +1,6 @@
 <?php
 
-use App\Jobs\QueueHeartbeatJob;
+use App\Services\WorkloadQueue;
 use Illuminate\Foundation\Inspiring;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Cache;
@@ -13,7 +13,7 @@ Artisan::command('inspire', function () {
 Schedule::call(function () {
     Cache::put('operations:scheduler-heartbeat', now()->toIso8601String(), now()->addDay());
     foreach (config('workloads.queues', []) as $workload => $queue) {
-        QueueHeartbeatJob::dispatch($workload, $queue);
+        app(WorkloadQueue::class)->heartbeat($workload, $queue);
     }
 })->name('operations-heartbeats')->everyMinute()->onOneServer()->withoutOverlapping(2);
 

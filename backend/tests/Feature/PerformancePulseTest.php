@@ -3,7 +3,7 @@
 namespace Tests\Feature;
 
 use App\Jobs\GeneratePerformancePulseJob;
-use App\Jobs\SendNotificationJob;
+use App\Jobs\QueueHeartbeatJob;
 use App\Models\AdAccount;
 use App\Models\Campaign;
 use App\Models\Client;
@@ -149,7 +149,7 @@ class PerformancePulseTest extends TestCase
 
     public function test_generation_fans_out_deliveries_and_delivery_completes_the_run(): void
     {
-        Queue::fake();
+        config(['queue.default' => 'database']);
         Http::fake(['https://chat.googleapis.com/*' => Http::response(['name' => 'spaces/test/messages/1'])]);
         [, $client, $account] = $this->fixture('ecommerce');
         $campaign = Campaign::create(['ad_account_id' => $account->id, 'external_id' => 'sales', 'name' => 'Shopping', 'type' => 'SHOPPING']);
@@ -159,15 +159,20 @@ class PerformancePulseTest extends TestCase
         $pulse->destinations()->attach($destination);
         $run = PerformancePulseRun::create(['performance_pulse_id' => $pulse->id, 'trigger' => 'manual', 'reporting_date' => '2026-10-29', 'idempotency_key' => (string) \Illuminate\Support\Str::uuid(), 'status' => 'pending']);
 
-        (new GeneratePerformancePulseJob($run->id))->handle(app(PerformancePulseRenderer::class));
+        QueueHeartbeatJob::dispatch('collection', 'collection');
+        GeneratePerformancePulseJob::dispatch($run->id);
+        $queue = Queue::connection('database');
+        $queue->pop('reports')->fire();
         $delivery = $run->deliveries()->firstOrFail();
         $this->assertSame('queued', $run->fresh()->status);
         $this->assertStringContainsString('ROAS: 5.00', $delivery->payload['text']);
-        Queue::assertPushed(SendNotificationJob::class, 1);
+        $this->assertSame(1, $queue->size('notifications'));
 
-        (new SendNotificationJob($delivery->id))->handle(app(\App\Services\AdLibraryAudit\SafePublicUrl::class));
+        $queue->pop('notifications')->fire();
         $this->assertSame('delivered', $run->fresh()->status);
         $this->assertSame('delivered', $delivery->fresh()->status);
+        $this->assertSame(1, $queue->size('collection'));
+        Http::assertSentCount(1);
     }
 
     private function fixture(string $objective = 'lead_gen', string $slug = 'acme'): array

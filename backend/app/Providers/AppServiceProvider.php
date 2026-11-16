@@ -12,7 +12,11 @@ use App\Services\EmailIntegrationService;
 use App\Services\WorkflowActivityService;
 use Illuminate\Cache\RateLimiting\Limit;
 use Illuminate\Http\Request;
+use Illuminate\Queue\Events\JobFailed;
+use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\RateLimiter;
+use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\ServiceProvider;
 
 class AppServiceProvider extends ServiceProvider
@@ -30,6 +34,26 @@ class AppServiceProvider extends ServiceProvider
      */
     public function boot(): void
     {
+        $worker = getenv('BS_ADS_QUEUE_WORKER');
+        if ($this->app->runningInConsole() && is_string($worker) && $worker !== '') {
+            Queue::looping(static function () use ($worker) {
+                static $lastPoll = 0;
+                $now = now()->timestamp;
+                if ($now - $lastPoll >= 30 && ! app()->isDownForMaintenance() &&
+                    Cache::put('operations:worker-poll:'.$worker, $now, now()->addDay())) {
+                    $lastPoll = $now;
+                }
+            });
+        }
+        Queue::failing(static function (JobFailed $event) {
+            Log::warning('Queue job failed', [
+                'job' => $event->job->resolveName(),
+                'queue' => $event->job->getQueue(),
+                'job_id' => $event->job->getJobId(),
+                'exception' => $event->exception::class,
+            ]);
+        });
+
         try {
             app(EmailIntegrationService::class)->apply(purge: false);
         } catch (\Throwable) {

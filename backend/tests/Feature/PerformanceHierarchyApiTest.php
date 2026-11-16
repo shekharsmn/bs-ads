@@ -3,6 +3,7 @@
 namespace Tests\Feature;
 
 use App\Jobs\CollectAccountMetricsJob;
+use App\Jobs\QueueHeartbeatJob;
 use App\Models\Ad;
 use App\Models\AdAccount;
 use App\Models\AdGroup;
@@ -11,15 +12,63 @@ use App\Models\Client;
 use App\Models\MetricSnapshot;
 use App\Models\PlatformConnection;
 use App\Models\User;
+use App\Services\WorkloadQueue;
 use Carbon\CarbonImmutable;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Queue;
 use Tests\TestCase;
 
 class PerformanceHierarchyApiTest extends TestCase
 {
     use RefreshDatabase;
+
+    public function test_outstanding_database_jobs_bound_syncs_and_heartbeat_probes(): void
+    {
+        config(['queue.default' => 'database', 'queue.connections.database.retry_after' => 1200]);
+        [, $account] = $this->accountFixture();
+        $queue = app(WorkloadQueue::class);
+        $this->assertTrue($queue->collection($account->id));
+        DB::table('jobs')->where('queue', 'collection')->update(['reserved_at' => now()->timestamp]);
+        $this->travel(2)->hours();
+        $this->assertFalse($queue->collection($account->id, refresh: 'manual'));
+        $this->assertTrue($queue->collection($account->id, '2026-10-01', '2026-10-05'));
+        $this->assertFalse($queue->collection($account->id, '2026-10-01', '2026-10-05'));
+        $this->assertFalse($queue->collection($account->id, sync: true));
+
+        $queue->heartbeat('reports', 'reports');
+        $queue->heartbeat('reports', 'reports');
+        $this->assertSame(1, DB::table('jobs')->where('queue', 'reports')->count());
+        $this->assertNull(Cache::get('operations:queue-heartbeat:reports'));
+        $job = Queue::connection('database')->pop('reports');
+        $queue->heartbeat('reports', 'reports');
+        $this->assertSame(1, DB::table('jobs')->where('queue', 'reports')->count());
+        $job->fire();
+        $this->assertNotNull(Cache::get('operations:queue-heartbeat:reports'));
+    }
+
+    public function test_queue_compaction_is_conservative_and_rechecks_reservations(): void
+    {
+        config(['queue.default' => 'database', 'queue.connections.database.retry_after' => 1200]);
+        app()->instance(\Illuminate\Contracts\Foundation\MaintenanceMode::class, \Mockery::mock(\Illuminate\Contracts\Foundation\MaintenanceMode::class)->shouldReceive('active')->andReturn(true)->getMock());
+        [, $account] = $this->accountFixture();
+        $older = Queue::push(new CollectAccountMetricsJob($account->id), queue: 'collection');
+        $latest = Queue::push(new CollectAccountMetricsJob($account->id, refreshToken: 'manual'), queue: 'collection');
+        $backfill = Queue::push(new CollectAccountMetricsJob($account->id, '2026-10-01', '2026-10-05'), queue: 'collection');
+        $probe = Queue::push(new QueueHeartbeatJob('reports', 'reports'), queue: 'reports');
+        $pulse = Queue::push(new \App\Jobs\GeneratePerformancePulseJob(123), queue: 'reports');
+
+        $this->artisan('operations:compact-queues')->assertSuccessful();
+        $this->assertDatabaseHas('jobs', ['id' => $older]);
+        DB::table('jobs')->where('id', $older)->update(['reserved_at' => now()->timestamp]);
+        $this->artisan('operations:compact-queues --apply')->assertFailed();
+        $this->assertDatabaseHas('jobs', ['id' => $probe]);
+
+        $this->travel(21)->minutes();
+        $this->artisan('operations:compact-queues --apply')->assertSuccessful();
+        $this->assertEqualsCanonicalizing([$latest, $backfill, $pulse], DB::table('jobs')->pluck('id')->all());
+    }
 
     protected function setUp(): void
     {

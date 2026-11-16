@@ -16,7 +16,8 @@ RUNTIME_CHANGED=0
 BUILDER_USED=0
 SUCCESS=0
 PREVIOUS_APP=("${APP[@]}")
-SHOP_WORKER_NEW=0
+NEW_WORKERS=()
+QUEUE_LAYOUT_UPGRADE=0
 
 usage() {
     printf 'Usage: bash deploy-prod.sh [deploy|restart]\n\n'
@@ -40,7 +41,7 @@ cleanup() {
         cp "$RELEASE/scraper.before.env" "$STATE/scraper.env"
         cp "$RELEASE/compose.before.yaml" "$COMPOSE"
         if (( MAINTENANCE )); then
-            if (( SHOP_WORKER_NEW )); then next stop worker-shopify; fi
+            if (( ${#NEW_WORKERS[@]} )); then next stop "${NEW_WORKERS[@]}"; fi
             dc up -d --no-deps --force-recreate "${PREVIOUS_APP[@]}"
             dc exec -T --user 33:33 php php artisan up
             printf 'Migrations were NOT reversed. Database backup: %s/database.sql\n' "$RELEASE" >&2
@@ -70,20 +71,30 @@ build_image() {
 healthy() {
     local ids=() states
     mapfile -t ids < <(dc ps -aq "${APP[@]}")
-    (( ${#ids[@]} == ${#APP[@]} )) || return 1
-    states=$(docker inspect --format '{{.State.Running}} {{.State.OOMKilled}}{{if .State.Health}} {{.State.Health.Status}}{{end}}' "${ids[@]}") || return 1
-    if grep -Ev '^true false( healthy)?$' <<<"$states" >/dev/null; then return 1; fi
-    curl -fsS --max-time 5 http://127.0.0.1:4280/up >/dev/null 2>&1 || return 1
-    timeout 15 docker compose -p "$PROJECT" -f "$COMPOSE" exec -T --user 33:33 -e "DEPLOY_SINCE=$STARTED" php php <<'PHP' >/dev/null 2>&1
+    (( ${#ids[@]} == ${#APP[@]} )) || { echo 'Readiness: expected containers are missing.'; return 1; }
+    states=$(docker inspect --format '{{index .Config.Labels "com.docker.compose.service"}} {{.State.Running}} {{.State.OOMKilled}}{{if .State.Health}} {{.State.Health.Status}}{{end}}' "${ids[@]}") || return 1
+    if grep -Ev '^[^ ]+ true false( healthy)?$' <<<"$states"; then return 1; fi
+    curl -fsS --max-time 5 http://127.0.0.1:4280/up >/dev/null || { echo 'Readiness: HTTP /up failed.'; return 1; }
+    timeout 15 docker compose -p "$PROJECT" -f "$COMPOSE" exec -T --user 33:33 -e "DEPLOY_SINCE=$STARTED" -e "DEPLOY_WORKERS=$READY_WORKERS" php php <<'PHP'
 <?php
 require 'vendor/autoload.php';
 $app = require 'bootstrap/app.php';
 $app->make(Illuminate\Contracts\Console\Kernel::class)->bootstrap();
 $result = app(App\Services\OperationsReadinessService::class)->inspect();
-if ($result['status'] !== 'ready') exit(1);
-foreach ($result['checks']['heartbeats'] as $heartbeat) {
-    if (strtotime($heartbeat['last_seen_at'] ?? '') < (int) getenv('DEPLOY_SINCE')) exit(1);
+$errors = $result['startup_warnings'] ?? [];
+foreach (['database', 'cache'] as $probe) {
+    if (! $result['checks'][$probe]['ok']) $errors[] = "$probe probe failed";
 }
+if (strtotime($result['checks']['heartbeats']['scheduler']['last_seen_at'] ?? '') < (int) getenv('DEPLOY_SINCE')) {
+    $errors[] = 'scheduler startup heartbeat missing';
+}
+foreach (explode(' ', trim(getenv('DEPLOY_WORKERS'))) as $worker) {
+    if ($worker !== '' && (int) Illuminate\Support\Facades\Cache::get('operations:worker-poll:'.$worker) < (int) getenv('DEPLOY_SINCE')) {
+        $errors[] = "$worker startup signal missing";
+    }
+}
+foreach ($errors as $error) fwrite(STDERR, "Readiness: $error\n");
+exit($errors === [] ? 0 : 1);
 PHP
 }
 
@@ -108,10 +119,19 @@ main() {
     flock -n 9 || die 'Another BS Ads deployment is running.'
     local services
     services="$(dc config --services)"
-    if grep -Fxq worker-shopify <<<"$services"; then
-        APP+=(worker-shopify); WORKERS+=(worker-shopify); PREVIOUS_APP+=(worker-shopify)
-    elif [[ "$MODE" == deploy ]]; then
-        APP+=(worker-shopify); SHOP_WORKER_NEW=1
+    local service
+    for service in worker-shopify worker-collection worker-reports; do
+        if grep -Fxq "$service" <<<"$services"; then
+            APP+=("$service"); WORKERS+=("$service"); PREVIOUS_APP+=("$service")
+        elif [[ "$MODE" == deploy ]]; then
+            APP+=("$service"); NEW_WORKERS+=("$service")
+            if [[ "$service" != worker-shopify ]]; then QUEUE_LAYOUT_UPGRADE=1; fi
+        fi
+    done
+    if (( QUEUE_LAYOUT_UPGRADE )) && [[ "$ROOT" == /opt/bs-ads ]]; then
+        local available_kib
+        available_kib=$(awk '/^MemAvailable:/ {print $2}' /proc/meminfo)
+        (( available_kib >= 655360 )) || die 'Need at least 640 MiB available for the two new workers and host headroom.'
     fi
     RUN_ID="$(git -C "$ROOT" rev-parse --short=12 HEAD)-$(date -u +%Y%m%dT%H%M%SZ)-$$"
     RELEASE="$STATE/releases/$RUN_ID"
@@ -180,6 +200,22 @@ if mode == 'deploy':
     worker.update({'image': 'bs-ads-php:' + tag, 'command': ['php','artisan','queue:work','--queue=shopify-sync','--timeout=90','--tries=5','--sleep=3','--max-time=3600'], 'stop_grace_period': '110s', 'mem_limit': '192m'})
     worker.pop('container_name', None)
     services['worker-shopify'] = worker
+    for name, queues, timeout, grace in (
+        ('worker-core', 'notifications,default', 350, 370),
+        ('worker-collection', 'collection', 350, 370),
+        ('worker-reports', 'reports', 350, 370),
+    ):
+        definition = dict(base['services']['worker-core']) if name != 'worker-core' else {}
+        definition.pop('container_name', None)
+        definition.update({
+            'image': 'bs-ads-php:' + tag,
+            'command': ['php','artisan','queue:work','--queue='+queues,'--timeout='+str(timeout),'--sleep=3','--tries=3','--memory=160','--max-time=3600'],
+            'stop_grace_period': str(grace) + 's',
+        })
+        if name != 'worker-core': definition['mem_limit'] = '256m'
+        services[name] = definition
+    for name in ('worker-core', 'worker-collection', 'worker-reports', 'worker-shopify', 'worker-audits', 'worker-library', 'worker-analysis'):
+        services[name]['environment'] = {**(services[name].get('environment') or {}), 'BS_ADS_QUEUE_WORKER': name}
     if scraper == '1': services['scraper'] = {'image': 'bs-ads-scraper:' + tag}
 with open(path, 'w') as f:
     json.dump({'services': services, 'volumes': {'bootstrap-cache': {'name': 'bs-ads_bootstrap-cache-' + tag}}}, f)
@@ -205,6 +241,10 @@ if (!app()->environment('production') || config('app.debug') ||
     exit(1);
 }
 $app->make('encrypter'); // Reject missing or invalid keys before maintenance mode.
+if (config('queue.default') !== 'database' || (int) config('queue.connections.database.retry_after') <= 950) {
+    fwrite(STDERR, "Refusing to deploy: database queue retry_after must exceed the 950 second worker timeout.\n");
+    exit(1);
+}
 $token = config('services.ad_library.token');
 if ($token) echo 'SCRAPER_SERVICE_TOKEN='.$token.PHP_EOL;
 PHP
@@ -213,6 +253,10 @@ PHP
     install -o root -g root -m 600 "$RELEASE/scraper.next.env" "$STATE/scraper.env"
     rm -f "$RELEASE/scraper.next.env"
 
+    if (( QUEUE_LAYOUT_UPGRADE )); then
+        step 'Previewing BS Ads queue compaction'
+        artisan operations:compact-queues >"$RELEASE/queue-preview.json"
+    fi
     step 'Pausing only BS Ads for cutover'
     MAINTENANCE=1
     dc exec -T --user 33:33 php php artisan down --retry=60
@@ -224,6 +268,12 @@ PHP
         artisan migrate --force --no-interaction
         artisan db:seed --class=AlertTemplateSeeder --force --no-interaction
         artisan shopify:replay-privacy
+        if (( QUEUE_LAYOUT_UPGRADE )); then
+            step 'Compacting BS Ads heartbeat and incremental queues'
+            if ! artisan operations:compact-queues --apply >"$RELEASE/queue-compaction.json"; then
+                die "Queue compaction failed. See $RELEASE/queue-compaction.json."
+            fi
+        fi
     fi
     step 'Refreshing caches and starting BS Ads'
     artisan config:cache
@@ -234,8 +284,13 @@ PHP
     if [[ "$MODE" == restart ]]; then dc up -d --no-deps --force-recreate php web scraper
     else dc up -d --no-deps php web scraper; fi
     dc exec -T --user 33:33 php php artisan up
-    local start_workers=(worker-core worker-audits worker-library worker-analysis scheduler)
-    if [[ "$MODE" == deploy ]] || grep -Fxq worker-shopify <<<"$services"; then start_workers+=(worker-shopify); fi
+    local start_workers=("${WORKERS[@]}" "${NEW_WORKERS[@]}")
+    READY_WORKERS=
+    if [[ "$MODE" == deploy ]] || grep -Fxq worker-collection <<<"$services"; then
+        for service in "${start_workers[@]}"; do
+            if [[ "$service" == worker-* ]]; then READY_WORKERS+=" $service"; fi
+        done
+    fi
     dc up -d --no-deps --force-recreate "${start_workers[@]}"
     step 'Checking web, database, cache, scheduler and queues'
     local deadline=$((SECONDS + 120))

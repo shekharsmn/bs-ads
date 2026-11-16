@@ -38,9 +38,14 @@ class OperationsReadinessService
 
         $database = $this->probe(fn () => DB::selectOne('select 1'));
         $cache = $this->probe(fn () => Cache::put('operations:readiness-probe', now()->timestamp, 10));
+        $startupWarnings = $warnings;
         $heartbeats = ['scheduler' => $this->heartbeat('operations:scheduler-heartbeat')];
+        $queues = [];
         foreach (config('workloads.queues', []) as $name => $queue) {
             $heartbeats[$name] = $this->heartbeat('operations:queue-heartbeat:'.$name, $queue);
+            if ($database['ok'] && ! array_key_exists($queue, $queues)) {
+                $queues[$queue] = $this->queueDepth($queue);
+            }
         }
         if ($production || config('workloads.heartbeats_required')) {
             foreach ($heartbeats as $name => $heartbeat) {
@@ -49,14 +54,48 @@ class OperationsReadinessService
                 }
             }
         }
+        $workers = [];
+        if ($production && $cache['ok']) {
+            $services = ['core', 'collection', 'reports', 'audits', 'library', 'analysis'];
+            if (config('workloads.queues.shopify')) {
+                $services[] = 'shopify';
+            }
+            foreach ($services as $service) {
+                $worker = 'worker-'.$service;
+                $lastPoll = Cache::get('operations:worker-poll:'.$worker);
+                $workers[$worker] = [
+                    'last_polled_at' => $lastPoll ? gmdate(DATE_ATOM, $lastPoll) : null,
+                    'poll_stale' => ! $lastPoll || now()->timestamp - $lastPoll > 1020,
+                ];
+            }
+        }
 
-        return ['status' => $warnings === [] && $database['ok'] && $cache['ok'] ? 'ready' : 'warning', 'warnings' => $warnings, 'checks' => ['database' => $database, 'cache' => $cache, 'heartbeats' => $heartbeats], 'checked_at' => now()->toIso8601String()];
+        return ['status' => $warnings === [] && $database['ok'] && $cache['ok'] ? 'ready' : 'warning', 'warnings' => $warnings, 'startup_warnings' => $startupWarnings, 'checks' => ['database' => $database, 'cache' => $cache, 'heartbeats' => $heartbeats, 'queues' => $queues, 'workers' => $workers], 'checked_at' => now()->toIso8601String()];
+    }
+
+    private function queueDepth(string $queue): ?array
+    {
+        try {
+            $jobs = app(WorkloadQueue::class)->jobs();
+            if ($jobs === null) {
+                return null;
+            }
+            $now = now()->timestamp;
+            $retryAfter = (int) config('queue.connections.'.config('queue.default').'.retry_after');
+            $stats = $jobs->where('queue', $queue)
+                ->selectRaw('count(*) as depth, min(case when available_at <= ? and (reserved_at is null or reserved_at <= ?) then available_at end) as oldest_ready', [$now, $now - $retryAfter])
+                ->first();
+
+            return ['depth' => (int) $stats->depth, 'oldest_ready_seconds' => $stats->oldest_ready === null ? null : $now - (int) $stats->oldest_ready];
+        } catch (\Throwable $error) {
+            return ['error' => $error::class];
+        }
     }
 
     private function heartbeat(string $key, ?string $queue = null): array
     {
         $value = Cache::get($key);
-        $age = $value ? now()->diffInSeconds($value) : null;
+        $age = $value ? now()->diffInSeconds($value, true) : null;
 
         return ['queue' => $queue, 'last_seen_at' => $value, 'age_seconds' => $age, 'fresh' => $age !== null && $age <= config('workloads.heartbeat_ttl_seconds')];
     }
@@ -64,9 +103,7 @@ class OperationsReadinessService
     private function probe(callable $callback): array
     {
         try {
-            $callback();
-
-            return ['ok' => true];
+            return ['ok' => $callback() !== false];
         } catch (\Throwable $error) {
             return ['ok' => false, 'error' => $error::class];
         }
