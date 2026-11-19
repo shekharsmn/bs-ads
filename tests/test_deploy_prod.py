@@ -20,8 +20,18 @@ args = sys.argv[1:]
 with open(os.environ['CALLS'], 'a') as log:
     log.write(json.dumps([name, *args]) + '\n')
 if name == 'git':
-    if 'rev-parse' in args:
-        print('abcdef123456' if any(x.startswith('--short') for x in args) else 'a' * 40)
+    if 'symbolic-ref' in args:
+        print(os.environ.get('BRANCH', 'main'))
+        sys.exit(int(os.environ.get('DETACHED', '0')))
+    elif 'pull' in args:
+        if os.environ.get('PULL_ADVANCES'):
+            (Path(args[args.index('-C') + 1]) / '.deployment/pulled-fixture').touch()
+        sys.exit(int(os.environ.get('FAIL_PULL', '0')))
+    elif 'rev-parse' in args:
+        print('abcdef123456' if any(x.startswith('--short') for x in args) else
+              ('b' * 40 if ('FETCH_HEAD' in args and os.environ.get('AHEAD')) or
+               (os.environ.get('PULL_ADVANCES') and
+                (Path(args[args.index('-C') + 1]) / '.deployment/pulled-fixture').exists()) else 'a' * 40))
     elif 'status' in args:
         if os.environ.get('FAIL_STATUS'):
             sys.exit(2)
@@ -149,7 +159,11 @@ class DeploymentTest(unittest.TestCase):
         self.assertTrue(self.matching('artisan', 'route:cache'))
         self.assertTrue(self.matching('artisan', 'view:cache'))
         self.assertTrue(self.matching('artisan', 'up'))
-        self.assertFalse(self.matching('git', 'pull'))
+        pull = self.matching('git', 'pull')[0]
+        self.assertIn('--ff-only', pull)
+        self.assertIn('--no-rebase', pull)
+        self.assertEqual(pull[-2:], ['origin', 'main'])
+        self.assertLess(self.calls.index(pull), self.calls.index(build[0]))
         status = self.matching('git', 'status')[0]
         self.assertIn(':(exclude).deployment', status)
         self.assertEqual((self.state / 'scraper.env').read_text(), 'SCRAPER_SERVICE_TOKEN=fixture-token\n')
@@ -165,6 +179,7 @@ class DeploymentTest(unittest.TestCase):
         self.assertFalse(self.matching('docker', 'buildx'))
         self.assertFalse(self.matching('mysqldump'))
         self.assertFalse(self.matching('artisan', 'migrate'))
+        self.assertFalse(self.matching('git', 'pull'))
         self.assertTrue(self.matching('docker', 'up', '--force-recreate'))
         self.assertEqual((self.state / 'runtime.env').read_text(), 'APP_ENV=production\n')
         self.assert_isolated()
@@ -174,6 +189,20 @@ class DeploymentTest(unittest.TestCase):
         self.assertFalse(self.matching('artisan', 'down'))
         self.assertFalse(self.matching('docker', 'compose', 'stop'))
         self.assertEqual((self.state / 'compose.yaml').read_text(), 'original-compose.yaml\n')
+
+    def test_pull_failure_wrong_branch_and_local_ahead_stop_before_build_or_maintenance(self):
+        for settings in [{'FAIL_PULL': '1'}, {'BRANCH': 'feature/test'}, {'DETACHED': '1'}, {'AHEAD': '1'}]:
+            with self.subTest(settings=settings):
+                self.assertNotEqual(self.run_script(**settings), 0, self.output)
+                self.assertFalse(self.matching('docker', 'buildx'))
+                self.assertFalse(self.matching('artisan', 'down'))
+                self.log.unlink(missing_ok=True)
+
+    def test_new_revision_reloads_script_with_lock_and_pulls_once(self):
+        self.assertEqual(self.run_script(PULL_ADVANCES='1'), 0, self.output)
+        self.assertEqual(len(self.matching('git', 'pull')), 1)
+        self.assertEqual(len(list((self.state / 'releases').iterdir())), 1)
+        self.assert_isolated()
 
     def test_migration_failure_restores_previous_config_without_reversing_database(self):
         self.assertNotEqual(self.run_script(FAIL_MIGRATION='42'), 0)
