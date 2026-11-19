@@ -92,7 +92,7 @@ export default function ClientsPage() {
       <Field label="Client name"><input required value={form.name} onChange={event => setForm({ ...form, name: event.target.value })}/></Field>
       <Field label="Timezone"><input required value={form.timezone} onChange={event => setForm({ ...form, timezone: event.target.value })}/></Field>
       <Field label="Currency"><input required maxLength={3} value={form.currency} onChange={event => setForm({ ...form, currency: event.target.value.toUpperCase() })}/></Field>
-      <Field label="Objective"><select value={form.objective} onChange={event => setForm({ ...form, objective: event.target.value })}><option value="lead_gen">Lead generation</option><option value="ecommerce">Ecommerce</option><option value="both">Both</option></select></Field>
+      <Field label="Objective"><select value={form.objective} onChange={event => setForm({ ...form, objective: event.target.value })}><option value="lead_gen">Lead generation</option><option value="ecommerce">Ecommerce</option><option value="both">Lead + ecommerce</option><option value="app_installs">App installs</option></select></Field>
       <Field label="Chat visibility"><select value={form.chat_visibility} onChange={event => setForm({ ...form, chat_visibility: event.target.value })}><option value="internal">Internal</option><option value="client">Client visible</option></select></Field>
       <Field label="Google Chat webhook">
         <input

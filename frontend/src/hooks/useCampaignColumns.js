@@ -9,7 +9,7 @@ export function sanitizeCampaignColumnKeys(value, fallback) {
 
 export default function useCampaignColumns({ userId, accountId, objective }) {
   const defaults = useMemo(() => objectiveMetricKeys(objective), [objective])
-  const storageKey = userId && accountId ? `pulse:campaign-columns:${userId}:${accountId}:v1` : null
+  const storageKey = userId && accountId ? `pulse:campaign-columns:${userId}:${accountId}:${objective || 'lead_gen'}:v2` : null
   const savedKeys = useMemo(() => {
     if (!storageKey) return defaults
     try {

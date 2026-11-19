@@ -11,12 +11,14 @@ enum CanonicalMetric: string
     case Conversions = 'conversions';
     case Leads = 'leads';
     case Purchases = 'purchases';
+    case Installs = 'installs';
     case ConversionValue = 'conversion_value';
     case Ctr = 'ctr';
     case Cpc = 'cpc';
     case Cpm = 'cpm';
     case Cpa = 'cpa';
     case Cpl = 'cpl';
+    case Cpi = 'cpi';
     case ConversionRate = 'conversion_rate';
     case Roas = 'roas';
     case Frequency = 'frequency';

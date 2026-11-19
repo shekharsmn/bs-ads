@@ -17,11 +17,13 @@ const metrics = [
   { value: 'conversions', label: 'Conversions', help: 'All mapped conversion actions.' },
   { value: 'leads', label: 'Leads', help: 'Mapped lead conversion actions.' },
   { value: 'purchases', label: 'Purchases', help: 'Mapped purchase conversion actions.' },
+  { value: 'installs', label: 'Installs', help: 'Attributed app installs.' },
   { value: 'ctr', label: 'CTR', help: 'Click-through rate: clicks divided by impressions.' },
   { value: 'cpc', label: 'CPC', help: 'Cost per click.' },
   { value: 'cpm', label: 'CPM', help: 'Cost per thousand impressions.' },
   { value: 'cpa', label: 'CPA', help: 'Cost per conversion.' },
   { value: 'cpl', label: 'CPL', help: 'Cost per lead: spend divided by leads.' },
+  { value: 'cpi', label: 'CPI', help: 'Cost per install: spend divided by installs.' },
   { value: 'conversion_rate', label: 'Conversion rate', help: 'Conversions as a percentage of clicks.' },
   { value: 'roas', label: 'ROAS', help: 'Conversion value divided by spend.' },
   { value: 'frequency', label: 'Frequency', help: 'Average times each person saw an ad.' },
@@ -54,7 +56,7 @@ function thresholdUnit(value, metricValue) {
   if (value === 'data_stale') return 'hours'
   if (['ctr', 'conversion_rate'].includes(metricValue)) return '%'
   if (metricValue === 'roas') return '×'
-  if (['spend', 'cpc', 'cpm', 'cpa', 'cpl'].includes(metricValue)) return 'account currency'
+  if (['spend', 'cpc', 'cpm', 'cpa', 'cpl', 'cpi'].includes(metricValue)) return 'account currency'
   return metric(metricValue).label
 }
 

@@ -55,6 +55,7 @@ export default function ConnectionsPage() {
     setSelection(Object.fromEntries(accounts.filter(account => account.selectable).map(account => [account.external_id, {
       selected: false,
       client_id: account.assigned_client?.id || fallbackClientId,
+      reporting_objective: account.reporting_objective || '',
     }])))
   }, [])
 
@@ -345,10 +346,11 @@ export default function ConnectionsPage() {
           {!hasClients && <div className="account-picker-empty">Create a client before assigning discovered ad accounts.</div>}
           <div className="account-picker-list">{accounts.map(account => account.is_manager
             ? <div className="manager-account" key={account.external_id} style={{ paddingLeft: `${12 + account.level * 18}px` }}><span>Manager</span><strong>{account.name}</strong><small>{account.external_id}</small></div>
-            : <label className="discovered-account" key={account.external_id} style={{ paddingLeft: `${12 + account.level * 18}px` }}>
+            : <label className="discovered-account has-objective" key={account.external_id} style={{ paddingLeft: `${12 + account.level * 18}px` }}>
               <input type="checkbox" disabled={!hasClients} checked={Boolean(selection[account.external_id]?.selected)} onChange={event => updateSelection(account.external_id, { selected: event.target.checked })}/>
               <span><strong>{account.name}</strong><small>{account.external_id} · {account.currency || 'uses client currency'} · {account.timezone || 'uses client timezone'}{account.assigned_client ? ` · assigned to ${account.assigned_client.name}` : ''}</small></span>
               <select disabled={!hasClients || connection.scope === 'client'} aria-label={`Client for ${account.name}`} value={selection[account.external_id]?.client_id || ''} onChange={event => updateSelection(account.external_id, { client_id: event.target.value })}><option value="">Choose client</option>{assignableClients.map(client => <option key={client.id} value={client.id}>{client.name}</option>)}</select>
+              <select disabled={!hasClients} aria-label={`Reporting objective for ${account.name}`} value={selection[account.external_id]?.reporting_objective || ''} onChange={event => updateSelection(account.external_id, { reporting_objective: event.target.value })}><option value="">Inherit client objective</option><option value="lead_gen">Lead generation</option><option value="ecommerce">Ecommerce</option><option value="both">Lead + ecommerce</option><option value="app_installs">App installs</option></select>
             </label>
           )}</div>
         </div>}

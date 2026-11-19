@@ -12,6 +12,7 @@ export function buildAccountAssignmentPayload(accounts, selection, clients) {
         name: account.name,
         currency: account.currency || client.currency,
         timezone: account.timezone || client.timezone,
+        reporting_objective: selection[account.external_id]?.reporting_objective || null,
       }
     })
 }

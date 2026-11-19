@@ -12,7 +12,7 @@ use Illuminate\Support\Facades\Queue;
 
 final class WorkloadQueue
 {
-    public function collection(int $account, ?string $start = null, ?string $end = null, ?string $refresh = null, bool $sync = false): bool
+    public function collection(int $account, ?string $start = null, ?string $end = null, ?string $refresh = null, bool $sync = false, bool $rerunIfActive = false): bool
     {
         $job = new CollectAccountMetricsJob($account, $start, $end, $refresh);
         $jobs = $this->jobs();
@@ -29,15 +29,21 @@ final class WorkloadQueue
         }
 
         try {
-            $enqueue = function () use ($job, $jobs, $account, $start, $end, $sync) {
+            $enqueue = function () use ($job, $jobs, $account, $start, $end, $sync, $rerunIfActive) {
                 if (! AdAccount::query()->whereKey($account)->lockForUpdate()->first(['id'])) {
                     return false;
                 }
                 if ($jobs !== null) {
-                    foreach ($jobs->where('queue', $job->queue)->where('payload->displayName', CollectAccountMetricsJob::class)->select('payload')->cursor() as $row) {
+                    foreach ($jobs->where('queue', $job->queue)->where('payload->displayName', CollectAccountMetricsJob::class)->select('payload', 'reserved_at')->cursor() as $row) {
                         $fields = self::fields($row->payload, CollectAccountMetricsJob::class);
                         if (($fields['adAccountId'] ?? null) === $account &&
                             ($sync || ($fields['startDate'] === $start && $fields['endDate'] === $end))) {
+                            $retryAfter = (int) config('queue.connections.'.config('queue.default').'.retry_after');
+                            $activelyReserved = $row->reserved_at !== null && (int) $row->reserved_at > now()->timestamp - $retryAfter;
+                            if ($rerunIfActive && ! $sync && $activelyReserved) {
+                                continue;
+                            }
+
                             return false;
                         }
                     }

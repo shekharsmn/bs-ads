@@ -3,9 +3,9 @@ import { Area, CartesianGrid, ComposedChart, Line, ResponsiveContainer, Tooltip,
 
 const metricColors = {
   spend: '#2563eb', leads: '#059669', cpl: '#d97706', ctr: '#7c3aed', purchases: '#0f766e',
-  cpp: '#ea580c', conversion_value: '#e11d48', roas: '#9333ea',
+  cpp: '#ea580c', installs: '#0891b2', cpi: '#c2410c', conversion_value: '#e11d48', roas: '#9333ea',
 }
-const moneyMetrics = new Set(['spend', 'cpl', 'cpp', 'conversion_value'])
+const moneyMetrics = new Set(['spend', 'cpl', 'cpp', 'cpi', 'conversion_value'])
 
 export default function PerformanceTrendChart({ series = [], currency, columns, ariaLabel = `${currency} daily performance trend`, className = '' }) {
   const [hiddenMetrics, setHiddenMetrics] = useState([])

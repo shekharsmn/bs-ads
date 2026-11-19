@@ -7,7 +7,7 @@ import PerformanceDrilldownPage from './PerformanceDrilldownPage'
 
 vi.mock('../api/client', () => ({ api: {
   getPerformanceAccounts: vi.fn(), getPerformanceAccount: vi.fn(), getAccountPerformance: vi.fn(), getAccountCampaigns: vi.fn(),
-  refreshPerformanceAccount: vi.fn(),
+  refreshPerformanceAccount: vi.fn(), updateAdAccount: vi.fn(),
   getCampaignAdGroups: vi.fn(), getAdGroupAds: vi.fn(), getAdPerformance: vi.fn(),
   getAlerts: vi.fn(), getDataQualityIssues: vi.fn(), getReportSchedules: vi.fn(), getReports: vi.fn(), getConnections: vi.fn(),
 } }))
@@ -40,6 +40,7 @@ describe('performance drilldown', () => {
     api.getPerformanceAccounts.mockResolvedValue({ data: { accounts: [account] } })
     api.getPerformanceAccount.mockResolvedValue({ data: account })
     api.refreshPerformanceAccount.mockResolvedValue({ data: { queued_account_id: 9, refresh: { available: false, available_at: new Date(Date.now() + 300_000).toISOString(), remaining_seconds: 300 } } })
+    api.updateAdAccount.mockResolvedValue({ data: { account: { ...account, reporting_objective: 'app_installs', effective_reporting_objective: 'app_installs' }, refresh: { queued: true, days: 30 } } })
     api.getAccountPerformance.mockResolvedValue({ data: { account, metrics, series } })
     api.getAccountCampaigns.mockResolvedValue({ data: { campaigns: [{ campaign: { id: 3, external_id: 'cmp_3', name: 'Launch', status: 'ACTIVE', type: 'OUTCOME_SALES' }, metrics }] } })
     api.getCampaignAdGroups.mockResolvedValue({ data: { campaign: { id: 3, external_id: 'cmp_3', name: 'Launch' }, metrics, series, ad_groups: [{ ad_group: { id: 4, external_id: 'set_4', name: 'Prospecting', status: 'ACTIVE' }, metrics }] } })
@@ -106,6 +107,25 @@ describe('performance drilldown', () => {
     expect(api.getAdPerformance).toHaveBeenCalledWith('9', '3', '4', '5', { start_date: '2026-09-28', end_date: '2026-10-27' })
   })
 
+  it('uses app-install defaults and updates the account objective', async () => {
+    const appAccount = { ...account, reporting_objective: 'app_installs', effective_reporting_objective: 'app_installs' }
+    const appMetrics = { spend: 240, installs: 12, cpi: 20, clicks: 80, ctr: 1.5 }
+    api.getPerformanceAccount.mockResolvedValue({ data: appAccount })
+    api.getAccountPerformance.mockResolvedValue({ data: { account: appAccount, metrics: appMetrics, series: [{ date: '2026-10-27', metrics: appMetrics }] } })
+    api.getAccountCampaigns.mockResolvedValue({ data: { campaigns: [{ campaign: { id: 3, external_id: 'cmp_3', name: 'Install Launch', status: 'ACTIVE', type: 'OUTCOME_APP_PROMOTION' }, metrics: appMetrics }] } })
+
+    renderPath('/command-center/clients/7/ad-accounts/9?range=30d&start_date=2026-09-28&end_date=2026-10-27')
+
+    expect(await screen.findByRole('columnheader', { name: 'Installs' })).toBeInTheDocument()
+    expect(screen.getByRole('columnheader', { name: 'CPI' })).toBeInTheDocument()
+    expect(screen.queryByRole('columnheader', { name: 'Leads' })).not.toBeInTheDocument()
+    expect(screen.getByLabelText('Account daily performance trend')).toHaveAttribute('data-columns', 'spend,installs,cpi,clicks,ctr')
+    expect(screen.getByLabelText('Reporting objective')).toHaveValue('app_installs')
+
+    fireEvent.change(screen.getByLabelText('Reporting objective'), { target: { value: '' } })
+    await waitFor(() => expect(api.updateAdAccount).toHaveBeenCalledWith('9', { reporting_objective: null }))
+  })
+
   it('opens account operations in place while preserving the performance period', async () => {
     renderPath('/command-center/clients/7/ad-accounts/9?range=custom&start_date=2026-09-01&end_date=2026-09-18')
     expect(await screen.findByRole('tab', { name: 'Details' })).toHaveAttribute('aria-selected', 'true')
@@ -163,7 +183,7 @@ describe('performance drilldown', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Columns' }))
     fireEvent.click(screen.getByRole('button', { name: /Revenue/ }))
     fireEvent.click(screen.getByRole('button', { name: 'Move Revenue up' }))
-    expect(JSON.parse(localStorage.getItem('pulse:campaign-columns:44:9:v1'))).toEqual(['spend', 'leads', 'cpl', 'conversion_value', 'ctr'])
+    expect(JSON.parse(localStorage.getItem('pulse:campaign-columns:44:9:lead_gen:v2'))).toEqual(['spend', 'leads', 'cpl', 'conversion_value', 'ctr'])
     expect(screen.getByRole('columnheader', { name: 'Revenue' })).toBeInTheDocument()
 
     cleanup()
@@ -174,7 +194,7 @@ describe('performance drilldown', () => {
   })
 
   it('ignores invalid saved columns and never allows the final metric to be hidden', async () => {
-    localStorage.setItem('pulse:campaign-columns:44:9:v1', JSON.stringify(['retired_metric']))
+    localStorage.setItem('pulse:campaign-columns:44:9:lead_gen:v2', JSON.stringify(['retired_metric']))
     renderPath('/command-center/clients/7/ad-accounts/9?range=30d&start_date=2026-09-28&end_date=2026-10-27')
     await screen.findByText('Launch')
     fireEvent.click(screen.getByRole('button', { name: 'Columns' }))
@@ -183,6 +203,6 @@ describe('performance drilldown', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Hide CTR' }))
     expect(screen.getByRole('button', { name: 'Hide Spend' })).toBeDisabled()
     fireEvent.click(screen.getByRole('button', { name: 'Restore defaults' }))
-    expect(localStorage.getItem('pulse:campaign-columns:44:9:v1')).toBeNull()
+    expect(localStorage.getItem('pulse:campaign-columns:44:9:lead_gen:v2')).toBeNull()
   })
 })

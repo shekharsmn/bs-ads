@@ -3,7 +3,7 @@ import { Activity, AlertTriangle, CalendarDays, CheckCircle2, Clock3, Printer, S
 import { useParams } from 'react-router-dom'
 import client from '../api/client'
 
-const METRICS = [['spend', 'Spend'], ['leads', 'Leads'], ['purchases', 'Purchases'], ['conversions', 'Conversions'], ['roas', 'ROAS'], ['cpl', 'Cost per lead']]
+const METRICS = [['spend', 'Spend'], ['leads', 'Leads'], ['purchases', 'Purchases'], ['installs', 'Installs'], ['conversions', 'Conversions'], ['roas', 'ROAS'], ['cpl', 'Cost per lead'], ['cpi', 'Cost per install']]
 
 function formatNumber(value, maximumFractionDigits = 2) {
   if (value == null || value === '') return '—'
@@ -24,7 +24,7 @@ function formatMoney(value, currency) {
 }
 
 function formatMetric(key, value, currency) {
-  if (['spend', 'cpl', 'cpa', 'cpc', 'cpm', 'conversion_value'].includes(key)) return formatMoney(value, currency)
+  if (['spend', 'cpl', 'cpi', 'cpa', 'cpc', 'cpm', 'conversion_value'].includes(key)) return formatMoney(value, currency)
   if (key === 'roas') return value == null ? '—' : `${formatNumber(value)}×`
   if (['ctr', 'conversion_rate', 'frequency'].includes(key)) return value == null ? '—' : `${formatNumber(value)}%`
   return formatNumber(value, 1)

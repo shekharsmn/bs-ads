@@ -31,6 +31,7 @@ class PerformanceHierarchyApiTest extends TestCase
         $queue = app(WorkloadQueue::class);
         $this->assertTrue($queue->collection($account->id));
         DB::table('jobs')->where('queue', 'collection')->update(['reserved_at' => now()->timestamp]);
+        $this->assertTrue($queue->collection($account->id, refresh: 'objective-change', rerunIfActive: true));
         $this->travel(2)->hours();
         $this->assertFalse($queue->collection($account->id, refresh: 'manual'));
         $this->assertTrue($queue->collection($account->id, '2026-10-01', '2026-10-05'));
@@ -144,6 +145,32 @@ class PerformanceHierarchyApiTest extends TestCase
             ->assertJsonPath('accounts.0.result_type', 'leads')
             ->assertJsonPath('accounts.0.windows.yesterday.results', 10)
             ->assertJsonPath('accounts.0.windows.yesterday.cpr', 25);
+    }
+
+    public function test_command_center_reports_installs_and_cpi_for_app_accounts(): void
+    {
+        CarbonImmutable::setTestNow('2026-10-28 12:00:00');
+        [$user, $account] = $this->accountFixture('Asia/Kolkata');
+        $account->update(['reporting_objective' => 'app_installs']);
+        $campaign = Campaign::create(['ad_account_id' => $account->id, 'external_id' => 'app', 'name' => 'App campaign', 'type' => 'OUTCOME_APP_PROMOTION']);
+        MetricSnapshot::create([
+            'ad_account_id' => $account->id, 'campaign_id' => $campaign->id, 'scope' => 'campaign', 'scope_key' => 'campaign:'.$campaign->id,
+            'metric_date' => '2026-10-27', 'currency' => 'INR', 'spend' => 240, 'installs' => 12, 'conversions' => 12, 'collected_at' => now(),
+        ]);
+        MetricSnapshot::create([
+            'ad_account_id' => $account->id, 'scope' => 'account', 'scope_key' => 'account:'.$account->id,
+            'metric_date' => '2026-10-27', 'currency' => 'INR', 'spend' => 240, 'installs' => 12, 'conversions' => 12, 'collected_at' => now(),
+        ]);
+
+        $this->actingAs($user)->getJson('/api/performance/accounts')->assertOk()
+            ->assertJsonPath('accounts.0.result_type', 'installs')
+            ->assertJsonPath('accounts.0.windows.yesterday.results', 12)
+            ->assertJsonPath('accounts.0.windows.yesterday.cpr', 20);
+
+        $this->actingAs($user)->getJson('/api/performance/accounts/'.$account->id.'/overview?start_date=2026-10-27&end_date=2026-10-27')->assertOk()
+            ->assertJsonPath('account.effective_reporting_objective', 'app_installs')
+            ->assertJsonPath('metrics.installs', 12)
+            ->assertJsonPath('metrics.cpi', 20);
     }
 
     public function test_command_center_refresh_forces_collection_for_accessible_active_accounts(): void

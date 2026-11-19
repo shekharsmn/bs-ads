@@ -25,6 +25,8 @@ export const performanceMetricColumns = [
   { key: 'cpl', label: 'CPL', format: formatMoney },
   { key: 'purchases', label: 'Purchases', format: formatNumber },
   { key: 'cpp', label: 'CPP', format: formatMoney },
+  { key: 'installs', label: 'Installs', format: formatNumber },
+  { key: 'cpi', label: 'CPI', format: formatMoney },
   { key: 'conversion_value', label: 'Revenue', format: formatMoney },
   { key: 'roas', label: 'ROAS', format: formatRoas },
 ]
@@ -34,11 +36,24 @@ export const performanceMetricColumnMap = new Map(performanceMetricColumns.map(c
 export function objectiveMetricKeys(objective) {
   if (objective === 'ecommerce') return ['spend', 'purchases', 'cpp', 'conversion_value', 'roas']
   if (objective === 'both') return ['spend', 'leads', 'cpl', 'purchases', 'conversion_value', 'roas']
+  if (objective === 'app_installs') return ['spend', 'installs', 'cpi', 'clicks', 'ctr']
   return ['spend', 'leads', 'cpl', 'ctr']
+}
+
+export function objectiveMetricKeysFor(objectives) {
+  const values = [...new Set((objectives || []).filter(Boolean))]
+  if (values.length === 0) return objectiveMetricKeys('lead_gen')
+  if (values.length === 1) return objectiveMetricKeys(values[0])
+  const desired = new Set(values.flatMap(objectiveMetricKeys))
+  return performanceMetricColumns.map(column => column.key).filter(key => desired.has(key))
+}
+
+export function reportingObjectiveLabel(objective) {
+  return ({ lead_gen: 'Lead generation', ecommerce: 'Ecommerce', both: 'Lead + ecommerce', app_installs: 'App installs' })[objective] || 'Lead generation'
 }
 
 export function metricColumnsFor(keys) {
   return keys.map(key => performanceMetricColumnMap.get(key)).filter(Boolean)
 }
 
-export const metricColumns = metricColumnsFor(['spend', 'leads', 'cpl', 'purchases', 'cpp', 'roas'])
+export const metricColumns = metricColumnsFor(['spend', 'leads', 'cpl', 'purchases', 'cpp', 'installs', 'cpi', 'roas'])

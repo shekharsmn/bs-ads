@@ -69,6 +69,13 @@ class ArchitectureFoundationsTest extends TestCase
         $this->assertSame(config('workloads.queues.notifications'), (new SendNotificationJob(1))->queue);
     }
 
+    public function test_database_queue_retry_window_exceeds_every_workload_timeout(): void
+    {
+        $longestTimeout = collect(config('workloads.policies'))->max(fn (array $policy) => (int) ($policy['timeout'] ?? 0));
+
+        $this->assertGreaterThan($longestTimeout + 50, (int) config('queue.connections.database.retry_after'));
+    }
+
     public function test_readiness_command_is_warning_only(): void
     {
         $this->artisan('operations:readiness')->assertSuccessful();

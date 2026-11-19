@@ -3,7 +3,7 @@ import { ArrowUpRight, Clock3, DatabaseZap } from 'lucide-react'
 import { Link } from 'react-router-dom'
 import { api } from '../api/client'
 import { accountPerformancePath } from '../lib/performanceRoutes'
-import { metricColumnsFor, objectiveMetricKeys } from '../lib/performance'
+import { metricColumnsFor, objectiveMetricKeysFor } from '../lib/performance'
 import { AsyncStateNotice } from './ui/AsyncState'
 import PerformancePeriodControl from './PerformancePeriodControl'
 import PerformanceTrendChart from './PerformanceTrendChart'
@@ -14,9 +14,10 @@ export default function ClientPerformanceOverview({ client, clientId, range, dat
     queryFn: () => api.getClientPerformance(clientId, dates).then(response => response.data),
     enabled: Boolean(client && clientId && dates.start_date && dates.end_date),
   })
-  const metricColumns = metricColumnsFor(objectiveMetricKeys(client?.objective))
   const accounts = performance.data?.accounts || []
   const groups = performance.data?.currency_groups || []
+  const objectives = accounts.map(row => row.account.effective_reporting_objective || client?.objective)
+  const metricColumns = metricColumnsFor(objectiveMetricKeysFor(objectives.length ? objectives : [client?.objective]))
   const accountQuery = new URLSearchParams({ range, ...dates }).toString()
 
   return <section className="client-performance-overview">
@@ -26,7 +27,7 @@ export default function ClientPerformanceOverview({ client, clientId, range, dat
     {groups.length > 1 && <div className="client-currency-notice"><DatabaseZap size={14}/><span>Metrics are separated by currency so spend, cost, and revenue are never blended.</span></div>}
     <div className="client-currency-summaries">
       {groups.map(group => <article className="client-currency-summary" key={group.currency}>
-        <header><div><span>{group.currency} portfolio</span><strong>{client?.objective === 'lead_gen' ? 'Lead performance' : client?.objective === 'ecommerce' ? 'Commerce performance' : 'Performance summary'}</strong></div><small className={freshnessState(group.freshness_timestamp)}><Clock3 size={12}/>{freshnessLabel(group.freshness_timestamp)}</small></header>
+        <header><div><span>{group.currency} portfolio</span><strong>{performanceTitle(accounts.filter(row => row.account.currency === group.currency).map(row => row.account.effective_reporting_objective || client?.objective))}</strong></div><small className={freshnessState(group.freshness_timestamp)}><Clock3 size={12}/>{freshnessLabel(group.freshness_timestamp)}</small></header>
         <div className="client-summary-kpis">{metricColumns.map(column => <div key={column.key}><span>{column.label}</span><strong>{column.format(group.metrics?.[column.key], group.currency)}</strong></div>)}</div>
         <PerformanceTrendChart series={group.series} currency={group.currency} columns={metricColumns}/>
       </article>)}
@@ -46,6 +47,12 @@ export default function ClientPerformanceOverview({ client, clientId, range, dat
 function freshnessState(value) {
   if (!value) return 'missing'
   return Date.now() - Date.parse(value) > 36 * 60 * 60 * 1000 ? 'stale' : 'fresh'
+}
+
+function performanceTitle(objectives) {
+  const unique = [...new Set(objectives.filter(Boolean))]
+  if (unique.length !== 1) return 'Performance summary'
+  return ({ lead_gen: 'Lead performance', ecommerce: 'Commerce performance', app_installs: 'App-install performance' })[unique[0]] || 'Performance summary'
 }
 
 function freshnessLabel(value) {

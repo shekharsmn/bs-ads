@@ -130,6 +130,7 @@ Route::middleware(['auth:sanctum', 'active', 'audit.mutations'])->group(function
     Route::post('/connections/{connection}/discover', [ConnectionController::class, 'discover'])->middleware('role:admin');
     Route::post('/connections/{connection}/accounts', [ConnectionController::class, 'assignAccount'])->middleware('role:admin');
     Route::post('/connections/{connection}/accounts/bulk', [ConnectionController::class, 'assignAccounts'])->middleware('role:admin');
+    Route::patch('/ad-accounts/{account}', [ConnectionController::class, 'updateAccount'])->middleware('role:admin,marketer');
     Route::delete('/ad-accounts/{account}', [ConnectionController::class, 'destroyAccount'])->middleware('role:admin');
     Route::get('/connections/google/redirect', [GoogleOAuthController::class, 'connectionRedirect'])->middleware('role:admin');
 

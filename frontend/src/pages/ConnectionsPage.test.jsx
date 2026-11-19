@@ -73,6 +73,7 @@ describe('discovered account assignments', () => {
       name: 'Acme Search',
       currency: 'AED',
       timezone: 'Asia/Dubai',
+      reporting_objective: null,
     }])
   })
 })

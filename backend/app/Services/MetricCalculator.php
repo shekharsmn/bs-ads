@@ -12,6 +12,7 @@ final class MetricCalculator
         $clicks = (float) ($totals['clicks'] ?? 0);
         $conversions = (float) ($totals['conversions'] ?? 0);
         $leads = (float) ($totals['leads'] ?? 0);
+        $installs = (float) ($totals['installs'] ?? 0);
         $value = (float) ($totals['conversion_value'] ?? 0);
 
         return array_merge($totals, [
@@ -20,6 +21,7 @@ final class MetricCalculator
             'cpm' => self::divide($spend * 1000, $impressions),
             'cpa' => self::divide($spend, $conversions),
             'cpl' => self::divide($spend, $leads),
+            'cpi' => self::divide($spend, $installs),
             'conversion_rate' => self::divide($conversions * 100, $clicks),
             'roas' => self::divide($value, $spend),
             'frequency' => self::divide($impressions, $reach),

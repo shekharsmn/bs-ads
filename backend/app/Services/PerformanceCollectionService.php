@@ -152,7 +152,7 @@ class PerformanceCollectionService
             foreach (array_chunk($metricRows, 500) as $chunk) {
                 MetricSnapshot::upsert($chunk, ['ad_account_id', 'scope_key', 'metric_date'], [
                     'campaign_id', 'ad_group_id', 'ad_id', 'scope', 'currency', 'spend', 'impressions', 'reach', 'clicks', 'conversions',
-                    'leads', 'purchases', 'conversion_value', 'mapping_version', 'collected_at', 'updated_at',
+                    'leads', 'purchases', 'installs', 'conversion_value', 'mapping_version', 'collected_at', 'updated_at',
                 ]);
             }
             $account->update(['last_collected_at' => $now, 'last_error' => null]);
@@ -164,7 +164,7 @@ class PerformanceCollectionService
     {
         $credentials = $account->connection->credentials;
         $client = GoogleAdsClientFactory::fromRefreshToken($credentials['refresh_token'], $account->manager_external_id ?? $credentials['login_customer_id'] ?? $account->connection->manager_external_id);
-        $query = "SELECT campaign.id, campaign.name, campaign.status, campaign.advertising_channel_type, campaign_budget.amount_micros, segments.date, metrics.cost_micros, metrics.impressions, metrics.clicks, metrics.conversions, metrics.conversions_value FROM campaign WHERE segments.date BETWEEN '$start' AND '$end' AND campaign.status != 'REMOVED'";
+        $query = "SELECT campaign.id, campaign.name, campaign.status, campaign.advertising_channel_type, campaign_budget.amount_micros, segments.date, metrics.cost_micros, metrics.impressions, metrics.clicks, metrics.conversions, metrics.conversions_value, metrics.biddable_app_install_conversions FROM campaign WHERE segments.date BETWEEN '$start' AND '$end' AND campaign.status != 'REMOVED'";
         $service = $client->getGoogleAdsServiceClient();
         $stream = $service->searchStream(SearchGoogleAdsStreamRequest::build($account->external_id, $query), ['timeoutMillis' => 45000]);
         $mappings = ConversionMapping::query()->where('client_id', $account->client_id)->where('platform', 'google')->where('active', true)->get()->keyBy('external_action');
@@ -182,13 +182,13 @@ class PerformanceCollectionService
                         continue;
                     }
                     $key = ($campaignSlice['id'] ?? '').'|'.($segmentSlice['date'] ?? '');
-                    $mapped[$key] ??= ['conversions' => 0.0, 'leads' => 0.0, 'purchases' => 0.0, 'conversion_value' => 0.0];
+                    $mapped[$key] ??= $this->emptyCanonicalMetrics();
                     $quantity = ((float) ($metricSlice['conversions'] ?? 0)) * (float) $mapping->weight;
                     $target = $mapping->canonical_metric->value;
                     if ($target !== 'conversion_value') {
                         $mapped[$key][$target] += $quantity;
                     }
-                    if (in_array($target, ['conversions', 'leads', 'purchases'], true)) {
+                    if (in_array($target, ['conversions', 'leads', 'purchases', 'installs'], true)) {
                         $mapped[$key]['conversions'] += $target === 'conversions' ? 0 : $quantity;
                     }
                     $mapped[$key]['conversion_value'] += ((float) ($metricSlice['conversionsValue'] ?? 0)) * (float) $mapping->weight;
@@ -202,8 +202,7 @@ class PerformanceCollectionService
                 $metrics = json_decode($row->getMetrics()->serializeToJsonString(), true) ?: [];
                 $segments = json_decode($row->getSegments()->serializeToJsonString(), true) ?: [];
                 $budget = json_decode($row->getCampaignBudget()->serializeToJsonString(), true) ?: [];
-                $canonical = $mapped[(string) ($campaign['id'] ?? '').'|'.($segments['date'] ?? '')]
-                    ?? $this->googleFallbackMetrics($account, $metrics);
+                $canonical = $this->googleCanonicalMetrics($account, $metrics, $mapped[(string) ($campaign['id'] ?? '').'|'.($segments['date'] ?? '')] ?? null);
                 $rows[] = [
                     'campaign_external_id' => (string) ($campaign['id'] ?? ''),
                     'campaign_name' => (string) ($campaign['name'] ?? 'Untitled campaign'),
@@ -247,13 +246,13 @@ class PerformanceCollectionService
         $version = $this->mappingVersion($account);
 
         return array_map(function ($row) use ($mappings, $version) {
-            $canonical = ['conversions' => 0.0, 'leads' => 0.0, 'purchases' => 0.0, 'conversion_value' => 0.0];
+            $canonical = $this->emptyCanonicalMetrics();
             foreach ($row['actions'] ?? [] as $action) {
                 $mapping = $mappings->get($action['action_type'] ?? '');
                 if ($mapping && $mapping->canonical_metric->value !== 'conversion_value') {
                     $quantity = ((float) ($action['value'] ?? 0)) * (float) $mapping->weight;
                     $canonical[$mapping->canonical_metric->value] += $quantity;
-                    if (in_array($mapping->canonical_metric->value, ['leads', 'purchases'], true)) {
+                    if (in_array($mapping->canonical_metric->value, ['leads', 'purchases', 'installs'], true)) {
                         $canonical['conversions'] += $quantity;
                     }
                 }
@@ -264,9 +263,12 @@ class PerformanceCollectionService
                     $canonical['conversion_value'] += ((float) ($action['value'] ?? 0)) * (float) $mapping->weight;
                 }
             }
+            $fallback = $this->metaFallbackMetrics($row);
             if ($mappings->isEmpty()) {
-                $canonical = $this->metaFallbackMetrics($row);
-                $canonical['conversions'] = $canonical['leads'] + $canonical['purchases'];
+                $canonical = $fallback;
+            } elseif ($canonical['installs'] <= 0 && $fallback['installs'] > 0) {
+                $canonical['installs'] = $fallback['installs'];
+                $canonical['conversions'] += $fallback['installs'];
             }
 
             return [
@@ -295,7 +297,7 @@ class PerformanceCollectionService
             ? 'ad_group_ad.ad.id, ad_group_ad.ad.name, ad_group_ad.status, ad_group_ad.ad.type, '
             : 'ad_group.status, ad_group.type, ';
         $from = $level === 'ad' ? 'ad_group_ad' : 'ad_group';
-        $query = "SELECT campaign.id, ad_group.id, ad_group.name, {$entityFields}segments.date, metrics.cost_micros, metrics.impressions, metrics.clicks, metrics.conversions, metrics.conversions_value FROM {$from} WHERE segments.date BETWEEN '$start' AND '$end'";
+        $query = "SELECT campaign.id, ad_group.id, ad_group.name, {$entityFields}segments.date, metrics.cost_micros, metrics.impressions, metrics.clicks, metrics.conversions, metrics.conversions_value, metrics.biddable_app_install_conversions FROM {$from} WHERE segments.date BETWEEN '$start' AND '$end'";
         $mappings = ConversionMapping::query()->where('client_id', $account->client_id)->where('platform', 'google')->where('active', true)->get()->keyBy('external_action');
         $version = $this->mappingVersion($account);
         $mapped = [];
@@ -313,13 +315,13 @@ class PerformanceCollectionService
                         continue;
                     }
                     $key = implode('|', array_filter([(string) ($campaign['id'] ?? ''), (string) ($group['id'] ?? ''), $level === 'ad' ? (string) ($ad['id'] ?? '') : null, $segments['date'] ?? ''], fn ($value) => $value !== null));
-                    $mapped[$key] ??= ['conversions' => 0.0, 'leads' => 0.0, 'purchases' => 0.0, 'conversion_value' => 0.0];
+                    $mapped[$key] ??= $this->emptyCanonicalMetrics();
                     $quantity = ((float) ($metrics['conversions'] ?? 0)) * (float) $mapping->weight;
                     $target = $mapping->canonical_metric->value;
                     if ($target !== 'conversion_value') {
                         $mapped[$key][$target] += $quantity;
                     }
-                    if (in_array($target, ['leads', 'purchases'], true)) {
+                    if (in_array($target, ['leads', 'purchases', 'installs'], true)) {
                         $mapped[$key]['conversions'] += $quantity;
                     }
                     $mapped[$key]['conversion_value'] += ((float) ($metrics['conversionsValue'] ?? 0)) * (float) $mapping->weight;
@@ -337,7 +339,7 @@ class PerformanceCollectionService
                 $metrics = json_decode($row->getMetrics()->serializeToJsonString(), true) ?: [];
                 $segments = json_decode($row->getSegments()->serializeToJsonString(), true) ?: [];
                 $key = implode('|', array_filter([(string) ($campaign['id'] ?? ''), (string) ($group['id'] ?? ''), $level === 'ad' ? (string) ($ad['id'] ?? '') : null, $segments['date'] ?? ''], fn ($value) => $value !== null));
-                $canonical = $mapped[$key] ?? $this->googleFallbackMetrics($account, $metrics);
+                $canonical = $this->googleCanonicalMetrics($account, $metrics, $mapped[$key] ?? null);
                 $base = [
                     'campaign_external_id' => (string) ($campaign['id'] ?? ''),
                     'ad_group_external_id' => (string) ($group['id'] ?? ''),
@@ -400,13 +402,13 @@ class PerformanceCollectionService
         $version = $this->mappingVersion($account);
 
         return array_map(function (array $row) use ($level, $mappings, $metadata, $version): array {
-            $canonical = ['conversions' => 0.0, 'leads' => 0.0, 'purchases' => 0.0, 'conversion_value' => 0.0];
+            $canonical = $this->emptyCanonicalMetrics();
             foreach ($row['actions'] ?? [] as $action) {
                 $mapping = $mappings->get($action['action_type'] ?? '');
                 if ($mapping && $mapping->canonical_metric->value !== 'conversion_value') {
                     $quantity = ((float) ($action['value'] ?? 0)) * (float) $mapping->weight;
                     $canonical[$mapping->canonical_metric->value] += $quantity;
-                    if (in_array($mapping->canonical_metric->value, ['leads', 'purchases'], true)) {
+                    if (in_array($mapping->canonical_metric->value, ['leads', 'purchases', 'installs'], true)) {
                         $canonical['conversions'] += $quantity;
                     }
                 }
@@ -417,9 +419,12 @@ class PerformanceCollectionService
                     $canonical['conversion_value'] += ((float) ($action['value'] ?? 0)) * (float) $mapping->weight;
                 }
             }
+            $fallback = $this->metaFallbackMetrics($row);
             if ($mappings->isEmpty()) {
-                $canonical = $this->metaFallbackMetrics($row);
-                $canonical['conversions'] = $canonical['leads'] + $canonical['purchases'];
+                $canonical = $fallback;
+            } elseif ($canonical['installs'] <= 0 && $fallback['installs'] > 0) {
+                $canonical['installs'] = $fallback['installs'];
+                $canonical['conversions'] += $fallback['installs'];
             }
             $entityId = (string) ($level === 'ad' ? ($row['ad_id'] ?? '') : ($row['adset_id'] ?? ''));
             $entity = $metadata[$entityId] ?? [];
@@ -486,17 +491,20 @@ class PerformanceCollectionService
             'onsite_conversion.lead',
             'onsite_web_lead',
         ];
+        $installTypes = ['omni_app_install', 'mobile_app_install', 'app_install'];
         $isSales = str_contains($objective, 'SALES') || str_contains($objective, 'PURCHASE');
         $isLead = str_contains($objective, 'LEAD');
         $actions = $row['actions'] ?? [];
         $actionValues = $row['action_values'] ?? [];
         $purchases = $isSales || ! $isLead ? $this->firstMetaActionValue($actions, $purchaseTypes) : 0.0;
         $leads = $isLead || ! $isSales ? $this->firstMetaActionValue($actions, $leadTypes) : 0.0;
+        $installs = $this->largestMetaActionValue($actions, $installTypes);
 
         return [
-            'conversions' => 0.0,
+            'conversions' => $leads + $purchases + $installs,
             'leads' => $leads,
             'purchases' => $purchases,
+            'installs' => $installs,
             'conversion_value' => $purchases > 0 ? $this->firstMetaActionValue($actionValues, $purchaseTypes) : 0.0,
         ];
     }
@@ -504,15 +512,37 @@ class PerformanceCollectionService
     private function googleFallbackMetrics(AdAccount $account, array $metrics): array
     {
         $conversions = (float) ($metrics['conversions'] ?? 0);
-        $sales = in_array(strtolower((string) $account->client?->objective), ['ecommerce', 'sales', 'purchase'], true)
-            || ((float) ($metrics['conversionsValue'] ?? 0) > 0 && strtolower((string) $account->client?->objective) === 'both');
+        $objective = $account->effective_reporting_objective;
+        $sales = in_array($objective, ['ecommerce', 'sales', 'purchase'], true)
+            || ((float) ($metrics['conversionsValue'] ?? 0) > 0 && $objective === 'both');
+        $appInstalls = $objective === 'app_installs';
 
         return [
             'conversions' => $conversions,
-            'leads' => $sales ? 0.0 : $conversions,
+            'leads' => $sales || $appInstalls ? 0.0 : $conversions,
             'purchases' => $sales ? $conversions : 0.0,
+            'installs' => (float) ($metrics['biddableAppInstallConversions'] ?? 0),
             'conversion_value' => (float) ($metrics['conversionsValue'] ?? 0),
         ];
+    }
+
+    private function googleCanonicalMetrics(AdAccount $account, array $metrics, ?array $mapped): array
+    {
+        $fallback = $this->googleFallbackMetrics($account, $metrics);
+        if ($mapped === null) {
+            return $fallback;
+        }
+
+        if (($mapped['installs'] ?? 0) <= 0) {
+            $mapped['installs'] = $fallback['installs'];
+        }
+
+        return $mapped;
+    }
+
+    private function emptyCanonicalMetrics(): array
+    {
+        return ['conversions' => 0.0, 'leads' => 0.0, 'purchases' => 0.0, 'installs' => 0.0, 'conversion_value' => 0.0];
     }
 
     private function firstMetaActionValue(array $actions, array $preferredTypes): float
@@ -528,6 +558,13 @@ class PerformanceCollectionService
         }
 
         return 0.0;
+    }
+
+    private function largestMetaActionValue(array $actions, array $types): float
+    {
+        return (float) collect($actions)
+            ->filter(fn ($action) => in_array((string) ($action['action_type'] ?? ''), $types, true))
+            ->max(fn ($action) => (float) ($action['value'] ?? 0));
     }
 
     private function mappingVersion(AdAccount $account): int
