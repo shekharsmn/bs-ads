@@ -4,11 +4,11 @@ namespace App\Http\Controllers\Api;
 
 use App\Enums\ReportingObjective;
 use App\Http\Controllers\Controller;
-use App\Jobs\CollectAccountMetricsJob;
 use App\Models\Client;
 use App\Models\User;
 use App\Services\ClientAccess;
 use App\Services\GoogleChatNotifier;
+use App\Services\WorkloadQueue;
 use Carbon\CarbonImmutable;
 use Illuminate\Http\Request;
 use Illuminate\Support\Str;
@@ -47,7 +47,7 @@ class ClientController extends Controller
         if ($oldObjective !== (string) $client->objective) {
             $client->adAccounts()->whereNull('reporting_objective')->get()->each(function ($account): void {
                 $end = CarbonImmutable::now($account->timezone)->subDay();
-                CollectAccountMetricsJob::dispatch($account->id, $end->subDays(29)->toDateString(), $end->toDateString(), (string) Str::uuid());
+                app(WorkloadQueue::class)->collection($account->id, $end->subDays(29)->toDateString(), $end->toDateString(), (string) Str::uuid(), rerunIfActive: true);
             });
         }
 

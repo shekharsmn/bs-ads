@@ -4,17 +4,16 @@ namespace App\Http\Controllers\Api;
 
 use App\Enums\ReportingObjective;
 use App\Http\Controllers\Controller;
-use App\Services\WorkloadQueue;
 use App\Models\AdAccount;
 use App\Models\Client;
 use App\Models\PlatformConnection;
 use App\Services\ClientAccess;
 use App\Services\GoogleAdsAccountDiscovery;
+use App\Services\WorkloadQueue;
 use Carbon\CarbonImmutable;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
-use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
 use Illuminate\Validation\Rules\Enum;
 use RuntimeException;
@@ -202,15 +201,16 @@ class ConnectionController extends Controller
         ]);
         $account->update($data);
         $account->refresh()->load('client:id,name,objective');
-        $queued = $oldObjective !== $account->effective_reporting_objective;
-        if ($queued) {
+        $refreshRequired = $oldObjective !== $account->effective_reporting_objective;
+        $queued = false;
+        if ($refreshRequired) {
             $end = CarbonImmutable::now($account->timezone)->subDay();
-            CollectAccountMetricsJob::dispatch($account->id, $end->subDays(29)->toDateString(), $end->toDateString(), (string) Str::uuid());
+            $queued = app(WorkloadQueue::class)->collection($account->id, $end->subDays(29)->toDateString(), $end->toDateString(), rerunIfActive: true);
         }
 
         return [
             'account' => $account,
-            'refresh' => ['queued' => $queued, 'days' => $queued ? 30 : 0],
+            'refresh' => ['queued' => $queued, 'joined_existing' => $refreshRequired && ! $queued, 'days' => $refreshRequired ? 30 : 0],
         ];
     }
 

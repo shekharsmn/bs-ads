@@ -10,6 +10,7 @@ use App\Models\PlatformConnection;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Queue;
 use Tests\TestCase;
@@ -220,6 +221,28 @@ class OperationsApiTest extends TestCase
 
         Queue::assertPushed(CollectAccountMetricsJob::class, fn (CollectAccountMetricsJob $job) => $job->adAccountId === $account->id
             && $job->startDate === '2026-10-20' && $job->endDate === '2026-11-18');
+    }
+
+    public function test_objective_changes_join_waiting_recollections_but_follow_an_active_one(): void
+    {
+        config(['queue.default' => 'database', 'queue.connections.database.retry_after' => 960]);
+        $this->travelTo(Carbon::parse('2026-11-19 12:00:00', 'UTC'));
+        $marketer = User::factory()->create(['role' => 'marketer']);
+        $client = Client::create(['name' => 'Objective queue', 'slug' => 'objective-queue', 'objective' => 'lead_gen']);
+        $client->users()->attach($marketer);
+        $connection = PlatformConnection::create(['platform' => 'meta', 'name' => 'Meta', 'scope' => 'agency', 'credentials' => []]);
+        $account = AdAccount::create(['client_id' => $client->id, 'platform_connection_id' => $connection->id, 'platform' => 'meta', 'external_id' => 'act-objective-queue', 'name' => 'App', 'currency' => 'USD', 'timezone' => 'UTC']);
+
+        $this->actingAs($marketer)->patchJson('/api/ad-accounts/'.$account->id, ['reporting_objective' => 'app_installs'])
+            ->assertOk()->assertJsonPath('refresh.queued', true)->assertJsonPath('refresh.joined_existing', false);
+        DB::table('jobs')->where('queue', 'collection')->update(['reserved_at' => now()->timestamp]);
+
+        $this->actingAs($marketer)->patchJson('/api/ad-accounts/'.$account->id, ['reporting_objective' => 'ecommerce'])
+            ->assertOk()->assertJsonPath('refresh.queued', true)->assertJsonPath('refresh.joined_existing', false);
+        $this->actingAs($marketer)->patchJson('/api/ad-accounts/'.$account->id, ['reporting_objective' => 'both'])
+            ->assertOk()->assertJsonPath('refresh.queued', false)->assertJsonPath('refresh.joined_existing', true);
+
+        $this->assertSame(2, DB::table('jobs')->where('queue', 'collection')->count());
     }
 
     public function test_client_objective_change_refreshes_only_inheriting_accounts(): void

@@ -31,6 +31,7 @@ class PerformanceHierarchyApiTest extends TestCase
         $queue = app(WorkloadQueue::class);
         $this->assertTrue($queue->collection($account->id));
         DB::table('jobs')->where('queue', 'collection')->update(['reserved_at' => now()->timestamp]);
+        $this->assertTrue($queue->collection($account->id, refresh: 'objective-change', rerunIfActive: true));
         $this->travel(2)->hours();
         $this->assertFalse($queue->collection($account->id, refresh: 'manual'));
         $this->assertTrue($queue->collection($account->id, '2026-10-01', '2026-10-05'));
