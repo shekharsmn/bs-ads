@@ -9,6 +9,7 @@ use App\Models\MetricSnapshot;
 use App\Models\PlatformConnection;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Queue;
 use Tests\TestCase;
@@ -185,6 +186,7 @@ class OperationsApiTest extends TestCase
                 'name' => 'Acme Search',
                 'currency' => 'AED',
                 'timezone' => 'Asia/Calcutta',
+                'reporting_objective' => 'app_installs',
             ]],
         ])->assertCreated()->assertJsonPath('accounts.0.manager_external_id', '9999999999');
 
@@ -194,8 +196,47 @@ class OperationsApiTest extends TestCase
             'external_id' => '1234567890',
             'manager_external_id' => '9999999999',
             'timezone' => 'Asia/Calcutta',
+            'reporting_objective' => 'app_installs',
         ]);
         Queue::assertPushed(CollectAccountMetricsJob::class, fn (CollectAccountMetricsJob $job) => $job->adAccountId === AdAccount::query()->where('external_id', '1234567890')->value('id'));
+    }
+
+    public function test_manager_can_override_an_account_objective_and_queue_a_thirty_day_refresh(): void
+    {
+        Queue::fake();
+        $this->travelTo(Carbon::parse('2026-11-19 12:00:00', 'UTC'));
+        $marketer = User::factory()->create(['role' => 'marketer']);
+        $client = Client::create(['name' => 'App Co', 'slug' => 'app-co', 'objective' => 'lead_gen']);
+        $client->users()->attach($marketer);
+        $connection = PlatformConnection::create(['platform' => 'meta', 'name' => 'Meta', 'scope' => 'agency', 'credentials' => []]);
+        $account = AdAccount::create(['client_id' => $client->id, 'platform_connection_id' => $connection->id, 'platform' => 'meta', 'external_id' => 'act-app', 'name' => 'App', 'currency' => 'USD', 'timezone' => 'UTC']);
+
+        $this->actingAs($marketer)->patchJson('/api/ad-accounts/'.$account->id, ['reporting_objective' => 'app_installs'])
+            ->assertOk()
+            ->assertJsonPath('account.reporting_objective', 'app_installs')
+            ->assertJsonPath('account.effective_reporting_objective', 'app_installs')
+            ->assertJsonPath('refresh.queued', true)
+            ->assertJsonPath('refresh.days', 30);
+
+        Queue::assertPushed(CollectAccountMetricsJob::class, fn (CollectAccountMetricsJob $job) => $job->adAccountId === $account->id
+            && $job->startDate === '2026-10-20' && $job->endDate === '2026-11-18');
+    }
+
+    public function test_client_objective_change_refreshes_only_inheriting_accounts(): void
+    {
+        Queue::fake();
+        $this->travelTo(Carbon::parse('2026-11-19 12:00:00', 'UTC'));
+        $admin = User::factory()->create(['role' => 'admin']);
+        $client = Client::create(['name' => 'Mixed', 'slug' => 'mixed-objectives', 'objective' => 'lead_gen']);
+        $connection = PlatformConnection::create(['platform' => 'google', 'name' => 'Google', 'scope' => 'agency', 'credentials' => []]);
+        $inheriting = AdAccount::create(['client_id' => $client->id, 'platform_connection_id' => $connection->id, 'platform' => 'google', 'external_id' => 'inherit', 'name' => 'Inherit', 'currency' => 'USD', 'timezone' => 'UTC']);
+        $overridden = AdAccount::create(['client_id' => $client->id, 'platform_connection_id' => $connection->id, 'platform' => 'google', 'external_id' => 'override', 'name' => 'Override', 'currency' => 'USD', 'timezone' => 'UTC', 'reporting_objective' => 'ecommerce']);
+
+        $this->actingAs($admin)->putJson('/api/clients/'.$client->id, ['objective' => 'app_installs'])
+            ->assertOk()->assertJsonPath('objective', 'app_installs');
+
+        Queue::assertPushed(CollectAccountMetricsJob::class, fn (CollectAccountMetricsJob $job) => $job->adAccountId === $inheriting->id);
+        Queue::assertNotPushed(CollectAccountMetricsJob::class, fn (CollectAccountMetricsJob $job) => $job->adAccountId === $overridden->id);
     }
 
     public function test_agency_connection_only_exposes_accounts_for_assigned_clients(): void

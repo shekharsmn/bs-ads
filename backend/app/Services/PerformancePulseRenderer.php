@@ -25,12 +25,13 @@ class PerformancePulseRenderer
         $start = $ranges->min(fn (array $range) => $range['start']);
         $end = $ranges->max(fn (array $range) => $range['end']);
         $scopeReports = $this->selectedScopes($pulse)->map(function (array $scope) use ($pulse, $ranges, $start, $end) {
+            $effectiveObjective = $pulse->adAccount->reporting_objective?->value ?? $pulse->client->objective;
             $campaignRows = $this->campaignRows($pulse, $start, $end, $scope['campaign_id']);
-            $accountRows = $scope['type'] === 'account' && $campaignRows->isEmpty() && $pulse->client->objective !== 'both'
+            $accountRows = $scope['type'] === 'account' && $campaignRows->isEmpty() && $effectiveObjective !== 'both'
                 ? $this->accountRows($pulse, $start, $end)
                 : collect();
-            $classifications = $this->classifications($pulse, $campaignRows);
-            $objectives = $pulse->client->objective === 'both' ? ['lead_gen', 'ecommerce'] : [$pulse->client->objective];
+            $classifications = $this->classifications($effectiveObjective, $campaignRows);
+            $objectives = $effectiveObjective === 'both' ? ['lead_gen', 'ecommerce'] : [$effectiveObjective];
             $sections = [];
             $missing = [];
 
@@ -55,7 +56,7 @@ class PerformancePulseRenderer
                     ];
                 }
                 $spend = collect($periods)->sum(fn (array $period) => $period['metrics']['spend']);
-                if ($pulse->client->objective !== 'both' || $spend > 0) {
+                if ($effectiveObjective !== 'both' || $spend > 0) {
                     $sections[] = ['objective' => $objective, 'periods' => $periods];
                 }
             }
@@ -140,7 +141,7 @@ class PerformancePulseRenderer
             ->get([
                 'metric_snapshots.campaign_id', 'campaigns.name as campaign_name', 'campaigns.type as campaign_type', 'metric_snapshots.metric_date',
                 DB::raw('SUM(metric_snapshots.spend) as spend'), DB::raw('SUM(metric_snapshots.leads) as leads'),
-                DB::raw('SUM(metric_snapshots.purchases) as purchases'), DB::raw('SUM(metric_snapshots.conversion_value) as conversion_value'),
+                DB::raw('SUM(metric_snapshots.purchases) as purchases'), DB::raw('SUM(metric_snapshots.installs) as installs'), DB::raw('SUM(metric_snapshots.conversion_value) as conversion_value'),
                 DB::raw('MAX(metric_snapshots.collected_at) as freshness'),
             ]);
     }
@@ -150,14 +151,14 @@ class PerformancePulseRenderer
         return DB::table('metric_snapshots')->where('ad_account_id', $pulse->ad_account_id)->where('scope', 'account')
             ->whereDate('metric_date', '>=', $start)->whereDate('metric_date', '<=', $end)->groupBy('metric_date')->get([
                 'metric_date', DB::raw('NULL as campaign_id'), DB::raw("'Account total' as campaign_name"), DB::raw('NULL as campaign_type'),
-                DB::raw('SUM(spend) as spend'), DB::raw('SUM(leads) as leads'), DB::raw('SUM(purchases) as purchases'),
+                DB::raw('SUM(spend) as spend'), DB::raw('SUM(leads) as leads'), DB::raw('SUM(purchases) as purchases'), DB::raw('SUM(installs) as installs'),
                 DB::raw('SUM(conversion_value) as conversion_value'), DB::raw('MAX(collected_at) as freshness'),
             ]);
     }
 
-    private function classifications(PerformancePulse $pulse, Collection $rows): array
+    private function classifications(string $effectiveObjective, Collection $rows): array
     {
-        if ($pulse->client->objective !== 'both') {
+        if ($effectiveObjective !== 'both') {
             return [];
         }
 
@@ -166,6 +167,7 @@ class PerformancePulseRenderer
                 'campaign_type' => $campaignRows->first()->campaign_type,
                 'leads' => $campaignRows->sum('leads'),
                 'purchases' => $campaignRows->sum('purchases'),
+                'installs' => $campaignRows->sum('installs'),
                 'conversion_value' => $campaignRows->sum('conversion_value'),
             ];
 
@@ -178,11 +180,13 @@ class PerformancePulseRenderer
         $spend = (float) $rows->sum('spend');
         $leads = (float) $rows->sum('leads');
         $purchases = (float) $rows->sum('purchases');
+        $installs = (float) $rows->sum('installs');
         $revenue = (float) $rows->sum('conversion_value');
 
         return [
-            'spend' => $spend, 'leads' => $leads, 'purchases' => $purchases, 'revenue' => $revenue,
+            'spend' => $spend, 'leads' => $leads, 'purchases' => $purchases, 'installs' => $installs, 'revenue' => $revenue,
             'cpl' => $leads > 0 ? round($spend / $leads, 2) : 0,
+            'cpi' => $installs > 0 ? round($spend / $installs, 2) : 0,
             'roas' => $spend > 0 ? round($revenue / $spend, 2) : 0,
         ];
     }
@@ -207,7 +211,11 @@ class PerformancePulseRenderer
             foreach ($sections as $section) {
                 if (count($sections) > 1) {
                     $lines[] = '';
-                    $lines[] = '*'.($section['objective'] === 'ecommerce' ? 'E-commerce' : 'Lead generation').'*';
+                    $lines[] = '*'.match ($section['objective']) {
+                        'ecommerce' => 'E-commerce',
+                        'app_installs' => 'App installs',
+                        default => 'Lead generation',
+                    }.'*';
                 }
                 foreach (array_values($section['periods']) as $index => $period) {
                     $lines[] = '';
@@ -250,6 +258,9 @@ class PerformancePulseRenderer
     {
         if ($objective === 'ecommerce') {
             return ['Spend: '.$this->money($metrics['spend'], $currency), 'Orders: '.$this->number($metrics['purchases']), 'Revenue: '.$this->money($metrics['revenue'], $currency), 'ROAS: '.number_format($metrics['roas'], 2, '.', '')];
+        }
+        if ($objective === 'app_installs') {
+            return ['Installs: '.$this->number($metrics['installs']), 'CPI: '.($metrics['installs'] > 0 ? $this->money($metrics['cpi'], $currency) : '0'), 'Spend: '.$this->money($metrics['spend'], $currency)];
         }
 
         return ['Leads: '.$this->number($metrics['leads']), 'CPL: '.($metrics['leads'] > 0 ? $this->money($metrics['cpl'], $currency) : '0'), 'Spend: '.$this->money($metrics['spend'], $currency)];

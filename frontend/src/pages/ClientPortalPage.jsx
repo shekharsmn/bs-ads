@@ -7,7 +7,7 @@ import PerformancePeriodControl from '../components/PerformancePeriodControl'
 import PerformanceTrendChart from '../components/PerformanceTrendChart'
 import { AsyncStateNotice } from '../components/ui/AsyncState'
 import { useAuth } from '../context/AuthContext'
-import { completedDateRange, metricColumnsFor, objectiveMetricKeys } from '../lib/performance'
+import { completedDateRange, metricColumnsFor, objectiveMetricKeysFor } from '../lib/performance'
 
 export default function ClientPortalPage({ preview = false }) {
   const { clientId } = useParams(); const navigate = useNavigate(); const { logout } = useAuth(); const [search, setSearch] = useSearchParams()
@@ -18,7 +18,8 @@ export default function ClientPortalPage({ preview = false }) {
   const preset = completedDateRange(Number(range === 'custom' ? 30 : range.replace('d', '')), client?.timezone)
   const dates = { start_date: search.get('start_date') || preset.start_date, end_date: search.get('end_date') || preset.end_date }
   const performance = useQuery({ queryKey: ['portal-client-performance', clientId, dates], queryFn: () => api.getPortalClientPerformance(clientId, dates).then(response => response.data), enabled: Boolean(client) })
-  const columns = metricColumnsFor(objectiveMetricKeys(client?.objective))
+  const accountObjectives = (performance.data?.accounts || []).map(row => row.account.effective_reporting_objective || client?.objective)
+  const columns = metricColumnsFor(objectiveMetricKeysFor(accountObjectives.length ? accountObjectives : [client?.objective]))
   const query = new URLSearchParams({ range, ...dates }).toString()
   const clientBase = preview ? '/portal/preview/clients' : '/portal/clients'
   const updatePeriod = next => setSearch(current => { const merged = new URLSearchParams(current); Object.entries(next).forEach(([key, value]) => value ? merged.set(key, value) : merged.delete(key)); return merged }, { replace: true })

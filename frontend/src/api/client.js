@@ -67,6 +67,7 @@ export const api = {
   discoverAccounts: (id) => client.post(`/api/connections/${id}/discover`, undefined, { timeout: 60_000 }),
   assignDiscoveredAccount: (id, data) => client.post(`/api/connections/${id}/accounts`, data),
   assignDiscoveredAccounts: (id, accounts) => client.post(`/api/connections/${id}/accounts/bulk`, { accounts }),
+  updateAdAccount: (id, data) => client.patch(`/api/ad-accounts/${id}`, data),
   deleteAdAccount: (id) => client.delete(`/api/ad-accounts/${id}`),
   googleConnectionUrl: (data) => `/api/connections/google/redirect?${new URLSearchParams(Object.fromEntries(Object.entries(data).filter(([, value]) => value !== '' && value != null)))}`,
   getPerformanceAccounts: () => client.get('/api/performance/accounts'),

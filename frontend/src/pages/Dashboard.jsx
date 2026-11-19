@@ -75,9 +75,10 @@ function formatCountdown(seconds) {
 }
 
 function AccountResultRow({ account, onOpen }) {
-  const type = account.result_type === 'sales' ? 'sales' : 'leads'
+  const type = ['sales', 'installs'].includes(account.result_type) ? account.result_type : 'leads'
+  const typeLabel = type === 'sales' ? 'Sales' : type === 'installs' ? 'App installs' : 'Leads'
   return <tr tabIndex={0} onClick={onOpen} onKeyDown={event => ['Enter', ' '].includes(event.key) && onOpen()}>
-    <td className="sticky-column"><span className="account-identity"><strong>{account.client?.name}</strong><small>{account.account_count || 1} {(account.account_count || 1) === 1 ? 'account' : 'accounts'} · {account.currency}</small></span></td><td><span className={`platform-badge ${account.platform}`}>{account.platform === 'google' ? 'Google Ads' : 'Meta'}</span></td><td><span className={`result-type ${type}`}>{type === 'sales' ? 'Sales' : 'Leads'}</span></td>
+    <td className="sticky-column"><span className="account-identity"><strong>{account.client?.name}</strong><small>{account.account_count || 1} {(account.account_count || 1) === 1 ? 'account' : 'accounts'} · {account.currency}</small></span></td><td><span className={`platform-badge ${account.platform}`}>{account.platform === 'google' ? 'Google Ads' : 'Meta'}</span></td><td><span className={`result-type ${type}`}>{typeLabel}</span></td>
     {WINDOWS.flatMap(([key]) => { const metrics = account.windows?.[key] || {}; return [<td key={`${key}-result`} className="numeric-cell">{formatNumber(metrics.results)}</td>, <td key={`${key}-cpr`} className="numeric-cell">{formatMoney(metrics.cpr, account.currency)}</td>, <td key={`${key}-spend`} className="numeric-cell period-spend-cell">{formatMoney(metrics.spend, account.currency)}</td>] })}<td><ArrowUpRight size={14}/></td>
   </tr>
 }

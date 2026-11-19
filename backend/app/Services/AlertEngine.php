@@ -113,7 +113,7 @@ class AlertEngine
     private function aggregate(Collection $rows): array
     {
         $base = [];
-        foreach (['spend', 'impressions', 'reach', 'clicks', 'conversions', 'leads', 'purchases', 'conversion_value'] as $key) {
+        foreach (['spend', 'impressions', 'reach', 'clicks', 'conversions', 'leads', 'purchases', 'installs', 'conversion_value'] as $key) {
             $base[$key] = (float) $rows->sum($key);
         }
 

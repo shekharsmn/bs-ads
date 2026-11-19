@@ -25,9 +25,9 @@ function formatPercent(value) {
   return value === null || value === undefined ? '—' : `${formatNumber(value)}%`
 }
 
-const MONEY_METRICS = new Set(['spend', 'conversion_value', 'cpc', 'cpm', 'cpa', 'cpl'])
+const MONEY_METRICS = new Set(['spend', 'conversion_value', 'cpc', 'cpm', 'cpa', 'cpl', 'cpi'])
 const PERCENT_METRICS = new Set(['ctr', 'conversion_rate'])
-const METRIC_LABELS = { cpc: 'CPC', cpm: 'CPM', cpa: 'CPA', cpl: 'CPL', ctr: 'CTR', roas: 'ROAS', conversion_rate: 'conversion rate', conversion_value: 'conversion value' }
+const METRIC_LABELS = { cpc: 'CPC', cpm: 'CPM', cpa: 'CPA', cpl: 'CPL', cpi: 'CPI', installs: 'installs', ctr: 'CTR', roas: 'ROAS', conversion_rate: 'conversion rate', conversion_value: 'conversion value' }
 
 function metricLabel(metric) {
   return METRIC_LABELS[metric] || String(metric || 'value').replaceAll('_', ' ')

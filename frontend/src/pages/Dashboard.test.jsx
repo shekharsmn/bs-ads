@@ -50,6 +50,13 @@ describe('account-first command center', () => {
     expect(await screen.findByText('Account detail')).toBeInTheDocument()
   })
 
+  it('labels install accounts with installs as their result type', async () => {
+    api.getPerformanceAccounts.mockResolvedValue({ data: { accounts: [{ ...account, result_type: 'installs' }], refresh: { available: true, available_at: null, remaining_seconds: 0 } } })
+    renderPage()
+    expect(await screen.findByText('App installs')).toBeInTheDocument()
+    expect(screen.queryByText('Sales')).not.toBeInTheDocument()
+  })
+
   it('queues a forced collection and shows refresh progress', async () => {
     api.getPerformanceAccounts
       .mockResolvedValueOnce({ data: { accounts: [account], refresh: { available: true, available_at: null, remaining_seconds: 0 } } })

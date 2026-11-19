@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers\Api;
 
+use App\Enums\ReportingObjective;
 use App\Http\Controllers\Controller;
 use App\Jobs\CollectAccountMetricsJob;
 use App\Models\AdAccount;
@@ -9,10 +10,13 @@ use App\Models\Client;
 use App\Models\PlatformConnection;
 use App\Services\ClientAccess;
 use App\Services\GoogleAdsAccountDiscovery;
+use Carbon\CarbonImmutable;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
+use Illuminate\Validation\Rules\Enum;
 use RuntimeException;
 use Throwable;
 
@@ -44,8 +48,8 @@ class ConnectionController extends Controller
             ->when($filters['status'] ?? null, fn ($q, $value) => $q->where('status', $value))
             ->with([
                 'client:id,name',
-                'adAccounts' => fn ($q) => $q->whereIn('client_id', $clientIds)->select('id', 'client_id', 'platform_connection_id', 'external_id', 'manager_external_id', 'name', 'currency', 'timezone', 'status'),
-                'adAccounts.client:id,name',
+                'adAccounts' => fn ($q) => $q->whereIn('client_id', $clientIds)->select('id', 'client_id', 'platform_connection_id', 'external_id', 'manager_external_id', 'name', 'currency', 'timezone', 'status', 'reporting_objective'),
+                'adAccounts.client:id,name,objective',
             ])
             ->withCount(['adAccounts' => fn ($q) => $q->whereIn('client_id', $clientIds)])
             ->orderBy('platform')
@@ -110,11 +114,13 @@ class ConnectionController extends Controller
         abort_unless($request->user()->isAdmin(), 403);
         try {
             $accounts = $connection->platform->value === 'google' ? $googleDiscovery->discover($connection) : $this->discoverMeta($connection);
-            $assigned = $connection->adAccounts()->with('client:id,name')->get()->keyBy('external_id');
+            $assigned = $connection->adAccounts()->with('client:id,name,objective')->get()->keyBy('external_id');
             $accounts = array_map(function (array $account) use ($assigned): array {
                 $existing = $assigned->get($account['external_id']);
                 $account['assigned_account_id'] = $existing?->id;
                 $account['assigned_client'] = $existing?->client?->only(['id', 'name']);
+                $account['reporting_objective'] = $existing?->reporting_objective?->value;
+                $account['effective_reporting_objective'] = $existing?->effective_reporting_objective;
 
                 return $account;
             }, $accounts);
@@ -131,7 +137,7 @@ class ConnectionController extends Controller
     public function assignAccount(Request $request, PlatformConnection $connection)
     {
         abort_unless($request->user()->isAdmin(), 403);
-        $data = $request->validate(['client_id' => 'required|exists:clients,id', 'external_id' => 'required|string', 'manager_external_id' => 'nullable|string', 'name' => 'required|string', 'currency' => 'required|string|size:3', 'timezone' => 'required|timezone:all_with_bc', 'monthly_budget' => 'nullable|numeric|min:0']);
+        $data = $request->validate(['client_id' => 'required|exists:clients,id', 'external_id' => 'required|string', 'manager_external_id' => 'nullable|string', 'name' => 'required|string', 'currency' => 'required|string|size:3', 'timezone' => 'required|timezone:all_with_bc', 'reporting_objective' => ['nullable', new Enum(ReportingObjective::class)], 'monthly_budget' => 'nullable|numeric|min:0']);
         $this->ensureClientAssignment($connection, (int) $data['client_id']);
         $account = AdAccount::updateOrCreate(['platform_connection_id' => $connection->id, 'external_id' => $data['external_id']], $data + ['platform' => $connection->platform->value, 'status' => 'active']);
         CollectAccountMetricsJob::dispatch($account->id);
@@ -150,6 +156,7 @@ class ConnectionController extends Controller
             'accounts.*.name' => 'required|string|max:255',
             'accounts.*.currency' => 'required|string|size:3',
             'accounts.*.timezone' => 'required|timezone:all_with_bc',
+            'accounts.*.reporting_objective' => ['nullable', new Enum(ReportingObjective::class)],
             'accounts.*.monthly_budget' => 'nullable|numeric|min:0',
         ]);
         foreach ($data['accounts'] as $account) {
@@ -183,6 +190,28 @@ class ConnectionController extends Controller
         $account->delete();
 
         return response()->noContent();
+    }
+
+    public function updateAccount(Request $request, AdAccount $account)
+    {
+        ClientAccess::authorize($request->user(), $account->client_id, true);
+        $account->loadMissing('client:id,name,objective');
+        $oldObjective = $account->effective_reporting_objective;
+        $data = $request->validate([
+            'reporting_objective' => ['present', 'nullable', new Enum(ReportingObjective::class)],
+        ]);
+        $account->update($data);
+        $account->refresh()->load('client:id,name,objective');
+        $queued = $oldObjective !== $account->effective_reporting_objective;
+        if ($queued) {
+            $end = CarbonImmutable::now($account->timezone)->subDay();
+            CollectAccountMetricsJob::dispatch($account->id, $end->subDays(29)->toDateString(), $end->toDateString(), (string) Str::uuid());
+        }
+
+        return [
+            'account' => $account,
+            'refresh' => ['queued' => $queued, 'days' => $queued ? 30 : 0],
+        ];
     }
 
     private function ensureClientAssignment(PlatformConnection $connection, int $clientId): void

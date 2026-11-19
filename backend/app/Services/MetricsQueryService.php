@@ -9,7 +9,7 @@ use Illuminate\Support\Facades\DB;
 
 class MetricsQueryService
 {
-    private const SUM_COLUMNS = ['spend', 'impressions', 'reach', 'clicks', 'conversions', 'leads', 'purchases', 'conversion_value'];
+    private const SUM_COLUMNS = ['spend', 'impressions', 'reach', 'clicks', 'conversions', 'leads', 'purchases', 'installs', 'conversion_value'];
 
     public function summary(array $filters): array
     {

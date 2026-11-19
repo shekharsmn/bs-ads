@@ -2,9 +2,9 @@
 
 namespace App\Services;
 
+use App\Models\Ad;
 use App\Models\AdAccount;
 use App\Models\AdGroup;
-use App\Models\Ad;
 use App\Models\Campaign;
 use App\Models\Client;
 use App\Models\ClientPortalAccountScope;
@@ -15,7 +15,7 @@ use Illuminate\Support\Facades\DB;
 
 class PerformanceReadService
 {
-    private const SUM_COLUMNS = ['spend', 'impressions', 'reach', 'clicks', 'conversions', 'leads', 'purchases', 'conversion_value'];
+    private const SUM_COLUMNS = ['spend', 'impressions', 'reach', 'clicks', 'conversions', 'leads', 'purchases', 'installs', 'conversion_value'];
 
     public function __construct(private readonly PerformanceObjectiveClassifier $objectives) {}
 
@@ -31,7 +31,7 @@ class PerformanceReadService
                 $first = $platformAccounts->first();
                 $classifiedRows = $platformAccounts->flatMap(fn (AdAccount $account) => $this->commandCenterRows($account));
                 $thirtyDaySpend = $classifiedRows->groupBy('result_type')->map->sum('spend');
-                $resultType = $this->objectives->winning($thirtyDaySpend, (string) $first->client?->objective);
+                $resultType = $this->objectives->winning($thirtyDaySpend, $first->effective_reporting_objective);
                 $windows = collect(['yesterday' => 1, 'last_7_days' => 7, 'last_30_days' => 30])
                     ->mapWithKeys(function (int $days, string $key) use ($classifiedRows, $resultType) {
                         $rows = $classifiedRows->where('result_type', $resultType)->filter(fn (array $row) => $row['days_ago'] < $days);
@@ -82,11 +82,16 @@ class PerformanceReadService
             ->reject(fn ($row) => $campaignDates->contains(CarbonImmutable::parse($row->metric_date)->toDateString()));
 
         return $campaignRows->concat($accountRows)->map(function ($row) use ($account, $yesterday): array {
-            $resultType = $this->objectives->classify($row, (string) $account->client?->objective);
+            $resultType = $this->objectives->classify($row, $account->effective_reporting_objective);
             $leads = (float) ($row->leads ?? 0);
             $purchases = (float) ($row->purchases ?? 0);
-            $results = $resultType === 'sales' ? $purchases : $leads;
-            if ($results <= 0 && $leads <= 0 && $purchases <= 0) {
+            $installs = (float) ($row->installs ?? 0);
+            $results = match ($resultType) {
+                'sales' => $purchases,
+                'installs' => $installs,
+                default => $leads,
+            };
+            if ($results <= 0 && $leads <= 0 && $purchases <= 0 && $installs <= 0) {
                 $results = (float) ($row->conversions ?? 0);
             }
 
@@ -148,13 +153,17 @@ class PerformanceReadService
         $seriesRows = collect();
         $accountRows = collect($scopes)->map(function (ClientPortalAccountScope $scope) use ($accounts, $start, $end, $summaryRows, $seriesRows) {
             $account = $accounts->get($scope->ad_account_id);
-            if (! $account) return null;
+            if (! $account) {
+                return null;
+            }
             $campaignIds = $scope->campaignIds();
             $sourceScope = $campaignIds === null ? 'account' : 'campaign';
             $summary = $this->aggregateScope($account->id, $sourceScope, $start, $end, [], $campaignIds)->first();
             $daily = $this->aggregateScope($account->id, $sourceScope, $start, $end, ['metric_snapshots.metric_date'], $campaignIds)
                 ->orderBy('metric_snapshots.metric_date')->get();
-            if ($summary) $summaryRows->push((object) [...(array) $summary, 'currency' => $account->currency]);
+            if ($summary) {
+                $summaryRows->push((object) [...(array) $summary, 'currency' => $account->currency]);
+            }
             $daily->each(fn ($row) => $seriesRows->push((object) [...(array) $row, 'currency' => $account->currency]));
 
             return [
@@ -365,7 +374,7 @@ class PerformanceReadService
 
     private function accountPayload(AdAccount $account): array
     {
-        return $account->only(['id', 'client_id', 'external_id', 'name', 'platform', 'currency', 'timezone', 'status']) + [
+        return $account->only(['id', 'client_id', 'external_id', 'name', 'platform', 'currency', 'timezone', 'status', 'reporting_objective', 'effective_reporting_objective']) + [
             'client' => $account->client?->only(['id', 'name', 'objective']),
         ];
     }

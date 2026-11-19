@@ -1,4 +1,4 @@
-import { useMutation, useQuery } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useState } from 'react'
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { AlertTriangle, ArrowLeft, DatabaseZap, ExternalLink, FileText, HeartPulse, LayoutDashboard, RefreshCw } from 'lucide-react'
@@ -11,7 +11,7 @@ import { ScopedAlerts, ScopedConnections, ScopedDataHealth, ScopedReports } from
 import { AsyncStateNotice } from '../components/ui/AsyncState'
 import { useAuth } from '../context/AuthContext'
 import useCampaignColumns from '../hooks/useCampaignColumns'
-import { completedPeriodRange, formatMoney, formatNumber, formatRoas, metricColumns, metricColumnsFor, objectiveMetricKeys } from '../lib/performance'
+import { completedPeriodRange, metricColumnsFor, objectiveMetricKeys, reportingObjectiveLabel } from '../lib/performance'
 import { adPlatformEntityUrl, adPlatformLabel } from '../lib/adPlatformDeepLinks'
 import { accountPerformancePath, adGroupPerformancePath, adPerformancePath, campaignPerformancePath, commandCenterPath } from '../lib/performanceRoutes'
 
@@ -28,13 +28,16 @@ export default function PerformanceDrilldownPage() {
   const [search, setSearch] = useSearchParams()
   const navigate = useNavigate()
   const { user } = useAuth()
+  const queryClient = useQueryClient()
   const [refreshPolling, setRefreshPolling] = useState(false)
   const [refreshOverrideAvailableAt, setRefreshOverrideAvailableAt] = useState(null)
   const [countdownClock, setCountdownClock] = useState(() => Date.now())
   const accountQuery = useQuery({ queryKey: ['performance-account', accountId], queryFn: () => api.getPerformanceAccount(accountId).then(response => response.data), enabled: Boolean(accountId), refetchInterval: refreshPolling ? 5_000 : false })
   const account = accountQuery.data
-  const campaignColumns = useCampaignColumns({ userId: user?.id, accountId: account?.id, objective: account?.client?.objective })
+  const effectiveObjective = account?.effective_reporting_objective || account?.client?.objective
+  const campaignColumns = useCampaignColumns({ userId: user?.id, accountId: account?.id, objective: effectiveObjective })
   const campaignMetricColumns = metricColumnsFor(campaignColumns.keys)
+  const objectiveMetricColumns = metricColumnsFor(objectiveMetricKeys(effectiveObjective))
   const range = search.get('range') || '30d'
   const preset = completedPeriodRange(range, account?.timezone)
   const dates = { start_date: search.get('start_date') || preset.start_date, end_date: search.get('end_date') || preset.end_date }
@@ -64,6 +67,14 @@ export default function PerformanceDrilldownPage() {
       setCountdownClock(Date.now())
     },
   })
+  const updateObjective = useMutation({
+    mutationFn: reportingObjective => api.updateAdAccount(accountId, { reporting_objective: reportingObjective || null }),
+    onSuccess: response => {
+      queryClient.setQueryData(['performance-account', accountId], current => ({ ...response.data.account, refresh: current?.refresh }))
+      queryClient.invalidateQueries({ queryKey: ['performance-accounts'] })
+      queryClient.invalidateQueries({ queryKey: ['client-performance', clientId] })
+    },
+  })
   const refreshAvailableAt = latestCooldown(account?.refresh?.available_at, refreshOverrideAvailableAt)
   const cooldownSeconds = secondsUntil(refreshAvailableAt, countdownClock)
   useEffect(() => {
@@ -82,7 +93,7 @@ export default function PerformanceDrilldownPage() {
   const selectedAd = adId && payload?.ad ? { ad: payload.ad, metrics: payload.metrics } : null
   const title = level === 'ad' ? selectedAd?.ad?.name : level === 'group' ? payload?.ad_group?.name : level === 'campaign' ? payload?.campaign?.name : account?.name
   const metrics = level === 'account' ? overview.data?.metrics : payload?.metrics
-  const trendColumns = metricColumnsFor(objectiveMetricKeys(account?.client?.objective))
+  const trendColumns = objectiveMetricColumns
   const series = level === 'account' ? overview.data?.series : payload?.series
   const childLabel = level === 'account' ? 'Campaigns' : level === 'campaign' ? (account?.platform === 'meta' ? 'Ad sets' : 'Ad groups') : level === 'group' ? 'Ads' : null
   const childNoun = level === 'account' ? 'campaign' : account?.platform === 'meta' ? 'ad set' : 'ad group'
@@ -130,7 +141,8 @@ export default function PerformanceDrilldownPage() {
     {level === 'account' && account ? <div id="account-section-panel" className="account-section-panel" role="tabpanel">
       {section === 'details' && <>
         <AsyncStateNotice queries={activeQueries}/>
-        <section className="performance-kpis">{metricColumns.map(column => <div key={column.key}><span>{column.label}</span><strong>{column.key === 'spend' || column.key === 'cpl' || column.key === 'cpp' ? formatMoney(metrics?.[column.key], account?.currency) : column.key === 'roas' ? formatRoas(metrics?.[column.key]) : formatNumber(metrics?.[column.key])}</strong></div>)}</section>
+        <section className="performance-objective-control"><div><strong>Reporting objective</strong><small>Controls result classification and the default performance metrics for this account.</small></div>{['admin', 'marketer'].includes(user?.role) ? <select aria-label="Reporting objective" value={account.reporting_objective || ''} disabled={updateObjective.isPending} onChange={event => updateObjective.mutate(event.target.value)}><option value="">Inherit client ({reportingObjectiveLabel(account.client?.objective)})</option><option value="lead_gen">Lead generation</option><option value="ecommerce">Ecommerce</option><option value="both">Lead + ecommerce</option><option value="app_installs">App installs</option></select> : <span>{reportingObjectiveLabel(effectiveObjective)}</span>}{updateObjective.isPending && <em>Saving and queuing refresh…</em>}{updateObjective.isError && <em className="error">{updateObjective.error?.response?.data?.message || 'Could not update the reporting objective.'}</em>}</section>
+        <section className="performance-kpis">{objectiveMetricColumns.map(column => <div key={column.key}><span>{column.label}</span><strong>{column.format(metrics?.[column.key], account?.currency)}</strong></div>)}</section>
         <PerformanceTrendChart series={series} currency={account?.currency} columns={trendColumns} ariaLabel="Account daily performance trend"/>
         <section className="performance-children"><div className="performance-section-head"><div><h2>{childLabel}</h2><p>{`Select ${childNoun === 'ad set' ? 'an' : 'a'} ${childNoun} to inspect the next level.`}</p></div><CampaignColumnConfigurator columnKeys={campaignColumns.keys} onChange={campaignColumns.setKeys} onReset={campaignColumns.reset}/></div><PerformanceMetricsTable label={childLabel.slice(0, -1)} rows={rows} currency={account?.currency} onOpen={openChild} platformLabel={platformLabel} metricColumns={campaignMetricColumns}/></section>
       </>}
@@ -140,9 +152,9 @@ export default function PerformanceDrilldownPage() {
       {section === 'connection' && <ScopedConnections clientId={clientId} accountId={account.id}/>} 
     </div> : <>
       <AsyncStateNotice queries={activeQueries}/>
-      {level !== 'account' && <section className="performance-kpis">{metricColumns.map(column => <div key={column.key}><span>{column.label}</span><strong>{column.key === 'spend' || column.key === 'cpl' || column.key === 'cpp' ? formatMoney(metrics?.[column.key], account?.currency) : column.key === 'roas' ? formatRoas(metrics?.[column.key]) : formatNumber(metrics?.[column.key])}</strong></div>)}</section>}
+      {level !== 'account' && <section className="performance-kpis">{objectiveMetricColumns.map(column => <div key={column.key}><span>{column.label}</span><strong>{column.format(metrics?.[column.key], account?.currency)}</strong></div>)}</section>}
       {level !== 'account' && <PerformanceTrendChart series={series} currency={account?.currency} columns={trendColumns} ariaLabel={`${level === 'campaign' ? 'Campaign' : level === 'group' ? groupLabel : 'Ad'} daily performance trend`}/>}
-      {level !== 'account' && level !== 'ad' && <section className="performance-children"><div className="performance-section-head"><div><h2>{childLabel}</h2><p>{level === 'group' ? 'Select an ad to inspect its performance.' : `Select ${childNoun === 'ad set' ? 'an' : 'a'} ${childNoun} to inspect the next level.`}</p></div><button onClick={() => navigate(-1)}><ArrowLeft size={14}/> Back</button></div><PerformanceMetricsTable label={childLabel.slice(0, -1)} rows={rows} currency={account?.currency} onOpen={openChild} platformLabel={platformLabel}/></section>}
+      {level !== 'account' && level !== 'ad' && <section className="performance-children"><div className="performance-section-head"><div><h2>{childLabel}</h2><p>{level === 'group' ? 'Select an ad to inspect its performance.' : `Select ${childNoun === 'ad set' ? 'an' : 'a'} ${childNoun} to inspect the next level.`}</p></div><button onClick={() => navigate(-1)}><ArrowLeft size={14}/> Back</button></div><PerformanceMetricsTable label={childLabel.slice(0, -1)} rows={rows} currency={account?.currency} onOpen={openChild} platformLabel={platformLabel} metricColumns={campaignMetricColumns}/></section>}
     </>}
     {level === 'ad' && <section className="performance-children ad-detail-section"><div className="performance-section-head"><div><h2>Ad details</h2><p>Platform identity and hierarchy for this ad.</p></div><button onClick={() => navigate(-1)}><ArrowLeft size={14}/> Back to ads</button></div><dl className="ad-detail-grid"><div><dt>Status</dt><dd><span className="entity-status">{selectedAd?.ad?.status || 'Unknown'}</span></dd></div><div><dt>Format</dt><dd>{selectedAd?.ad?.type || 'Not reported'}</dd></div><div><dt>Platform</dt><dd>{platformLabel}</dd></div><div><dt>Ad ID</dt><dd className="mono">{selectedAd?.ad?.external_id || 'Not reported'}</dd></div><div><dt>Client</dt><dd>{account?.client?.name || 'Not reported'}</dd></div><div><dt>Ad account</dt><dd><Link to={accountPath}>{account?.name || 'Not reported'}</Link><small className="mono">{account?.external_id}</small></dd></div><div><dt>Campaign</dt><dd><Link to={campaignPath}>{payload?.campaign?.name || 'Not reported'}</Link><small className="mono">{payload?.campaign?.external_id}</small></dd></div><div><dt>{groupLabel}</dt><dd><Link to={groupPath}>{payload?.ad_group?.name || 'Not reported'}</Link><small className="mono">{payload?.ad_group?.external_id}</small></dd></div><div><dt>Currency</dt><dd>{account?.currency || 'Not reported'}</dd></div><div><dt>Reporting timezone</dt><dd>{account?.timezone || 'Not reported'}</dd></div></dl></section>}
   </main>

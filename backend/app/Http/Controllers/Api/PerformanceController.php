@@ -4,9 +4,9 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Jobs\CollectAccountMetricsJob;
+use App\Models\Ad;
 use App\Models\AdAccount;
 use App\Models\AdGroup;
-use App\Models\Ad;
 use App\Models\Campaign;
 use App\Models\Client;
 use App\Services\ClientAccess;
@@ -94,7 +94,7 @@ class PerformanceController extends Controller
         $this->authorizeAccount($request, $account);
         [$start, $end] = $this->dates($request);
 
-        return $this->performance->overview($account->load('client:id,name'), $start, $end);
+        return $this->performance->overview($account->load('client:id,name,objective'), $start, $end);
     }
 
     public function clientOverview(Request $request, Client $client)

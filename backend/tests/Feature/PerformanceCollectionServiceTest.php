@@ -64,6 +64,26 @@ class PerformanceCollectionServiceTest extends TestCase
         $this->assertSame(0.0, $metrics['purchases']);
     }
 
+    public function test_google_app_install_override_uses_native_installs_without_creating_leads(): void
+    {
+        $client = Client::create(['name' => 'App Co', 'slug' => 'google-app', 'objective' => 'lead_gen', 'currency' => 'INR']);
+        $connection = PlatformConnection::create(['platform' => 'google', 'name' => 'Google', 'scope' => 'agency', 'credentials' => ['refresh_token' => 'secret'], 'status' => 'healthy']);
+        $account = AdAccount::create([
+            'client_id' => $client->id, 'platform_connection_id' => $connection->id, 'platform' => 'google',
+            'external_id' => 'app-123', 'name' => 'App installs', 'currency' => 'INR', 'timezone' => 'Asia/Kolkata',
+            'reporting_objective' => 'app_installs',
+        ]);
+        $method = new \ReflectionMethod(PerformanceCollectionService::class, 'googleFallbackMetrics');
+        $metrics = $method->invoke(app(PerformanceCollectionService::class), $account, [
+            'conversions' => 9, 'conversionsValue' => 0, 'biddableAppInstallConversions' => 8,
+        ]);
+
+        $this->assertSame(9.0, $metrics['conversions']);
+        $this->assertSame(8.0, $metrics['installs']);
+        $this->assertSame(0.0, $metrics['leads']);
+        $this->assertSame(0.0, $metrics['purchases']);
+    }
+
     public function test_meta_sales_results_use_one_primary_purchase_action_without_alias_double_counting(): void
     {
         $client = Client::create(['name' => 'GRS Fantasy Park', 'slug' => 'grs', 'objective' => 'lead_gen', 'currency' => 'INR']);
@@ -109,6 +129,30 @@ class PerformanceCollectionServiceTest extends TestCase
         $this->assertSame('0.000000', $snapshot->leads);
         $this->assertSame('495000.000000', $snapshot->conversion_value);
         $this->assertSame('OUTCOME_SALES', $snapshot->campaign->type);
+    }
+
+    public function test_meta_app_install_aliases_use_the_strongest_value_without_double_counting(): void
+    {
+        $account = $this->metaAccount('app-installs');
+        $account->update(['reporting_objective' => 'app_installs']);
+        Http::fake(['graph.facebook.com/*' => Http::response(['data' => [[
+            'campaign_id' => 'app-campaign', 'campaign_name' => 'Install campaign', 'objective' => 'OUTCOME_APP_PROMOTION',
+            'spend' => '240', 'impressions' => '1000', 'reach' => '800', 'clicks' => '60',
+            'date_start' => '2026-11-01', 'date_stop' => '2026-11-01',
+            'actions' => [
+                ['action_type' => 'app_install', 'value' => '10'],
+                ['action_type' => 'mobile_app_install', 'value' => '11'],
+                ['action_type' => 'omni_app_install', 'value' => '12'],
+            ],
+        ]]])]);
+
+        app(PerformanceCollectionService::class)->collect($account->fresh(), '2026-11-01', '2026-11-01');
+
+        $snapshot = MetricSnapshot::query()->where('scope', 'campaign')->firstOrFail();
+        $this->assertSame('12.000000', $snapshot->installs);
+        $this->assertSame('12.000000', $snapshot->conversions);
+        $this->assertSame('0.000000', $snapshot->leads);
+        $this->assertSame('0.000000', $snapshot->purchases);
     }
 
     public function test_meta_hierarchy_collection_is_idempotent(): void
