@@ -17,6 +17,10 @@ class GeneratePerformancePulseJob implements ShouldBeUnique, ShouldQueue
 
     public int $tries = 3;
 
+    public int $timeout = 120;
+
+    public array $backoff = [30, 120];
+
     public function __construct(public readonly int $runId)
     {
         $this->onQueue(config('workloads.queues.reports', 'reports'));

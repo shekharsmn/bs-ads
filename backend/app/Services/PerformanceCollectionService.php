@@ -166,13 +166,13 @@ class PerformanceCollectionService
         $client = GoogleAdsClientFactory::fromRefreshToken($credentials['refresh_token'], $account->manager_external_id ?? $credentials['login_customer_id'] ?? $account->connection->manager_external_id);
         $query = "SELECT campaign.id, campaign.name, campaign.status, campaign.advertising_channel_type, campaign_budget.amount_micros, segments.date, metrics.cost_micros, metrics.impressions, metrics.clicks, metrics.conversions, metrics.conversions_value, metrics.biddable_app_install_conversions FROM campaign WHERE segments.date BETWEEN '$start' AND '$end' AND campaign.status != 'REMOVED'";
         $service = $client->getGoogleAdsServiceClient();
-        $stream = $service->searchStream(SearchGoogleAdsStreamRequest::build($account->external_id, $query));
+        $stream = $service->searchStream(SearchGoogleAdsStreamRequest::build($account->external_id, $query), ['timeoutMillis' => 45000]);
         $mappings = ConversionMapping::query()->where('client_id', $account->client_id)->where('platform', 'google')->where('active', true)->get()->keyBy('external_action');
         $version = $this->mappingVersion($account);
         $mapped = [];
         if ($mappings->isNotEmpty()) {
             $conversionQuery = "SELECT campaign.id, segments.date, segments.conversion_action_name, metrics.conversions, metrics.conversions_value FROM campaign WHERE segments.date BETWEEN '$start' AND '$end' AND metrics.conversions > 0";
-            foreach ($service->searchStream(SearchGoogleAdsStreamRequest::build($account->external_id, $conversionQuery))->readAll() as $conversionChunk) {
+            foreach ($service->searchStream(SearchGoogleAdsStreamRequest::build($account->external_id, $conversionQuery), ['timeoutMillis' => 45000])->readAll() as $conversionChunk) {
                 foreach ($conversionChunk->getResults() as $conversionRow) {
                     $campaignSlice = json_decode($conversionRow->getCampaign()->serializeToJsonString(), true, 512, JSON_BIGINT_AS_STRING) ?: [];
                     $metricSlice = json_decode($conversionRow->getMetrics()->serializeToJsonString(), true) ?: [];
@@ -228,7 +228,7 @@ class PerformanceCollectionService
     {
         $credentials = $account->connection->credentials;
         $url = 'https://graph.facebook.com/v24.0/'.(str_starts_with($account->external_id, 'act_') ? $account->external_id : 'act_'.$account->external_id).'/insights';
-        $response = Http::timeout(60)->retry(3, 500)->get($url, [
+        $response = Http::connectTimeout(10)->timeout(45)->get($url, [
             'access_token' => $credentials['access_token'], 'level' => 'campaign', 'time_increment' => 1,
             'time_range' => json_encode(['since' => $start, 'until' => $end]),
             'fields' => 'campaign_id,campaign_name,objective,spend,impressions,reach,clicks,actions,action_values,date_start,date_stop',
@@ -238,7 +238,7 @@ class PerformanceCollectionService
         $response->throw();
         $data = $response->json('data', []);
         while ($next = data_get($response->json(), 'paging.next')) {
-            $response = Http::timeout(60)->retry(3, 500)->get($next);
+            $response = Http::connectTimeout(10)->timeout(45)->get($next);
             $response->throw();
             $data = array_merge($data, $response->json('data', []));
         }
@@ -303,7 +303,7 @@ class PerformanceCollectionService
         $mapped = [];
         if ($mappings->isNotEmpty()) {
             $conversionQuery = 'SELECT campaign.id, ad_group.id, '.($level === 'ad' ? 'ad_group_ad.ad.id, ' : '')."segments.date, segments.conversion_action_name, metrics.conversions, metrics.conversions_value FROM {$from} WHERE segments.date BETWEEN '$start' AND '$end' AND metrics.conversions > 0";
-            foreach ($service->searchStream(SearchGoogleAdsStreamRequest::build($account->external_id, $conversionQuery))->readAll() as $chunk) {
+            foreach ($service->searchStream(SearchGoogleAdsStreamRequest::build($account->external_id, $conversionQuery), ['timeoutMillis' => 45000])->readAll() as $chunk) {
                 foreach ($chunk->getResults() as $row) {
                     $campaign = json_decode($row->getCampaign()->serializeToJsonString(), true, 512, JSON_BIGINT_AS_STRING) ?: [];
                     $group = json_decode($row->getAdGroup()->serializeToJsonString(), true, 512, JSON_BIGINT_AS_STRING) ?: [];
@@ -330,7 +330,7 @@ class PerformanceCollectionService
         }
 
         $rows = [];
-        foreach ($service->searchStream(SearchGoogleAdsStreamRequest::build($account->external_id, $query))->readAll() as $chunk) {
+        foreach ($service->searchStream(SearchGoogleAdsStreamRequest::build($account->external_id, $query), ['timeoutMillis' => 45000])->readAll() as $chunk) {
             foreach ($chunk->getResults() as $row) {
                 $campaign = json_decode($row->getCampaign()->serializeToJsonString(), true, 512, JSON_BIGINT_AS_STRING) ?: [];
                 $group = json_decode($row->getAdGroup()->serializeToJsonString(), true, 512, JSON_BIGINT_AS_STRING) ?: [];
@@ -386,7 +386,7 @@ class PerformanceCollectionService
         $credentials = $account->connection->credentials;
         $url = 'https://graph.facebook.com/v24.0/'.(str_starts_with($account->external_id, 'act_') ? $account->external_id : 'act_'.$account->external_id).'/insights';
         $fields = 'campaign_id,campaign_name,adset_id,adset_name,'.($level === 'ad' ? 'ad_id,ad_name,' : '').'objective,spend,impressions,reach,clicks,actions,action_values,date_start,date_stop';
-        $response = Http::timeout(60)->retry(3, 500)->get($url, [
+        $response = Http::connectTimeout(10)->timeout(45)->get($url, [
             'access_token' => $credentials['access_token'], 'level' => $level, 'time_increment' => 1,
             'time_range' => json_encode(['since' => $start, 'until' => $end]), 'fields' => $fields,
             'use_unified_attribution_setting' => true, 'limit' => 500,
@@ -394,7 +394,7 @@ class PerformanceCollectionService
         $response->throw();
         $data = $response->json('data', []);
         while ($next = data_get($response->json(), 'paging.next')) {
-            $response = Http::timeout(60)->retry(3, 500)->get($next);
+            $response = Http::connectTimeout(10)->timeout(45)->get($next);
             $response->throw();
             $data = array_merge($data, $response->json('data', []));
         }
@@ -457,13 +457,13 @@ class PerformanceCollectionService
         $credentials = $account->connection->credentials;
         $accountId = str_starts_with($account->external_id, 'act_') ? $account->external_id : 'act_'.$account->external_id;
         $fields = $edge === 'adsets' ? 'id,name,status,optimization_goal' : 'id,name,status,adset_id,creative{id,object_type}';
-        $response = Http::timeout(60)->retry(3, 500)->get("https://graph.facebook.com/v24.0/{$accountId}/{$edge}", [
+        $response = Http::connectTimeout(10)->timeout(45)->get("https://graph.facebook.com/v24.0/{$accountId}/{$edge}", [
             'access_token' => $credentials['access_token'], 'fields' => $fields, 'limit' => 500,
         ]);
         $response->throw();
         $rows = $response->json('data', []);
         while ($next = data_get($response->json(), 'paging.next')) {
-            $response = Http::timeout(60)->retry(3, 500)->get($next);
+            $response = Http::connectTimeout(10)->timeout(45)->get($next);
             $response->throw();
             $rows = array_merge($rows, $response->json('data', []));
         }

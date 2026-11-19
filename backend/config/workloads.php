@@ -13,7 +13,7 @@ return [
     ]),
     'policies' => [
         'notifications' => ['timeout' => 30, 'tries' => 3, 'backoff' => [30, 120, 600]],
-        'collection' => ['timeout' => 300, 'tries' => 1, 'backoff' => 60],
+        'collection' => ['timeout' => 300, 'tries' => 2, 'backoff' => 60],
         'reports' => ['timeout' => 120, 'tries' => 3, 'backoff' => [30, 120]],
         'audits' => ['timeout' => 600, 'tries' => 3, 'backoff' => [60, 180]],
         'ad_library' => ['timeout' => 900, 'tries' => 2, 'backoff' => 60],

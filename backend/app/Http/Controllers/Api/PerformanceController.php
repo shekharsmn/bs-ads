@@ -3,7 +3,6 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
-use App\Jobs\CollectAccountMetricsJob;
 use App\Models\Ad;
 use App\Models\AdAccount;
 use App\Models\AdGroup;
@@ -11,6 +10,7 @@ use App\Models\Campaign;
 use App\Models\Client;
 use App\Services\ClientAccess;
 use App\Services\PerformanceReadService;
+use App\Services\WorkloadQueue;
 use Carbon\CarbonImmutable;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
@@ -54,10 +54,11 @@ class PerformanceController extends Controller
             ->orderBy('id')->pluck('id');
         $refreshToken = (string) Str::uuid();
 
-        $accountIds->each(fn (int $accountId) => CollectAccountMetricsJob::dispatch($accountId, null, null, $refreshToken));
+        $joined = $accountIds->filter(fn (int $accountId) => ! app(WorkloadQueue::class)->collection($accountId, refresh: $refreshToken))->count();
 
         return response()->json([
             'queued_accounts' => $accountIds->count(),
+            'joined_accounts' => $joined,
             'requested_at' => $requestedAt->toIso8601String(),
             'refresh' => $this->refreshCooldown(),
         ], 202);
@@ -80,10 +81,11 @@ class PerformanceController extends Controller
             ], 429)->header('Retry-After', (string) max(1, $refresh['remaining_seconds']));
         }
 
-        CollectAccountMetricsJob::dispatch($account->id, null, null, (string) Str::uuid());
+        $queued = app(WorkloadQueue::class)->collection($account->id, refresh: (string) Str::uuid());
 
         return response()->json([
             'queued_account_id' => $account->id,
+            'joined_existing' => ! $queued,
             'requested_at' => $requestedAt->toIso8601String(),
             'refresh' => $this->refreshCooldown($cooldownKey),
         ], 202);

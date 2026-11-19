@@ -23,7 +23,7 @@ export default function Dashboard() {
     onSuccess: response => {
       setRefreshOverrideAvailableAt(response.data.refresh?.available_at || null)
       setCountdownClock(Date.now())
-      setRefreshPolling({ accountCount: response.data.queued_accounts })
+      setRefreshPolling({ accountCount: response.data.queued_accounts, joinedAccounts: response.data.joined_accounts || 0 })
       accountQuery.refetch()
     },
     onError: error => {
@@ -52,7 +52,7 @@ export default function Dashboard() {
 
   return <main className="performance-page">
     <header className="performance-page-head fade-up"><div><p className="ops-eyebrow">Command center</p><h1>Client performance</h1><p>One Google Ads row and one Meta row per client, showing the higher-spend result type.</p></div><button className="performance-refresh" disabled={forceRefresh.isPending || coolingDown} onClick={() => forceRefresh.mutate()}><RefreshCw className={forceRefresh.isPending ? 'spin' : ''} size={14}/>{refreshLabel}</button></header>
-    <div className="performance-status-line fade-up-delay-1" aria-live="polite"><span><DatabaseZap size={14}/> {accounts.length} client-platform views</span><span><Clock3 size={14}/> Windows end yesterday in each account timezone</span>{refreshPolling && <span className="performance-refresh-state">Refresh queued for {refreshPolling.accountCount} {refreshPolling.accountCount === 1 ? 'account' : 'accounts'}; updating automatically.</span>}{refreshFailed && <span className="performance-refresh-state error">Refresh could not be started.</span>}</div>
+    <div className="performance-status-line fade-up-delay-1" aria-live="polite"><span><DatabaseZap size={14}/> {accounts.length} client-platform views</span><span><Clock3 size={14}/> Windows end yesterday in each account timezone</span>{refreshPolling && <span className="performance-refresh-state">Refresh queued for {refreshPolling.accountCount} {refreshPolling.accountCount === 1 ? 'account' : 'accounts'}; updating automatically.{refreshPolling.joinedAccounts > 0 && ` ${refreshPolling.joinedAccounts} already queued or running.`}</span>}{refreshFailed && <span className="performance-refresh-state error">Refresh could not be started.</span>}</div>
     <AsyncStateNotice queries={[accountQuery]} partialText="Account performance could not be refreshed."/>
     <section className="performance-table-shell fade-up-delay-2" aria-label="Ad account performance"><div className="performance-table-scroll"><table className="performance-table account-performance-table">
       <thead><tr className="period-group-row"><th rowSpan="2">Client</th><th rowSpan="2">Platform</th><th rowSpan="2">Result type</th>{WINDOWS.map(([, label]) => <th key={label} colSpan="3" className="period-group-heading">{label}</th>)}<th rowSpan="2" aria-label="Open account"/></tr><tr className="period-metric-row">{WINDOWS.flatMap(([key]) => [<th key={`${key}-results`}>Results</th>, <th key={`${key}-cpr`}>CPR</th>, <th key={`${key}-spend`}>Spend</th>])}</tr></thead>
