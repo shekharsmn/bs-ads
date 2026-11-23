@@ -117,7 +117,8 @@ main() {
     # Prevent overlapping builds, migrations, and restarts for this app.
     # Retain the same lock when reloading a newly pulled deployment script.
     local pulled=0
-    if [[ "${BS_ADS_PULL_PID:-}" == "$$" && -e /proc/$$/fd/9 ]]; then
+    if [[ "${BS_ADS_PULL_PID:-}" == "$$" && -e /proc/$$/fd/9 && \
+          /proc/$$/fd/9 -ef "$STATE/deploy.lock" ]]; then
         pulled=1
     else
         exec 9>"$STATE/deploy.lock"
@@ -136,6 +137,10 @@ main() {
             git -C "$ROOT" -c core.fileMode=false pull --ff-only --no-rebase origin main || die 'Unable to fast-forward main; deployment stopped before building.'
             after="$(git -C "$ROOT" rev-parse HEAD)"
             [[ "$after" == "$(git -C "$ROOT" rev-parse FETCH_HEAD)" ]] || die 'Local main has commits outside origin/main; deployment stopped.'
+            # Pull hooks or another local process may have changed build inputs
+            # after the first cleanliness check, even when HEAD did not advance.
+            source_status="$(git -C "$ROOT" -c core.fileMode=false status --porcelain --untracked-files=normal -- . ':(exclude).deployment')" || die 'Unable to verify the pulled deployment source tree.'
+            [[ -z "$source_status" ]] || die 'Refusing to deploy source changes created during the pull.'
             if [[ "$before" != "$after" ]]; then
                 # Execute the pulled script as well as building the pulled source.
                 export BS_ADS_PULL_PID=$$

@@ -26,6 +26,8 @@ if name == 'git':
     elif 'pull' in args:
         if os.environ.get('PULL_ADVANCES'):
             (Path(args[args.index('-C') + 1]) / '.deployment/pulled-fixture').touch()
+        if os.environ.get('PULL_DIRTIES'):
+            (Path(args[args.index('-C') + 1]) / '.deployment/pull-dirty-fixture').touch()
         sys.exit(int(os.environ.get('FAIL_PULL', '0')))
     elif 'rev-parse' in args:
         print('abcdef123456' if any(x.startswith('--short') for x in args) else
@@ -35,6 +37,9 @@ if name == 'git':
     elif 'status' in args:
         if os.environ.get('FAIL_STATUS'):
             sys.exit(2)
+        root = Path(args[args.index('-C') + 1])
+        if os.environ.get('PULL_DIRTIES') and (root / '.deployment/pull-dirty-fixture').exists():
+            print(' M source-changed-by-pull-hook.php')
         if os.environ.get('DIRTY'):
             print(' M tracked-source.php')
         if os.environ.get('UNTRACKED'):
@@ -204,6 +209,12 @@ class DeploymentTest(unittest.TestCase):
         self.assertEqual(len(list((self.state / 'releases').iterdir())), 1)
         self.assert_isolated()
 
+    def test_source_change_created_during_pull_stops_before_build_or_maintenance(self):
+        self.assertNotEqual(self.run_script(PULL_DIRTIES='1'), 0, self.output)
+        self.assertEqual(len(self.matching('git', 'status')), 2)
+        self.assertFalse(self.matching('docker', 'buildx'))
+        self.assertFalse(self.matching('artisan', 'down'))
+
     def test_migration_failure_restores_previous_config_without_reversing_database(self):
         self.assertNotEqual(self.run_script(FAIL_MIGRATION='42'), 0)
         self.assertTrue(self.matching('docker', 'up', '--force-recreate'))
@@ -295,6 +306,22 @@ class DeploymentTest(unittest.TestCase):
             self.assertNotEqual(self.run_script(), 0)
         self.assertIn('Another BS Ads deployment', self.output)
         self.assertFalse(self.matching('artisan', 'down'))
+
+    def test_spoofed_reload_marker_cannot_bypass_deployment_lock(self):
+        import fcntl
+        with (self.state / 'deploy.lock').open('w') as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            result = subprocess.run(
+                ['bash', '-c',
+                 'export BS_ADS_PULL_PID=$$; exec 9>"$1"; exec bash "$2" deploy',
+                 'spoof-reload', str(self.root / 'wrong.lock'),
+                 str(self.root / 'deploy-prod.sh')],
+                env={**os.environ, 'PATH': str(self.bin) + ':' + os.environ['PATH'],
+                     'CALLS': str(self.log)},
+                stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=20,
+            )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('Another BS Ads deployment', result.stdout + result.stderr)
 
 
 if __name__ == '__main__':
