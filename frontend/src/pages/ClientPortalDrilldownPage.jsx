@@ -1,10 +1,11 @@
 import { useQuery } from '@tanstack/react-query'
-import { ArrowLeft, Download } from 'lucide-react'
+import { ArrowLeft, Download, ExternalLink } from 'lucide-react'
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { api } from '../api/client'
 import PerformanceMetricsTable from '../components/PerformanceMetricsTable'
 import PerformancePeriodControl from '../components/PerformancePeriodControl'
 import PerformanceTrendChart from '../components/PerformanceTrendChart'
+import CreativePerformancePanel, { AdCreativePreview, CreativeVerdictBadge } from '../components/CreativePerformancePanel'
 import { AsyncStateNotice } from '../components/ui/AsyncState'
 import { useAuth } from '../context/AuthContext'
 import { completedDateRange, metricColumnsFor, objectiveMetricKeys } from '../lib/performance'
@@ -27,7 +28,7 @@ export default function ClientPortalDrilldownPage({ preview = false }) {
   const payload = level === 'account' ? overview.data : level === 'campaign' ? groups.data : level === 'group' ? ads.data : ad.data
   const title = level === 'account' ? account?.name : level === 'campaign' ? payload?.campaign?.name : level === 'group' ? payload?.ad_group?.name : payload?.ad?.name
   const metrics = payload?.metrics; const series = payload?.series; const columns = metricColumnsFor(objectiveMetricKeys(account?.effective_reporting_objective || account?.client?.objective))
-  const rows = level === 'account' ? (campaigns.data?.campaigns || []).map(row => ({ entity: row.campaign, metrics: row.metrics })) : level === 'campaign' ? (groups.data?.ad_groups || []).map(row => ({ entity: row.ad_group, metrics: row.metrics })) : level === 'group' ? (ads.data?.ads || []).map(row => ({ entity: row.ad, metrics: row.metrics })) : []
+  const rows = level === 'account' ? (campaigns.data?.campaigns || []).map(row => ({ entity: row.campaign, metrics: row.metrics })) : level === 'campaign' ? (groups.data?.ad_groups || []).map(row => ({ entity: row.ad_group, metrics: row.metrics })) : level === 'group' ? (ads.data?.ads || []).map(row => ({ entity: row.ad, metrics: row.metrics, creative: row.ad.creative, verdict: row.verdict })) : []
   const childLabel = level === 'account' ? 'Campaigns' : level === 'campaign' ? (account?.platform === 'meta' ? 'Ad sets' : 'Ad groups') : 'Ads'
   const openChild = entity => navigate(level === 'account' ? `${clientBase}/${clientId}/accounts/${accountId}/campaigns/${entity.id}?${query}` : level === 'campaign' ? `${clientBase}/${clientId}/accounts/${accountId}/campaigns/${campaignId}/ad-groups/${entity.id}?${query}` : `${clientBase}/${clientId}/accounts/${accountId}/campaigns/${campaignId}/ad-groups/${groupId}/ads/${entity.id}?${query}`)
   const updatePeriod = next => setSearch(current => { const merged = new URLSearchParams(current); Object.entries(next).forEach(([key, value]) => value ? merged.set(key, value) : merged.delete(key)); return merged }, { replace: true })
@@ -41,5 +42,7 @@ export default function ClientPortalDrilldownPage({ preview = false }) {
     <section className="performance-kpis">{columns.map(column => <div key={column.key}><span>{column.label}</span><strong>{column.format(metrics?.[column.key], account?.currency)}</strong></div>)}</section>
     <PerformanceTrendChart series={series || []} currency={account?.currency} columns={columns}/>
     {level !== 'ad' && <section className="performance-children"><div className="performance-section-head"><div><h2>{childLabel}</h2><p>Open a row to inspect the next permitted level.</p></div>{level !== 'account' && <button onClick={() => navigate(-1)}><ArrowLeft size={14}/>Back</button>}</div><PerformanceMetricsTable label={childLabel.slice(0, -1)} rows={rows} currency={account?.currency} onOpen={openChild} metricColumns={columns}/></section>}
+    {level === 'account' && <CreativePerformancePanel data={overview.data?.creative_performance} clientId={clientId} accountId={accountId} query={query} portalBase={clientBase}/>}
+    {level === 'ad' && <section className="performance-children ad-detail-section"><div className="performance-section-head"><div><h2>Ad creative</h2><p>Media is loaded directly from the advertising platform.</p></div><CreativeVerdictBadge verdict={payload?.verdict}/></div><div className="ad-creative-detail"><AdCreativePreview creative={payload?.ad?.creative} name={payload?.ad?.name} large/><div><strong className="ad-creative-name">{payload?.ad?.name}</strong><p>{payload?.verdict?.reason}</p>{payload?.ad?.creative?.destination_urls?.[0] && <a href={payload.ad.creative.destination_urls[0]} target="_blank" rel="noreferrer">Open landing page <ExternalLink size={13}/></a>}</div></div></section>}
   </main></PortalShell>
 }

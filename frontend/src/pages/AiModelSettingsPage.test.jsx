@@ -14,6 +14,8 @@ vi.mock('../api/client', () => ({
     getEmailIntegration: vi.fn(),
     updateEmailIntegration: vi.fn(),
     testEmailIntegration: vi.fn(),
+    getCreativeMediaSettings: vi.fn(),
+    updateCreativeMediaSettings: vi.fn(),
   },
 }))
 vi.mock('../context/ToastContext', () => ({ useToast: () => ({ success: vi.fn(), error: vi.fn() }) }))
@@ -41,6 +43,7 @@ beforeEach(() => {
       last_test_error: null,
     },
   })
+  api.getCreativeMediaSettings.mockResolvedValue({ data: { provider: 'corsproxy_io', enabled: false, configured: true, api_key_hint: 'Saved - ending in 1234', browser_mode: true } })
 })
 
 function renderSettings(path) {
@@ -64,4 +67,13 @@ it('presents Amazon SES in the Email integration tab', async () => {
   expect(screen.getByLabelText('AWS region')).toHaveValue('ap-south-1')
   expect(screen.getByLabelText('From email')).toHaveValue('notifications@example.com')
   expect(screen.getByRole('button', { name: 'Send test' })).toBeDisabled()
+})
+
+it('presents encrypted corsproxy configuration in the Creative media tab', async () => {
+  renderSettings('/settings/creative-media')
+
+  expect(screen.getByRole('link', { name: 'Creative media' })).toHaveClass('active')
+  expect(await screen.findByText('corsproxy.io')).toBeInTheDocument()
+  expect(screen.getByLabelText('corsproxy.io API key')).toHaveAttribute('placeholder', 'Saved - ending in 1234')
+  expect(screen.getByDisplayValue('Browser request (no server media storage)')).toBeInTheDocument()
 })

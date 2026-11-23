@@ -17,7 +17,10 @@ class PerformanceReadService
 {
     private const SUM_COLUMNS = ['spend', 'impressions', 'reach', 'clicks', 'conversions', 'leads', 'purchases', 'installs', 'conversion_value'];
 
-    public function __construct(private readonly PerformanceObjectiveClassifier $objectives) {}
+    public function __construct(
+        private readonly PerformanceObjectiveClassifier $objectives,
+        private readonly CreativePerformanceService $creatives,
+    ) {}
 
     public function accounts(User $user): array
     {
@@ -119,6 +122,7 @@ class PerformanceReadService
                 'date' => CarbonImmutable::parse($row->metric_date)->toDateString(),
                 'metrics' => $this->metrics($this->rowTotals($row)),
             ])->values(),
+            'creative_performance' => $this->creatives->account($account, $start, $end),
         ];
     }
 
@@ -143,6 +147,7 @@ class PerformanceReadService
                 'metrics' => $this->metrics($this->rowTotals($row)),
             ])->values(),
             'visibility_mode' => $scope->visibility_mode,
+            'creative_performance' => $this->creatives->account($account, $start, $end, $campaignIds),
         ];
     }
 
@@ -187,7 +192,16 @@ class PerformanceReadService
             ];
         });
 
-        return ['reporting_dates' => ['start' => $start, 'end' => $end], 'accounts' => $accountRows, 'currency_groups' => $currencyGroups];
+        $campaignIdsByAccount = collect($scopes)->mapWithKeys(fn (ClientPortalAccountScope $scope) => [
+            $scope->ad_account_id => $scope->campaignIds(),
+        ])->all();
+
+        return [
+            'reporting_dates' => ['start' => $start, 'end' => $end],
+            'accounts' => $accountRows,
+            'currency_groups' => $currencyGroups,
+            'creative_performance' => $this->creatives->client($client, $start, $end, $campaignIdsByAccount),
+        ];
     }
 
     public function clientOverview(Client $client, string $start, string $end): array
@@ -230,6 +244,7 @@ class PerformanceReadService
             'reporting_dates' => ['start' => $start, 'end' => $end],
             'accounts' => $accountRows,
             'currency_groups' => $currencyGroups,
+            'creative_performance' => $this->creatives->client($client, $start, $end),
         ];
     }
 
@@ -272,6 +287,9 @@ class PerformanceReadService
             ->where('metric_snapshots.campaign_id', $campaign->id)
             ->where('metric_snapshots.ad_group_id', $adGroup->id)->get();
         $models = \App\Models\Ad::query()->whereIn('id', $rows->pluck('ad_id')->filter())->get()->keyBy('id');
+        $creativePerformance = $this->creatives->account($account, $start, $end);
+        $verdicts = collect([...$creativePerformance['winners'], ...$creativePerformance['did_not_work'], ...$creativePerformance['not_enough_data']])
+            ->keyBy('ad.id');
 
         return [
             'campaign' => $campaign,
@@ -281,6 +299,7 @@ class PerformanceReadService
             'ads' => $rows->map(fn ($row) => [
                 'ad' => $models->get($row->ad_id),
                 'metrics' => $this->metrics($this->rowTotals($row)),
+                'verdict' => $verdicts->get($row->ad_id)['verdict'] ?? null,
             ])->filter(fn ($row) => $row['ad'])->sortByDesc('metrics.spend')->values(),
         ];
     }
@@ -293,6 +312,7 @@ class PerformanceReadService
             'ad' => $ad,
             'metrics' => $this->entityMetrics($account->id, 'ad', 'ad_id', $ad->id, $start, $end),
             'series' => $this->entitySeries($account->id, 'ad', 'ad_id', $ad->id, $start, $end),
+            'verdict' => $this->creatives->verdictFor($account, $ad, $start, $end),
         ];
     }
 
@@ -374,7 +394,7 @@ class PerformanceReadService
 
     private function accountPayload(AdAccount $account): array
     {
-        return $account->only(['id', 'client_id', 'external_id', 'name', 'platform', 'currency', 'timezone', 'status', 'reporting_objective', 'effective_reporting_objective']) + [
+        return $account->only(['id', 'client_id', 'external_id', 'name', 'platform', 'currency', 'timezone', 'status', 'reporting_objective', 'effective_reporting_objective', 'target_costs']) + [
             'client' => $account->client?->only(['id', 'name', 'objective']),
         ];
     }

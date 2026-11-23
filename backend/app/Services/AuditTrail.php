@@ -10,7 +10,7 @@ use Illuminate\Support\Str;
 
 class AuditTrail
 {
-    private const SENSITIVE = ['password', 'password_confirmation', 'token', 'access_token', 'refresh_token', 'app_secret', 'client_secret', 'credentials', 'configuration', 'google_chat_webhook', 'webhook', 'secret'];
+    private const SENSITIVE = ['password', 'password_confirmation', 'token', 'api_key', 'access_token', 'refresh_token', 'app_secret', 'client_secret', 'credentials', 'configuration', 'google_chat_webhook', 'webhook', 'secret'];
 
     public function record(string $action, Model|string|null $entity = null, array $before = [], array $after = [], ?int $clientId = null, ?User $actor = null, ?Request $request = null): AuditEvent
     {

@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Check, Cpu, Mail, Pencil, Plus, Send, ShieldCheck, Trash2, X } from 'lucide-react'
+import { Check, Cpu, Image, Mail, Pencil, Plus, Send, ShieldCheck, Trash2, X } from 'lucide-react'
 import { NavLink, useLocation } from 'react-router-dom'
 import { api } from '../api/client'
 import { useToast } from '../context/ToastContext'
@@ -27,14 +27,16 @@ const capabilityLabels = {
 export default function AiModelSettingsPage() {
   const { pathname } = useLocation()
   const emailTab = pathname === '/settings/email-integration'
+  const mediaTab = pathname === '/settings/creative-media'
 
   return <Page title="Settings" subtitle="Manage the services SharkAds uses for AI analysis and email delivery.">
     <nav className="settings-tabs" aria-label="Settings sections">
       <NavLink to="/settings/ai-models"><Cpu size={15}/><span>AI models</span></NavLink>
       <NavLink to="/settings/email-integration"><Mail size={15}/><span>Email integration</span></NavLink>
+      <NavLink to="/settings/creative-media"><Image size={15}/><span>Creative media</span></NavLink>
     </nav>
-    <div className="settings-tab-panel" key={emailTab ? 'email' : 'ai'}>
-      {emailTab ? <EmailIntegrationTab/> : <AiModelsTab/>}
+    <div className="settings-tab-panel" key={mediaTab ? 'media' : emailTab ? 'email' : 'ai'}>
+      {mediaTab ? <CreativeMediaTab/> : emailTab ? <EmailIntegrationTab/> : <AiModelsTab/>}
     </div>
   </Page>
 }
@@ -278,6 +280,43 @@ function EmailIntegrationForm({ settings }) {
         <button type="button" className="email-test-button" disabled={!settings?.enabled || !settings?.configured || !testRecipient || sendTest.isPending} onClick={() => { setError(''); sendTest.mutate() }}><Send size={14}/>{sendTest.isPending ? 'Sending…' : 'Send test'}</button>
         <button className="ops-primary" disabled={save.isPending}>{save.isPending ? 'Saving…' : 'Save settings'}</button>
       </div>
+  </form>
+}
+
+function CreativeMediaTab() {
+  const queryClient = useQueryClient()
+  const toast = useToast()
+  const [apiKey, setApiKey] = useState('')
+  const [enabledOverride, setEnabledOverride] = useState(null)
+  const [error, setError] = useState('')
+  const query = useQuery({
+    queryKey: ['creative-media-settings'],
+    queryFn: () => api.getCreativeMediaSettings().then(response => response.data),
+  })
+  const enabled = enabledOverride ?? Boolean(query.data?.enabled)
+  const save = useMutation({
+    mutationFn: () => api.updateCreativeMediaSettings({ enabled, ...(apiKey ? { api_key: apiKey } : {}) }),
+    onSuccess: response => {
+      queryClient.setQueryData(['creative-media-settings'], response.data)
+      setEnabledOverride(Boolean(response.data.enabled))
+      setApiKey('')
+      setError('')
+      toast.success('Creative media settings saved.')
+    },
+    onError: requestError => setError(apiError(requestError, 'Could not save creative media settings.')),
+  })
+
+  if (query.isLoading) return <div className="email-integration-loading">Loading creative media settings…</div>
+  const settings = query.data || {}
+
+  return <form className="email-integration-form" onSubmit={event => { event.preventDefault(); setError(''); save.mutate() }}>
+    <div className="settings-section-heading"><div><Image size={17}/><span><strong>Creative media</strong><small>Load and download remote ad media without storing files on SharkAds.</small></span></div></div>
+    <div className="email-integration-summary"><span className="email-provider-mark">CORS</span><div><strong>corsproxy.io</strong><small>Browser fallback for provider URLs that block cross-origin downloads</small></div><span className={`email-status ${enabled && settings.configured ? 'ready' : ''}`}><i/>{enabled && settings.configured ? 'Ready' : enabled ? 'Setup required' : 'Disabled'}</span></div>
+    <div className="email-integration-toggle"><div><ShieldCheck size={16}/><span><strong>Enable download fallback</strong><small>Direct browser downloads are attempted before corsproxy.io.</small></span></div><label className="settings-switch"><input type="checkbox" checked={enabled} onChange={event => setEnabledOverride(event.target.checked)}/><span/></label></div>
+    <div className="email-settings-block"><div><strong>API key</strong><small>The key is encrypted at rest and returned only inside an authorized runtime proxy URL. Register production domains and referrers in corsproxy.io.</small></div><div className="email-settings-grid two"><Field label="corsproxy.io API key"><input type="password" autoComplete="new-password" value={apiKey} onChange={event => setApiKey(event.target.value)} placeholder={settings.api_key_hint || 'Enter API key'}/></Field><Field label="Mode"><input readOnly value="Browser request (no server media storage)"/></Field></div></div>
+    <p className="email-test-result">Large videos and binary downloads require a corsproxy.io plan whose file-size and content-type limits cover the creative.</p>
+    {error && <p className="ops-form-error">{error}</p>}
+    <div className="email-integration-actions"><span/><button className="ops-primary" disabled={save.isPending}>{save.isPending ? 'Saving…' : 'Save settings'}</button></div>
   </form>
 }
 

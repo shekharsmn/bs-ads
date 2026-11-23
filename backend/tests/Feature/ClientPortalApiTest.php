@@ -3,6 +3,8 @@
 namespace Tests\Feature;
 
 use App\Models\AdAccount;
+use App\Models\Ad;
+use App\Models\AdGroup;
 use App\Models\Campaign;
 use App\Models\Client;
 use App\Models\ClientLoginToken;
@@ -69,6 +71,12 @@ class ClientPortalApiTest extends TestCase
     public function test_selected_campaign_scope_filters_totals_rows_and_direct_drilldowns(): void
     {
         [$user, $client, $account, $allowed, $blocked] = $this->portalFixture();
+        $allowed->update(['status' => 'ENABLED']);
+        $blocked->update(['status' => 'ENABLED']);
+        $allowedGroup = AdGroup::create(['campaign_id' => $allowed->id, 'external_id' => 'allowed-group', 'name' => 'Allowed group', 'status' => 'ENABLED']);
+        $blockedGroup = AdGroup::create(['campaign_id' => $blocked->id, 'external_id' => 'blocked-group', 'name' => 'Blocked group', 'status' => 'ENABLED']);
+        Ad::create(['ad_group_id' => $allowedGroup->id, 'external_id' => 'allowed-ad', 'name' => 'Allowed creative', 'status' => 'ENABLED']);
+        Ad::create(['ad_group_id' => $blockedGroup->id, 'external_id' => 'blocked-ad', 'name' => 'Blocked creative', 'status' => 'ENABLED']);
         $dates = '?start_date=2026-11-01&end_date=2026-11-03';
 
         $this->actingAs($user)->getJson('/api/clients')->assertForbidden();
@@ -81,6 +89,10 @@ class ClientPortalApiTest extends TestCase
         $this->actingAs($user)->getJson("/api/portal/accounts/{$account->id}/campaigns{$dates}")
             ->assertOk()->assertJsonCount(1, 'campaigns')->assertJsonPath('campaigns.0.campaign.id', $allowed->id);
         $this->actingAs($user)->getJson("/api/portal/accounts/{$account->id}/campaigns/{$blocked->id}/ad-groups{$dates}")->assertNotFound();
+        $this->actingAs($user)->getJson("/api/portal/accounts/{$account->id}/creative-performance{$dates}&verdict=not_enough_data")
+            ->assertOk()->assertJsonPath('meta.total', 1)->assertJsonPath('data.0.ad.name', 'Allowed creative');
+        $this->actingAs($user)->getJson("/api/portal/clients/{$client->id}/creative-performance{$dates}&verdict=not_enough_data")
+            ->assertOk()->assertJsonPath('meta.total', 1)->assertJsonPath('data.0.ad.name', 'Allowed creative');
     }
 
     public function test_hidden_accounts_are_not_discoverable_and_admin_policy_validation_is_atomic(): void

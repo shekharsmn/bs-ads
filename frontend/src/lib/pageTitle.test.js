@@ -12,6 +12,7 @@ describe('pageTitle', () => {
     ['/users', 'Users · SharkAds'],
     ['/settings/ai-models', 'Settings · SharkAds'],
     ['/settings/email-integration', 'Settings · SharkAds'],
+    ['/settings/creative-media', 'Settings · SharkAds'],
   ])('maps %s to %s', (path, expected) => expect(pageTitle(path)).toBe(expected))
 
   it('uses the product name for unknown routes', () => {

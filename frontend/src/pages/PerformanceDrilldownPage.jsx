@@ -4,6 +4,7 @@ import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { AlertTriangle, ArrowLeft, DatabaseZap, ExternalLink, FileText, HeartPulse, LayoutDashboard, RefreshCw } from 'lucide-react'
 import { api } from '../api/client'
 import CampaignColumnConfigurator from '../components/CampaignColumnConfigurator'
+import CreativePerformancePanel, { AdCreativePreview, CreativeVerdictBadge } from '../components/CreativePerformancePanel'
 import PerformanceMetricsTable from '../components/PerformanceMetricsTable'
 import PerformancePeriodControl from '../components/PerformancePeriodControl'
 import PerformanceTrendChart from '../components/PerformanceTrendChart'
@@ -67,12 +68,15 @@ export default function PerformanceDrilldownPage() {
       setCountdownClock(Date.now())
     },
   })
-  const updateObjective = useMutation({
-    mutationFn: reportingObjective => api.updateAdAccount(accountId, { reporting_objective: reportingObjective || null }),
+  const updateAccountSettings = useMutation({
+    mutationFn: settings => api.updateAdAccount(accountId, settings),
     onSuccess: response => {
       queryClient.setQueryData(['performance-account', accountId], current => ({ ...response.data.account, refresh: current?.refresh }))
       queryClient.invalidateQueries({ queryKey: ['performance-accounts'] })
       queryClient.invalidateQueries({ queryKey: ['client-performance', clientId] })
+      queryClient.invalidateQueries({ queryKey: ['account-overview', accountId] })
+      queryClient.invalidateQueries({ queryKey: ['ad-group-ads', accountId] })
+      queryClient.invalidateQueries({ queryKey: ['ad-performance', accountId] })
     },
   })
   const refreshAvailableAt = latestCooldown(account?.refresh?.available_at, refreshOverrideAvailableAt)
@@ -99,6 +103,14 @@ export default function PerformanceDrilldownPage() {
   const childNoun = level === 'account' ? 'campaign' : account?.platform === 'meta' ? 'ad set' : 'ad group'
   const groupLabel = account?.platform === 'meta' ? 'Ad set' : 'Ad group'
   const platformLabel = adPlatformLabel(account?.platform)
+  const saveTargetCost = (key, rawValue) => {
+    const current = account?.target_costs?.[key]
+    if ((rawValue === '' && current == null) || (rawValue !== '' && Number(rawValue) === Number(current))) return
+    const next = { ...(account?.target_costs || {}) }
+    if (rawValue === '') delete next[key]
+    else next[key] = Number(rawValue)
+    updateAccountSettings.mutate({ target_costs: Object.keys(next).length ? next : null })
+  }
   const platformUrlFor = ({ campaign, adGroup, ad } = {}) => adPlatformEntityUrl({
     platform: account?.platform,
     accountId: account?.external_id,
@@ -110,7 +122,7 @@ export default function PerformanceDrilldownPage() {
     ? (campaigns.data?.campaigns || []).map(row => ({ entity: row.campaign, metrics: row.metrics, platformUrl: platformUrlFor({ campaign: row.campaign }) }))
     : level === 'campaign'
       ? (groups.data?.ad_groups || []).map(row => ({ entity: row.ad_group, metrics: row.metrics, platformUrl: platformUrlFor({ campaign: groups.data?.campaign, adGroup: row.ad_group }) }))
-      : level === 'group' ? (ads.data?.ads || []).map(row => ({ entity: row.ad, metrics: row.metrics, platformUrl: platformUrlFor({ campaign: ads.data?.campaign, adGroup: ads.data?.ad_group, ad: row.ad }) })) : []
+      : level === 'group' ? (ads.data?.ads || []).map(row => ({ entity: row.ad, metrics: row.metrics, creative: row.ad.creative, verdict: row.verdict, platformUrl: platformUrlFor({ campaign: ads.data?.campaign, adGroup: ads.data?.ad_group, ad: row.ad }) })) : []
 
   const selectedPlatformUrl = level === 'campaign'
     ? platformUrlFor({ campaign: payload?.campaign })
@@ -141,10 +153,12 @@ export default function PerformanceDrilldownPage() {
     {level === 'account' && account ? <div id="account-section-panel" className="account-section-panel" role="tabpanel">
       {section === 'details' && <>
         <AsyncStateNotice queries={activeQueries}/>
-        <section className="performance-objective-control"><div><strong>Reporting objective</strong><small>Controls result classification and the default performance metrics for this account.</small></div>{['admin', 'marketer'].includes(user?.role) ? <select aria-label="Reporting objective" value={account.reporting_objective || ''} disabled={updateObjective.isPending} onChange={event => updateObjective.mutate(event.target.value)}><option value="">Inherit client ({reportingObjectiveLabel(account.client?.objective)})</option><option value="lead_gen">Lead generation</option><option value="ecommerce">Ecommerce</option><option value="both">Lead + ecommerce</option><option value="app_installs">App installs</option></select> : <span>{reportingObjectiveLabel(effectiveObjective)}</span>}{updateObjective.isPending && <em>Saving and queuing refresh…</em>}{updateObjective.isError && <em className="error">{updateObjective.error?.response?.data?.message || 'Could not update the reporting objective.'}</em>}</section>
+        <section className="performance-objective-control"><div><strong>Reporting objective</strong><small>Controls result classification and the default performance metrics for this account.</small></div>{['admin', 'marketer'].includes(user?.role) ? <select aria-label="Reporting objective" value={account.reporting_objective || ''} disabled={updateAccountSettings.isPending} onChange={event => updateAccountSettings.mutate({ reporting_objective: event.target.value || null })}><option value="">Inherit client ({reportingObjectiveLabel(account.client?.objective)})</option><option value="lead_gen">Lead generation</option><option value="ecommerce">Ecommerce</option><option value="both">Lead + ecommerce</option><option value="app_installs">App installs</option></select> : <span>{reportingObjectiveLabel(effectiveObjective)}</span>}{updateAccountSettings.isPending && <em>Saving account settings…</em>}{updateAccountSettings.isError && <em className="error">{updateAccountSettings.error?.response?.data?.message || 'Could not update the account settings.'}</em>}</section>
+        <section className="performance-target-control"><div><strong>Winning cost targets</strong><small>Verdicts use these business targets first; blank targets use a leave-one-out 90-day peer median.</small></div><div className="performance-target-inputs">{[['leads', 'Target CPL'], ['purchases', 'Target purchase CPA'], ['installs', 'Target CPI']].map(([key, label]) => <label key={`${key}-${account.target_costs?.[key] ?? ''}`}><span>{label}</span>{['admin', 'marketer'].includes(user?.role) ? <div><b>{account.currency}</b><input aria-label={label} type="number" min="0.01" step="0.01" defaultValue={account.target_costs?.[key] ?? ''} disabled={updateAccountSettings.isPending} onBlur={event => saveTargetCost(key, event.target.value)}/></div> : <strong>{account.target_costs?.[key] ? `${account.currency} ${account.target_costs[key]}` : 'Historical fallback'}</strong>}</label>)}</div></section>
         <section className="performance-kpis">{objectiveMetricColumns.map(column => <div key={column.key}><span>{column.label}</span><strong>{column.format(metrics?.[column.key], account?.currency)}</strong></div>)}</section>
         <PerformanceTrendChart series={series} currency={account?.currency} columns={trendColumns} ariaLabel="Account daily performance trend"/>
         <section className="performance-children"><div className="performance-section-head"><div><h2>{childLabel}</h2><p>{`Select ${childNoun === 'ad set' ? 'an' : 'a'} ${childNoun} to inspect the next level.`}</p></div><CampaignColumnConfigurator columnKeys={campaignColumns.keys} onChange={campaignColumns.setKeys} onReset={campaignColumns.reset}/></div><PerformanceMetricsTable label={childLabel.slice(0, -1)} rows={rows} currency={account?.currency} onOpen={openChild} platformLabel={platformLabel} metricColumns={campaignMetricColumns}/></section>
+        <CreativePerformancePanel data={overview.data?.creative_performance} clientId={clientId} accountId={account.id} query={queryString}/>
       </>}
       {section === 'alerts' && <ScopedAlerts clientId={clientId} accountId={account.id} limit={25}/>} 
       {section === 'data-health' && <ScopedDataHealth clientId={clientId} accountId={account.id} limit={25}/>} 
@@ -156,7 +170,7 @@ export default function PerformanceDrilldownPage() {
       {level !== 'account' && <PerformanceTrendChart series={series} currency={account?.currency} columns={trendColumns} ariaLabel={`${level === 'campaign' ? 'Campaign' : level === 'group' ? groupLabel : 'Ad'} daily performance trend`}/>}
       {level !== 'account' && level !== 'ad' && <section className="performance-children"><div className="performance-section-head"><div><h2>{childLabel}</h2><p>{level === 'group' ? 'Select an ad to inspect its performance.' : `Select ${childNoun === 'ad set' ? 'an' : 'a'} ${childNoun} to inspect the next level.`}</p></div><button onClick={() => navigate(-1)}><ArrowLeft size={14}/> Back</button></div><PerformanceMetricsTable label={childLabel.slice(0, -1)} rows={rows} currency={account?.currency} onOpen={openChild} platformLabel={platformLabel} metricColumns={campaignMetricColumns}/></section>}
     </>}
-    {level === 'ad' && <section className="performance-children ad-detail-section"><div className="performance-section-head"><div><h2>Ad details</h2><p>Platform identity and hierarchy for this ad.</p></div><button onClick={() => navigate(-1)}><ArrowLeft size={14}/> Back to ads</button></div><dl className="ad-detail-grid"><div><dt>Status</dt><dd><span className="entity-status">{selectedAd?.ad?.status || 'Unknown'}</span></dd></div><div><dt>Format</dt><dd>{selectedAd?.ad?.type || 'Not reported'}</dd></div><div><dt>Platform</dt><dd>{platformLabel}</dd></div><div><dt>Ad ID</dt><dd className="mono">{selectedAd?.ad?.external_id || 'Not reported'}</dd></div><div><dt>Client</dt><dd>{account?.client?.name || 'Not reported'}</dd></div><div><dt>Ad account</dt><dd><Link to={accountPath}>{account?.name || 'Not reported'}</Link><small className="mono">{account?.external_id}</small></dd></div><div><dt>Campaign</dt><dd><Link to={campaignPath}>{payload?.campaign?.name || 'Not reported'}</Link><small className="mono">{payload?.campaign?.external_id}</small></dd></div><div><dt>{groupLabel}</dt><dd><Link to={groupPath}>{payload?.ad_group?.name || 'Not reported'}</Link><small className="mono">{payload?.ad_group?.external_id}</small></dd></div><div><dt>Currency</dt><dd>{account?.currency || 'Not reported'}</dd></div><div><dt>Reporting timezone</dt><dd>{account?.timezone || 'Not reported'}</dd></div></dl></section>}
+    {level === 'ad' && <section className="performance-children ad-detail-section"><div className="performance-section-head"><div><h2>Ad details</h2><p>Creative media and copy are loaded from platform metadata; media files stay on the platform CDN.</p></div><div className="ad-detail-verdict"><CreativeVerdictBadge verdict={payload?.verdict}/><button onClick={() => navigate(-1)}><ArrowLeft size={14}/> Back to ads</button></div></div><div className="ad-creative-detail"><AdCreativePreview creative={selectedAd?.ad?.creative} name={selectedAd?.ad?.name} large/><div><strong className="ad-creative-name">{selectedAd?.ad?.name}</strong><p>{payload?.verdict?.reason}</p>{selectedAd?.ad?.creative?.destination_urls?.[0] && <a href={selectedAd.ad.creative.destination_urls[0]} target="_blank" rel="noreferrer">Open landing page <ExternalLink size={13}/></a>}</div></div><dl className="ad-detail-grid"><div><dt>Status</dt><dd><span className="entity-status">{selectedAd?.ad?.status || 'Unknown'}</span></dd></div><div><dt>Format</dt><dd>{selectedAd?.ad?.type || 'Not reported'}</dd></div><div><dt>Platform</dt><dd>{platformLabel}</dd></div><div><dt>Ad ID</dt><dd className="mono">{selectedAd?.ad?.external_id || 'Not reported'}</dd></div><div><dt>Client</dt><dd>{account?.client?.name || 'Not reported'}</dd></div><div><dt>Ad account</dt><dd><Link to={accountPath}>{account?.name || 'Not reported'}</Link><small className="mono">{account?.external_id}</small></dd></div><div><dt>Campaign</dt><dd><Link to={campaignPath}>{payload?.campaign?.name || 'Not reported'}</Link><small className="mono">{payload?.campaign?.external_id}</small></dd></div><div><dt>{groupLabel}</dt><dd><Link to={groupPath}>{payload?.ad_group?.name || 'Not reported'}</Link><small className="mono">{payload?.ad_group?.external_id}</small></dd></div><div><dt>Currency</dt><dd>{account?.currency || 'Not reported'}</dd></div><div><dt>Reporting timezone</dt><dd>{account?.timezone || 'Not reported'}</dd></div></dl></section>}
   </main>
 }
 

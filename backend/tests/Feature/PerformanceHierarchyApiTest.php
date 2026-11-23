@@ -347,6 +347,126 @@ class PerformanceHierarchyApiTest extends TestCase
             ->assertForbidden();
     }
 
+    public function test_active_meta_ads_are_classified_with_account_relative_evidence_thresholds(): void
+    {
+        [$viewer, $account] = $this->accountFixture();
+        $account->update(['platform' => 'meta', 'target_costs' => ['leads' => 50]]);
+        $campaign = Campaign::create(['ad_account_id' => $account->id, 'external_id' => 'c1', 'name' => 'Prospecting', 'status' => 'ACTIVE', 'type' => 'OUTCOME_LEADS']);
+        $group = AdGroup::create(['campaign_id' => $campaign->id, 'external_id' => 'g1', 'name' => 'Broad', 'status' => 'ACTIVE']);
+        $winner = Ad::create([
+            'ad_group_id' => $group->id, 'external_id' => 'winner', 'name' => 'Proof-led video', 'status' => 'ACTIVE', 'type' => 'VIDEO',
+            'creative' => ['provider' => 'meta', 'headlines' => ['See the difference'], 'primary_texts' => ['A clearer result.'], 'media' => [['type' => 'video_thumbnail', 'url' => 'https://cdn.example/winner.jpg']]],
+        ]);
+        $failed = Ad::create(['ad_group_id' => $group->id, 'external_id' => 'failed', 'name' => 'Generic image', 'status' => 'ACTIVE']);
+        $paused = Ad::create(['ad_group_id' => $group->id, 'external_id' => 'paused', 'name' => 'Paused ad', 'status' => 'PAUSED']);
+        $awaiting = Ad::create(['ad_group_id' => $group->id, 'external_id' => 'awaiting', 'name' => 'New active ad', 'status' => 'ACTIVE']);
+        $pausedGroup = AdGroup::create(['campaign_id' => $campaign->id, 'external_id' => 'g2', 'name' => 'Paused group', 'status' => 'PAUSED']);
+        $parentPaused = Ad::create(['ad_group_id' => $pausedGroup->id, 'external_id' => 'parent-paused', 'name' => 'Enabled under paused group', 'status' => 'ACTIVE']);
+
+        foreach (range(1, 5) as $day) {
+            $date = '2026-10-'.str_pad((string) $day, 2, '0', STR_PAD_LEFT);
+            foreach ([
+                [$winner, 60, 400, 20, 1.2],
+                [$failed, 100, 400, 20, 0],
+                [$paused, 1000, 10000, 500, 50],
+                [$parentPaused, 10, 100, 5, 1],
+            ] as [$ad, $spend, $impressions, $clicks, $leads]) {
+                MetricSnapshot::create([
+                    'ad_account_id' => $account->id, 'campaign_id' => $campaign->id, 'ad_group_id' => $group->id, 'ad_id' => $ad->id,
+                    'scope' => 'ad', 'scope_key' => 'ad:'.$ad->id, 'metric_date' => $date, 'currency' => 'INR',
+                    'spend' => $spend, 'impressions' => $impressions, 'reach' => 300, 'clicks' => $clicks,
+                    'conversions' => $leads, 'leads' => $leads, 'collected_at' => now(),
+                ]);
+            }
+        }
+
+        $dates = '?start_date=2026-10-01&end_date=2026-10-05';
+        $this->actingAs($viewer)->getJson("/api/performance/accounts/{$account->id}/overview{$dates}")
+            ->assertOk()
+            ->assertJsonPath('creative_performance.counts.active_ads', 3)
+            ->assertJsonPath('creative_performance.counts.winners', 1)
+            ->assertJsonPath('creative_performance.counts.did_not_work', 1)
+            ->assertJsonPath('creative_performance.counts.not_enough_data', 1)
+            ->assertJsonPath('creative_performance.winners.0.ad.name', 'Proof-led video')
+            ->assertJsonPath('creative_performance.did_not_work.0.ad.name', 'Generic image')
+            ->assertJsonCount(0, 'creative_performance.not_enough_data');
+
+        $this->actingAs($viewer)->getJson("/api/performance/accounts/{$account->id}/creative-performance{$dates}&verdict=not_enough_data&per_page=1")
+            ->assertOk()
+            ->assertJsonPath('meta.total', 1)
+            ->assertJsonPath('meta.per_page', 1)
+            ->assertJsonPath('data.0.ad.name', 'New active ad');
+
+        $this->actingAs($viewer)->getJson("/api/performance/accounts/{$account->id}/campaigns/{$campaign->id}/ad-groups/{$group->id}/ads/{$winner->id}{$dates}")
+            ->assertOk()
+            ->assertJsonPath('verdict.key', 'winner')
+            ->assertJsonPath('ad.creative.headlines.0', 'See the difference')
+            ->assertJsonPath('ad.creative.media.0.url', 'https://cdn.example/winner.jpg');
+    }
+
+    public function test_mixed_objective_accounts_benchmark_lead_and_purchase_ads_separately(): void
+    {
+        [$viewer, $account] = $this->accountFixture();
+        $account->update([
+            'platform' => 'meta',
+            'reporting_objective' => 'both',
+            'target_costs' => ['leads' => 25, 'purchases' => 15],
+        ]);
+        $leadCampaign = Campaign::create(['ad_account_id' => $account->id, 'external_id' => 'lead-campaign', 'name' => 'Lead campaign', 'status' => 'ACTIVE', 'type' => 'SEARCH']);
+        $salesCampaign = Campaign::create(['ad_account_id' => $account->id, 'external_id' => 'sales-campaign', 'name' => 'Sales campaign', 'status' => 'ACTIVE', 'type' => 'SEARCH']);
+        $leadGroup = AdGroup::create(['campaign_id' => $leadCampaign->id, 'external_id' => 'lead-group', 'name' => 'Lead group', 'status' => 'ACTIVE']);
+        $salesGroup = AdGroup::create(['campaign_id' => $salesCampaign->id, 'external_id' => 'sales-group', 'name' => 'Sales group', 'status' => 'ACTIVE']);
+        $leadAd = Ad::create(['ad_group_id' => $leadGroup->id, 'external_id' => 'lead-ad', 'name' => 'Lead ad', 'status' => 'ACTIVE']);
+        $salesAd = Ad::create(['ad_group_id' => $salesGroup->id, 'external_id' => 'sales-ad', 'name' => 'Sales ad', 'status' => 'ACTIVE']);
+
+        foreach (range(1, 5) as $day) {
+            foreach ([
+                [$leadCampaign, $leadGroup, $leadAd, 20, 1, 0],
+                [$salesCampaign, $salesGroup, $salesAd, 10, 0, 1],
+            ] as [$campaign, $group, $ad, $spend, $leads, $purchases]) {
+                MetricSnapshot::create([
+                    'ad_account_id' => $account->id, 'campaign_id' => $campaign->id, 'ad_group_id' => $group->id, 'ad_id' => $ad->id,
+                    'scope' => 'ad', 'scope_key' => 'ad:'.$ad->id, 'metric_date' => '2026-10-0'.$day, 'currency' => 'INR',
+                    'spend' => $spend, 'impressions' => 300, 'reach' => 250, 'clicks' => 30,
+                    'conversions' => $leads + $purchases, 'leads' => $leads, 'purchases' => $purchases, 'collected_at' => now(),
+                ]);
+            }
+        }
+
+        $response = $this->actingAs($viewer)->getJson("/api/performance/accounts/{$account->id}/overview?start_date=2026-10-01&end_date=2026-10-05")
+            ->assertOk()
+            ->assertJsonPath('creative_performance.counts.winners', 2);
+
+        $this->assertSame(['leads', 'purchases'], collect($response->json('creative_performance.winners'))->pluck('metrics.result_key')->sort()->values()->all());
+    }
+
+    public function test_google_ads_use_click_and_result_thresholds_against_the_configured_target(): void
+    {
+        [$viewer, $account] = $this->accountFixture();
+        $account->update(['target_costs' => ['leads' => 40]]);
+        $campaign = Campaign::create(['ad_account_id' => $account->id, 'external_id' => 'google-campaign', 'name' => 'Google Search', 'status' => 'ENABLED', 'type' => 'SEARCH']);
+        $group = AdGroup::create(['campaign_id' => $campaign->id, 'external_id' => 'google-group', 'name' => 'Search group', 'status' => 'ENABLED']);
+        $winner = Ad::create(['ad_group_id' => $group->id, 'external_id' => 'google-winner', 'name' => 'Specific RSA', 'status' => 'ENABLED']);
+        $failed = Ad::create(['ad_group_id' => $group->id, 'external_id' => 'google-failed', 'name' => 'Generic RSA', 'status' => 'ENABLED']);
+
+        foreach (range(1, 7) as $day) {
+            foreach ([[$winner, 30, 1], [$failed, 100, 0]] as [$ad, $spend, $leads]) {
+                MetricSnapshot::create([
+                    'ad_account_id' => $account->id, 'campaign_id' => $campaign->id, 'ad_group_id' => $group->id, 'ad_id' => $ad->id,
+                    'scope' => 'ad', 'scope_key' => 'ad:'.$ad->id, 'metric_date' => '2026-10-0'.$day, 'currency' => 'INR',
+                    'spend' => $spend, 'impressions' => 200, 'clicks' => 20, 'conversions' => $leads, 'leads' => $leads, 'collected_at' => now(),
+                ]);
+            }
+        }
+
+        $this->actingAs($viewer)->getJson("/api/performance/accounts/{$account->id}/overview?start_date=2026-10-01&end_date=2026-10-07")
+            ->assertOk()
+            ->assertJsonPath('creative_performance.counts.winners', 1)
+            ->assertJsonPath('creative_performance.counts.did_not_work', 1)
+            ->assertJsonPath('creative_performance.winners.0.ad.name', 'Specific RSA')
+            ->assertJsonPath('creative_performance.did_not_work.0.ad.name', 'Generic RSA');
+    }
+
     private function accountFixture(string $timezone = 'Asia/Kolkata', string $slug = 'acme'): array
     {
         $user = User::factory()->create(['role' => 'viewer']);

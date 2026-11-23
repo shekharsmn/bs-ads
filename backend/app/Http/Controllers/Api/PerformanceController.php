@@ -9,6 +9,9 @@ use App\Models\AdGroup;
 use App\Models\Campaign;
 use App\Models\Client;
 use App\Services\ClientAccess;
+use App\Services\CreativeMediaProxyService;
+use App\Services\CreativePerformanceService;
+use App\Services\AuditTrail;
 use App\Services\PerformanceReadService;
 use App\Services\WorkloadQueue;
 use Carbon\CarbonImmutable;
@@ -24,7 +27,11 @@ class PerformanceController extends Controller
 
     private const ACCOUNT_REFRESH_COOLDOWN_KEY = 'performance:account-refresh-cooldown:';
 
-    public function __construct(private readonly PerformanceReadService $performance) {}
+    public function __construct(
+        private readonly PerformanceReadService $performance,
+        private readonly CreativePerformanceService $creatives,
+        private readonly CreativeMediaProxyService $mediaProxy,
+    ) {}
 
     public function accounts(Request $request)
     {
@@ -107,6 +114,36 @@ class PerformanceController extends Controller
         return $this->performance->clientOverview($client, $start, $end);
     }
 
+    public function accountCreatives(Request $request, AdAccount $account)
+    {
+        $this->authorizeAccount($request, $account);
+        [$start, $end] = $this->dates($request);
+
+        return $this->creatives->paginateAccount($account->load('client:id,name,objective'), $start, $end, $this->creativeFilters($request));
+    }
+
+    public function clientCreatives(Request $request, Client $client)
+    {
+        ClientAccess::authorize($request->user(), $client);
+        [$start, $end] = $this->dates($request);
+
+        return $this->creatives->paginateClient($client, $start, $end, $this->creativeFilters($request, true));
+    }
+
+    public function mediaProxyUrl(Request $request, AdAccount $account, Ad $ad, int $mediaIndex, AuditTrail $audit)
+    {
+        $this->authorizeAccount($request, $account);
+        $ad->loadMissing('adGroup.campaign');
+        abort_unless((int) $ad->adGroup?->campaign?->ad_account_id === (int) $account->id, 404);
+        $payload = $this->mediaProxy->proxyPayload($ad, $mediaIndex);
+        $audit->record('creative.media_proxy_requested', $ad, [], [
+            'media_index' => $mediaIndex,
+            'target_host' => $this->mediaProxy->targetHost($ad, $mediaIndex),
+        ], $account->client_id, $request->user(), $request);
+
+        return response()->json($payload)->header('Cache-Control', 'private, no-store, max-age=0');
+    }
+
     public function account(Request $request, AdAccount $account)
     {
         $this->authorizeAccount($request, $account);
@@ -170,6 +207,22 @@ class PerformanceController extends Controller
         ]);
 
         return [$data['start_date'], $data['end_date']];
+    }
+
+    private function creativeFilters(Request $request, bool $clientScope = false): array
+    {
+        $rules = [
+            'verdict' => 'nullable|in:winner,did_not_work,not_enough_data',
+            'page' => 'nullable|integer|min:1',
+            'per_page' => 'nullable|integer|min:1|max:50',
+            'search' => 'nullable|string|max:200',
+        ];
+        if ($clientScope) {
+            $rules['account_id'] = 'nullable|integer';
+            $rules['platform'] = 'nullable|in:google,meta';
+        }
+
+        return $request->validate($rules);
     }
 
     private function refreshCooldown(string $key = self::REFRESH_COOLDOWN_KEY): array

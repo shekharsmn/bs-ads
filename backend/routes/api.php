@@ -6,6 +6,7 @@ use App\Http\Controllers\Api\AdLibraryController;
 use App\Http\Controllers\Api\AiGovernanceController;
 use App\Http\Controllers\Api\AiLogsController;
 use App\Http\Controllers\Api\AiModelController;
+use App\Http\Controllers\Api\CreativeMediaSettingController;
 use App\Http\Controllers\Api\AlertController;
 use App\Http\Controllers\Api\AlertRuleController;
 use App\Http\Controllers\Api\AuditEventController;
@@ -57,9 +58,12 @@ Route::middleware(['auth:sanctum', 'active', 'audit.mutations'])->group(function
     Route::prefix('portal')->middleware('role:admin,client')->group(function () {
         Route::get('/clients', [ClientPortalPerformanceController::class, 'clients']);
         Route::get('/clients/{client}/performance', [ClientPortalPerformanceController::class, 'clientOverview']);
+        Route::get('/clients/{client}/creative-performance', [ClientPortalPerformanceController::class, 'clientCreatives']);
         Route::get('/clients/{client}/performance/export/{format}', [ClientPortalPerformanceController::class, 'exportClient']);
         Route::get('/accounts/{account}', [ClientPortalPerformanceController::class, 'account']);
         Route::get('/accounts/{account}/overview', [ClientPortalPerformanceController::class, 'overview']);
+        Route::get('/accounts/{account}/creative-performance', [ClientPortalPerformanceController::class, 'accountCreatives']);
+        Route::post('/accounts/{account}/ads/{ad}/media/{mediaIndex}/proxy-url', [ClientPortalPerformanceController::class, 'mediaProxyUrl'])->whereNumber('mediaIndex')->middleware('throttle:30,1');
         Route::get('/accounts/{account}/campaigns', [ClientPortalPerformanceController::class, 'campaigns']);
         Route::get('/accounts/{account}/export/{format}', [ClientPortalPerformanceController::class, 'exportAccount']);
         Route::get('/accounts/{account}/campaigns/{campaign}/ad-groups', [ClientPortalPerformanceController::class, 'adGroups']);
@@ -137,9 +141,12 @@ Route::middleware(['auth:sanctum', 'active', 'audit.mutations'])->group(function
     Route::get('/performance/accounts', [PerformanceController::class, 'accounts']);
     Route::post('/performance/refresh', [PerformanceController::class, 'refresh']);
     Route::get('/clients/{client}/performance', [PerformanceController::class, 'clientOverview']);
+    Route::get('/clients/{client}/creative-performance', [PerformanceController::class, 'clientCreatives']);
     Route::get('/performance/accounts/{account}', [PerformanceController::class, 'account']);
     Route::post('/performance/accounts/{account}/refresh', [PerformanceController::class, 'refreshAccount']);
     Route::get('/performance/accounts/{account}/overview', [PerformanceController::class, 'overview']);
+    Route::get('/performance/accounts/{account}/creative-performance', [PerformanceController::class, 'accountCreatives']);
+    Route::post('/performance/accounts/{account}/ads/{ad}/media/{mediaIndex}/proxy-url', [PerformanceController::class, 'mediaProxyUrl'])->whereNumber('mediaIndex')->middleware('throttle:30,1');
     Route::get('/performance/accounts/{account}/campaigns', [PerformanceController::class, 'campaigns']);
     Route::get('/performance/accounts/{account}/campaigns/{campaign}/ad-groups', [PerformanceController::class, 'adGroups']);
     Route::get('/performance/accounts/{account}/campaigns/{campaign}/ad-groups/{adGroup}/ads', [PerformanceController::class, 'ads']);
@@ -195,6 +202,8 @@ Route::middleware(['auth:sanctum', 'active', 'audit.mutations'])->group(function
     Route::get('/settings/email-integration', [EmailIntegrationController::class, 'show'])->middleware('role:admin');
     Route::put('/settings/email-integration', [EmailIntegrationController::class, 'update'])->middleware('role:admin');
     Route::post('/settings/email-integration/test', [EmailIntegrationController::class, 'test'])->middleware('role:admin');
+    Route::get('/settings/creative-media-proxy', [CreativeMediaSettingController::class, 'show'])->middleware('role:admin');
+    Route::put('/settings/creative-media-proxy', [CreativeMediaSettingController::class, 'update'])->middleware('role:admin');
 
     Route::get('/ad-library/searches', [AdLibraryController::class, 'searches']);
     Route::post('/ad-library/searches', [AdLibraryController::class, 'store']);

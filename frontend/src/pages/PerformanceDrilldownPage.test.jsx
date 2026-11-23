@@ -44,7 +44,7 @@ describe('performance drilldown', () => {
     api.getAccountPerformance.mockResolvedValue({ data: { account, metrics, series } })
     api.getAccountCampaigns.mockResolvedValue({ data: { campaigns: [{ campaign: { id: 3, external_id: 'cmp_3', name: 'Launch', status: 'ACTIVE', type: 'OUTCOME_SALES' }, metrics }] } })
     api.getCampaignAdGroups.mockResolvedValue({ data: { campaign: { id: 3, external_id: 'cmp_3', name: 'Launch' }, metrics, series, ad_groups: [{ ad_group: { id: 4, external_id: 'set_4', name: 'Prospecting', status: 'ACTIVE' }, metrics }] } })
-    api.getAdGroupAds.mockResolvedValue({ data: { campaign: { id: 3, external_id: 'cmp_3', name: 'Launch' }, ad_group: { id: 4, external_id: 'set_4', name: 'Prospecting' }, metrics, series, ads: [{ ad: { id: 5, external_id: 'ad_5', name: 'Creative A', status: 'ACTIVE', type: 'IMAGE' }, metrics }] } })
+    api.getAdGroupAds.mockResolvedValue({ data: { campaign: { id: 3, external_id: 'cmp_3', name: 'Launch' }, ad_group: { id: 4, external_id: 'set_4', name: 'Prospecting' }, metrics, series, ads: [{ ad: { id: 5, external_id: 'ad_5', name: 'Creative A', status: 'ACTIVE', type: 'IMAGE', creative: { primary_texts: ['Lead with proof, not promises.'], headlines: ['See the result'], media: [{ type: 'image', url: 'https://cdn.example/ad.jpg' }] } }, metrics, verdict: { key: 'winner', label: 'Winner', reason: 'Below target.' } }] } })
     api.getAdPerformance.mockResolvedValue({ data: { campaign: { id: 3, external_id: 'cmp_3', name: 'Launch' }, ad_group: { id: 4, external_id: 'set_4', name: 'Prospecting' }, ad: { id: 5, external_id: 'ad_5', name: 'Creative A', status: 'ACTIVE', type: 'IMAGE' }, metrics, series } })
     api.getAlerts.mockResolvedValue({ data: { data: [] } })
     api.getDataQualityIssues.mockResolvedValue({ data: { data: [] } })
@@ -89,6 +89,14 @@ describe('performance drilldown', () => {
     expect(await screen.findByText('Prospecting')).toBeInTheDocument()
   })
 
+  it('shows creative copy, media, and verdict directly in the ad table', async () => {
+    renderPath('/command-center/clients/7/ad-accounts/9/campaigns/3/ad-groups/4?range=30d&start_date=2026-09-28&end_date=2026-10-27')
+
+    expect(await screen.findAllByText('Lead with proof, not promises.')).toHaveLength(2)
+    expect(screen.getByText('Winner')).toBeInTheDocument()
+    expect(screen.getByRole('img', { name: 'Creative for Creative A' })).toHaveAttribute('src', 'https://cdn.example/ad.jpg')
+  })
+
   it('shows the same objective-aware daily graph on campaigns, ad sets, and ads', async () => {
     renderPath('/command-center/clients/7/ad-accounts/9/campaigns/3?range=30d&start_date=2026-09-28&end_date=2026-10-27')
     const campaignTrend = await screen.findByLabelText('Campaign daily performance trend')
@@ -124,6 +132,16 @@ describe('performance drilldown', () => {
 
     fireEvent.change(screen.getByLabelText('Reporting objective'), { target: { value: '' } })
     await waitFor(() => expect(api.updateAdAccount).toHaveBeenCalledWith('9', { reporting_objective: null }))
+  })
+
+  it('saves per-result winning cost targets from the account screen', async () => {
+    renderPath('/command-center/clients/7/ad-accounts/9?range=30d&start_date=2026-09-28&end_date=2026-10-27')
+
+    const target = await screen.findByLabelText('Target CPL')
+    fireEvent.change(target, { target: { value: '42.50' } })
+    fireEvent.blur(target)
+
+    await waitFor(() => expect(api.updateAdAccount).toHaveBeenCalledWith('9', { target_costs: { leads: 42.5 } }))
   })
 
   it('opens account operations in place while preserving the performance period', async () => {

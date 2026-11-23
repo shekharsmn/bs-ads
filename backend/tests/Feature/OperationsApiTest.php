@@ -223,6 +223,25 @@ class OperationsApiTest extends TestCase
             && $job->startDate === '2026-10-20' && $job->endDate === '2026-11-18');
     }
 
+    public function test_manager_can_set_per_result_winning_cost_targets_without_recollecting_metrics(): void
+    {
+        Queue::fake();
+        $marketer = User::factory()->create(['role' => 'marketer']);
+        $client = Client::create(['name' => 'Targets Co', 'slug' => 'targets-co', 'objective' => 'both']);
+        $client->users()->attach($marketer);
+        $connection = PlatformConnection::create(['platform' => 'meta', 'name' => 'Meta', 'scope' => 'agency', 'credentials' => []]);
+        $account = AdAccount::create(['client_id' => $client->id, 'platform_connection_id' => $connection->id, 'platform' => 'meta', 'external_id' => 'act-targets', 'name' => 'Targets', 'currency' => 'USD', 'timezone' => 'UTC']);
+
+        $this->actingAs($marketer)->patchJson('/api/ad-accounts/'.$account->id, [
+            'target_costs' => ['leads' => 35.5, 'purchases' => 80],
+        ])->assertOk()
+            ->assertJsonPath('account.target_costs.leads', 35.5)
+            ->assertJsonPath('account.target_costs.purchases', 80)
+            ->assertJsonPath('refresh.queued', false);
+
+        Queue::assertNothingPushed();
+    }
+
     public function test_objective_changes_join_waiting_recollections_but_follow_an_active_one(): void
     {
         config(['queue.default' => 'database', 'queue.connections.database.retry_after' => 960]);

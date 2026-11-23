@@ -2,6 +2,7 @@
 
 namespace Tests\Feature;
 
+use App\Models\Ad;
 use App\Models\AdAccount;
 use App\Models\Client;
 use App\Models\MetricSnapshot;
@@ -167,7 +168,13 @@ class PerformanceCollectionServiceTest extends TestCase
                     return Http::response(['data' => [['id' => 'g1', 'name' => 'Ad set', 'status' => 'PAUSED', 'optimization_goal' => 'LEAD_GENERATION']]]);
                 }
 
-                return Http::response(['data' => [['id' => 'a1', 'name' => 'Creative', 'status' => 'ACTIVE', 'adset_id' => 'g1']]]);
+                return Http::response(['data' => [[
+                    'id' => 'a1', 'name' => 'Creative', 'status' => 'ACTIVE', 'adset_id' => 'g1',
+                    'creative' => [
+                        'id' => 'creative-1', 'object_type' => 'SHARE', 'thumbnail_url' => 'https://cdn.example/creative.jpg',
+                        'object_story_spec' => ['link_data' => ['message' => 'Primary copy', 'name' => 'Headline', 'description' => 'Description', 'link' => 'https://example.com']],
+                    ],
+                ]]]);
             }
             $level = $request->data()['level'];
             $row = ['campaign_id' => 'c1', 'campaign_name' => 'Campaign', 'objective' => 'OUTCOME_LEADS', 'spend' => '100', 'impressions' => '1000', 'reach' => '800', 'clicks' => '50', 'date_start' => '2026-10-20', 'date_stop' => '2026-10-20', 'actions' => [['action_type' => 'lead', 'value' => '5']]];
@@ -189,9 +196,64 @@ class PerformanceCollectionServiceTest extends TestCase
         $this->assertDatabaseCount('ads', 1);
         $this->assertDatabaseHas('ad_groups', ['external_id' => 'g1', 'status' => 'PAUSED']);
         $this->assertDatabaseHas('ads', ['external_id' => 'a1', 'status' => 'ACTIVE']);
+        $creative = Ad::query()->where('external_id', 'a1')->firstOrFail()->creative;
+        $this->assertSame('Headline', $creative['headlines'][0]);
+        $this->assertSame('Primary copy', $creative['primary_texts'][0]);
+        $this->assertSame('https://cdn.example/creative.jpg', $creative['media'][0]['url']);
         $this->assertDatabaseCount('metric_snapshots', 4);
         $this->assertDatabaseHas('metric_snapshots', ['scope' => 'ad_group', 'leads' => 5]);
         $this->assertDatabaseHas('metric_snapshots', ['scope' => 'ad', 'leads' => 5]);
+    }
+
+    public function test_meta_creative_normalizes_carousel_dynamic_assets_and_runtime_video(): void
+    {
+        $method = new \ReflectionMethod(PerformanceCollectionService::class, 'metaCreative');
+        $creative = $method->invoke(app(PerformanceCollectionService::class), [
+            'id' => 'creative-1', 'object_type' => 'VIDEO', 'thumbnail_url' => 'https://scontent.xx.fbcdn.net/main.jpg',
+            '_video_sources' => [
+                'v1' => ['source' => 'https://video.xx.fbcdn.net/main.mp4', 'picture' => 'https://scontent.xx.fbcdn.net/main.jpg'],
+                'v2' => ['source' => 'https://video.xx.fbcdn.net/card.mp4', 'picture' => 'https://scontent.xx.fbcdn.net/card.jpg'],
+            ],
+            'object_story_spec' => ['video_data' => ['video_id' => 'v1', 'message' => 'Primary', 'title' => 'Video title'], 'link_data' => [
+                'child_attachments' => [['video_id' => 'v2', 'link' => 'https://example.com/card']],
+            ]],
+            'asset_feed_spec' => [
+                'titles' => [['text' => 'Dynamic headline']], 'bodies' => [['text' => 'Dynamic body']],
+                'images' => [['url' => 'https://scontent.xx.fbcdn.net/dynamic.jpg', 'hash' => 'img1']],
+                'link_urls' => [['website_url' => 'https://example.com/dynamic']],
+            ],
+        ]);
+
+        $this->assertSame('ad', $creative['entity_kind']);
+        $this->assertSame(['Video title', 'Dynamic headline'], $creative['headlines']);
+        $this->assertSame(['Primary', 'Dynamic body'], $creative['primary_texts']);
+        $this->assertCount(3, $creative['media']);
+        $this->assertSame('https://video.xx.fbcdn.net/main.mp4', $creative['media'][0]['source_url']);
+        $this->assertEqualsCanonicalizing(['https://example.com/card', 'https://example.com/dynamic'], $creative['destination_urls']);
+    }
+
+    public function test_google_creative_normalizes_asset_backed_image_text_and_youtube_video(): void
+    {
+        $method = new \ReflectionMethod(PerformanceCollectionService::class, 'googleCreative');
+        $creative = $method->invoke(app(PerformanceCollectionService::class), [
+            'type' => 'RESPONSIVE_DISPLAY_AD', 'finalUrls' => ['https://example.com'],
+            'responsiveDisplayAd' => [
+                'headlines' => [['text' => 'Embedded headline']],
+                'marketingImages' => [['asset' => 'customers/1/assets/10']],
+                'youtubeVideos' => [['asset' => 'customers/1/assets/11']],
+            ],
+        ], [
+            'customers/1/assets/10' => ['image_url' => 'https://lh3.googleusercontent.com/image.jpg'],
+            'customers/1/assets/11' => ['youtube_id' => 'abc123', 'youtube_title' => 'Demo'],
+        ]);
+
+        $this->assertSame('ad', $creative['entity_kind']);
+        $this->assertContains('Embedded headline', $creative['headlines']);
+        $this->assertSame('image', $creative['media'][0]['type']);
+        $this->assertTrue($creative['media'][0]['downloadable']);
+        $this->assertSame('youtube_video', $creative['media'][1]['type']);
+        $this->assertFalse($creative['media'][1]['downloadable']);
+        $this->assertSame('https://www.youtube.com/embed/abc123', $creative['media'][1]['embed_url']);
     }
 
     private function metaAccount(string $suffix, ?string $lastCollectedAt = null): AdAccount

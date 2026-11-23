@@ -22,7 +22,7 @@ const routeTitles = [
   [/^\/governance\/?$/, 'Governance'],
   [/^\/users\/?$/, 'Users'],
   [/^\/data-health\/?$/, 'Data Health'],
-  [/^\/settings\/(ai-models|email-integration)\/?$/, 'Settings'],
+  [/^\/settings\/(ai-models|email-integration|creative-media)\/?$/, 'Settings'],
   [/^\/ad-library\/audits\/[^/]+\/report\/?$/, 'Content Audit Report'],
   [/^\/ad-library\/audits\//, 'Content Audit'],
   [/^\/ad-library\/audits\/?$/, 'Content Audits'],

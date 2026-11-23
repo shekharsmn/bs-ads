@@ -7,6 +7,7 @@ import { metricColumnsFor, objectiveMetricKeysFor } from '../lib/performance'
 import { AsyncStateNotice } from './ui/AsyncState'
 import PerformancePeriodControl from './PerformancePeriodControl'
 import PerformanceTrendChart from './PerformanceTrendChart'
+import CreativePerformancePanel from './CreativePerformancePanel'
 
 export default function ClientPerformanceOverview({ client, clientId, range, dates, onPeriodChange }) {
   const performance = useQuery({
@@ -41,6 +42,7 @@ export default function ClientPerformanceOverview({ client, clientId, range, dat
         return <tr key={group.currency}><td className="sticky-column"><strong>{group.currency} total</strong><small>{groupAccountCount} {groupAccountCount === 1 ? 'account' : 'accounts'}</small></td><td>{group.currency}</td><td>—</td>{metricColumns.map(column => <td className="numeric-cell" key={column.key}>{column.format(group.metrics?.[column.key], group.currency)}</td>)}<td><span className={`account-freshness ${freshnessState(group.freshness_timestamp)}`}>{freshnessLabel(group.freshness_timestamp)}</span></td><td/></tr>
       })}</tfoot>}</table></div>{performance.isSuccess && accounts.length === 0 && <div className="performance-empty-row">No ad accounts are assigned to this client.</div>}</div>
     </div>
+    <CreativePerformancePanel data={performance.data?.creative_performance} clientId={clientId} query={accountQuery}/>
   </section>
 }
 

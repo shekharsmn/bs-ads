@@ -1,0 +1,84 @@
+import { useEffect, useMemo, useState } from 'react'
+import { useQuery } from '@tanstack/react-query'
+import { Download, ExternalLink, ImageOff, Play, Search, X } from 'lucide-react'
+import { Link } from 'react-router-dom'
+import { api } from '../api/client'
+
+export default function CreativePerformancePanel({ data, clientId, accountId = null, query = '', portalBase = null, compact = false }) {
+  const [open, setOpen] = useState(false)
+  if (!data) return null
+  const winners = data.winners || []
+  const failures = data.did_not_work || []
+  return <section className={`creative-performance-panel${compact ? ' compact' : ''}`}>
+    <header className="creative-performance-head"><div><span>Active ads only</span><h2>Winning and underperforming creatives</h2><p>Evidence-based verdicts use each ad account’s own cost per result and platform-specific minimums.</p></div><div className="creative-counts"><button onClick={() => setOpen('winner')}><b>{data.counts?.winners || 0}</b><small>Winners</small></button><button onClick={() => setOpen('did_not_work')}><b>{data.counts?.did_not_work || 0}</b><small>Did not work</small></button><button onClick={() => setOpen('not_enough_data')}><b>{data.counts?.not_enough_data || 0}</b><small>Awaiting data</small></button></div></header>
+    {!winners.length && !failures.length ? <div className="creative-empty">No active ad has crossed a winner or failure threshold in this period.</div> : <div className="creative-verdict-columns"><CreativeVerdictList title="Winners" tone="winner" rows={winners} clientId={clientId} query={query} portalBase={portalBase} onViewAll={() => setOpen('winner')}/><CreativeVerdictList title="Did not work" tone="failed" rows={failures} clientId={clientId} query={query} portalBase={portalBase} onViewAll={() => setOpen('did_not_work')}/></div>}
+    <details className="creative-methodology"><summary>How verdicts are decided</summary><p><strong>Winner:</strong> {data.methodology?.winner}</p><p><strong>Meta:</strong> {data.methodology?.meta_failure}</p><p><strong>Google:</strong> {data.methodology?.google_failure}</p></details>
+    {open && <CreativeBrowser verdict={open} onClose={() => setOpen(false)} data={data} clientId={clientId} accountId={accountId} query={query} portalBase={portalBase}/>} 
+  </section>
+}
+
+function CreativeVerdictList({ title, tone, rows, clientId, query, portalBase, onViewAll }) {
+  return <section className={`creative-verdict-list ${tone}`}><header><h3>{title}</h3><button onClick={onViewAll}>View all</button></header>{!rows.length ? <div className="creative-empty small">None in this period.</div> : <div>{rows.map(row => <CreativeResultCard key={`${row.ad_account.id}-${row.ad.id}`} row={row} href={creativeHref(row, clientId, query, portalBase)}/>)}</div>}</section>
+}
+
+function CreativeBrowser({ verdict: initialVerdict, onClose, data, clientId, accountId, query, portalBase }) {
+  const [verdict, setVerdict] = useState(initialVerdict)
+  const [page, setPage] = useState(1)
+  const [search, setSearch] = useState('')
+  const [accountFilter, setAccountFilter] = useState('')
+  const [platform, setPlatform] = useState('')
+  const [selected, setSelected] = useState(null)
+  const dates = useMemo(() => Object.fromEntries(new URLSearchParams(query)), [query])
+  const params = { ...dates, verdict, page, per_page: 24, ...(search ? { search } : {}), ...(accountFilter ? { account_id: accountFilter } : {}), ...(platform ? { platform } : {}) }
+  const results = useQuery({ queryKey: ['creative-performance-results', portalBase, clientId, accountId, params], queryFn: () => creativeRequest({ portalBase, clientId, accountId, params }).then(response => response.data) })
+  useEffect(() => { const handler = event => { if (event.key === 'Escape') onClose() }; document.addEventListener('keydown', handler); document.body.style.overflow = 'hidden'; return () => { document.removeEventListener('keydown', handler); document.body.style.overflow = '' } }, [onClose])
+  const rows = results.data?.data || []
+  const meta = results.data?.meta || {}
+  return <div className="creative-browser-backdrop" role="presentation" onMouseDown={event => { if (event.target === event.currentTarget) onClose() }}><section className="creative-browser-modal" role="dialog" aria-modal="true" aria-label="Creative performance results">
+    <header><div><span>Active creative performance</span><h2>Browse creative verdicts</h2></div><button aria-label="Close creative browser" onClick={onClose}><X size={18}/></button></header>
+    <nav>{[['winner', 'Winners', data.counts?.winners], ['did_not_work', 'Did not work', data.counts?.did_not_work], ['not_enough_data', 'Awaiting data', data.counts?.not_enough_data]].map(([key, label, count]) => <button key={key} className={verdict === key ? 'active' : ''} onClick={() => { setVerdict(key); setPage(1); setSelected(null) }}>{label}<b>{count || 0}</b></button>)}</nav>
+    <div className="creative-browser-filters"><label><Search size={14}/><input value={search} onChange={event => { setSearch(event.target.value); setPage(1); setSelected(null) }} placeholder="Search ad, campaign, or account"/></label>{!accountId && <select value={accountFilter} onChange={event => { setAccountFilter(event.target.value); setPage(1); setSelected(null) }}><option value="">All accounts</option>{(data.accounts || []).map(row => <option key={row.account.id} value={row.account.id}>{row.account.name}</option>)}</select>}{!accountId && <select value={platform} onChange={event => { setPlatform(event.target.value); setPage(1); setSelected(null) }}><option value="">All platforms</option><option value="meta">Meta</option><option value="google">Google Ads</option></select>}</div>
+    <div className={`creative-browser-content${selected ? ' has-detail' : ''}`}><div className="creative-browser-list">{results.isLoading && <div className="creative-empty">Loading creatives…</div>}{results.isError && <div className="creative-empty">Could not load creative results.</div>}{!results.isLoading && !rows.length && <div className="creative-empty">No creatives match these filters.</div>}{rows.map(row => <button className={selected?.ad.id === row.ad.id ? 'selected' : ''} key={`${row.ad_account.id}-${row.ad.id}`} onClick={() => setSelected(row)}><AdCreativePreview creative={row.ad.creative} name={row.ad.name}/><span><strong>{creativeLabel(row)}</strong><small>{row.ad_account.name} · {row.campaign.name}</small><em>{formatMoney(row.metrics.spend, row.ad_account.currency)} spend</em></span></button>)}</div>{selected && <CreativeDetail row={selected} portal={Boolean(portalBase)} onClose={() => setSelected(null)}/>}</div>
+    <footer><span>{meta.total || 0} results</span><div><button disabled={(meta.current_page || 1) <= 1} onClick={() => setPage(current => current - 1)}>Previous</button><b>{meta.current_page || 1} / {meta.last_page || 1}</b><button disabled={(meta.current_page || 1) >= (meta.last_page || 1)} onClick={() => setPage(current => current + 1)}>Next</button></div></footer>
+  </section></div>
+}
+
+function CreativeDetail({ row, portal, onClose }) {
+  const [mediaIndex, setMediaIndex] = useState(0)
+  const [downloading, setDownloading] = useState(false)
+  const [error, setError] = useState('')
+  const media = row.ad.creative?.media || []
+  const item = media[mediaIndex]
+  const download = async () => {
+    if (!item?.downloadable && !item?.thumbnail_downloadable) return
+    setDownloading(true); setError('')
+    const filename = creativeFilename(row.ad.name, item, mediaIndex)
+    try { await fetchDownload(item.source_url || item.url, filename) } catch {
+      try { const response = portal ? await api.getPortalCreativeMediaProxyUrl(row.ad_account.id, row.ad.id, mediaIndex) : await api.getCreativeMediaProxyUrl(row.ad_account.id, row.ad.id, mediaIndex); await fetchDownload(response.data.url, response.data.filename || filename) }
+      catch (downloadError) { setError(downloadError.response?.data?.errors?.media?.[0] || downloadError.response?.data?.message || 'This creative could not be downloaded.') }
+    } finally { setDownloading(false) }
+  }
+  return <aside className="creative-browser-detail"><header><strong>{creativeLabel(row)}</strong><button aria-label="Close creative detail" onClick={onClose}><X size={16}/></button></header><CreativeMedia item={item} name={row.ad.name}/>{media.length > 1 && <div className="creative-media-thumbs">{media.map((mediaItem, index) => <button className={index === mediaIndex ? 'active' : ''} onClick={() => setMediaIndex(index)} key={`${mediaItem.asset_id || mediaItem.url}-${index}`}><img src={mediaItem.preview_url || mediaItem.url} alt="" loading="lazy" referrerPolicy="no-referrer"/></button>)}</div>}<div className="creative-detail-copy">{row.ad.creative?.primary_texts?.map((text, index) => <p key={index}>{text}</p>)}{row.ad.creative?.headlines?.map((text, index) => <h3 key={index}>{text}</h3>)}{row.ad.creative?.descriptions?.map((text, index) => <small key={index}>{text}</small>)}</div><div className="creative-detail-metrics"><span><b>{formatMoney(row.metrics.spend, row.ad_account.currency)}</b> spend</span><span><b>{formatNumber(row.metrics.results)}</b> {resultLabel(row.metrics.result_key)}</span><span><b>{row.metrics.cost_per_result == null ? '—' : formatMoney(row.metrics.cost_per_result, row.ad_account.currency)}</b> cost/result</span></div><p className="creative-detail-reason">{row.verdict.reason}</p><div className="creative-detail-actions">{(item?.downloadable || item?.thumbnail_downloadable) && <button onClick={download} disabled={downloading}><Download size={14}/>{downloading ? 'Downloading…' : item?.thumbnail_downloadable && !item?.downloadable ? 'Download thumbnail' : 'Download'}</button>}{item?.provider_url && <a href={item.provider_url} target="_blank" rel="noreferrer">Open video <ExternalLink size={13}/></a>}{row.ad.creative?.destination_urls?.[0] && <a href={row.ad.creative.destination_urls[0]} target="_blank" rel="noreferrer">Landing page <ExternalLink size={13}/></a>}</div>{error && <p className="ops-form-error">{error}</p>}</aside>
+}
+
+function CreativeMedia({ item, name }) {
+  const [play, setPlay] = useState(false)
+  if (!item) return <div className="creative-detail-media empty"><ImageOff size={24}/>Preview unavailable</div>
+  if (item.type === 'youtube_video') return <div className="creative-detail-media">{play ? <iframe src={item.embed_url} title={`Video creative for ${name}`} allow="autoplay; encrypted-media; picture-in-picture" allowFullScreen/> : <button onClick={() => setPlay(true)}><img src={item.preview_url || item.url} alt={`Creative for ${name}`} referrerPolicy="no-referrer"/><span><Play size={22}/>Play video</span></button>}</div>
+  if (item.type === 'video' && item.source_url) return <div className="creative-detail-media">{play ? <video src={item.source_url} poster={item.preview_url || item.url} controls autoPlay preload="metadata"/> : <button onClick={() => setPlay(true)}><img src={item.preview_url || item.url} alt={`Creative for ${name}`} referrerPolicy="no-referrer"/><span><Play size={22}/>Play video</span></button>}</div>
+  return <div className="creative-detail-media"><img src={item.preview_url || item.url} alt={`Creative for ${name}`} loading="lazy" referrerPolicy="no-referrer"/></div>
+}
+
+function creativeRequest({ portalBase, clientId, accountId, params }) { if (portalBase) return accountId ? api.getPortalAccountCreativePerformance(accountId, params) : api.getPortalClientCreativePerformance(clientId, params); return accountId ? api.getAccountCreativePerformance(accountId, params) : api.getClientCreativePerformance(clientId, params) }
+
+function CreativeResultCard({ row, href }) { const currency = row.ad_account.currency; const cpr = row.metrics.cost_per_result; return <article className="creative-result-card"><AdCreativePreview creative={row.ad.creative} name={row.ad.name}/><div className="creative-result-body"><div className="creative-result-title"><div><span className={`platform-badge ${row.ad_account.platform}`}>{row.ad_account.platform === 'google' ? 'Google Ads' : 'Meta'}</span><strong>{creativeLabel(row)}</strong></div>{href && <Link aria-label={`Open ${row.ad.name}`} to={href}><ExternalLink size={13}/></Link>}</div><p>{row.campaign.name} · {row.ad_group.name}</p><div className="creative-result-metrics"><span><b>{formatMoney(row.metrics.spend, currency)}</b> spend</span><span><b>{formatNumber(row.metrics.results)}</b> {resultLabel(row.metrics.result_key)}</span><span><b>{cpr == null ? '—' : formatMoney(cpr, currency)}</b> cost/result</span></div><small>{row.verdict.reason}</small></div></article> }
+
+export function AdCreativePreview({ creative, name, large = false }) { const media = creative?.media?.[0]; const headline = creative?.headlines?.[0]; const primary = creative?.primary_texts?.[0]; const description = creative?.descriptions?.[0]; return <div className={`ad-creative-preview${large ? ' large' : ''}`}><div className="ad-creative-media">{media?.url ? <img src={media.preview_url || media.url} alt={`Creative for ${name}`} loading="lazy" referrerPolicy="no-referrer"/> : <span><ImageOff size={20}/>Preview unavailable</span>}{media?.type?.includes('video') && <em>Video</em>}</div>{(primary || headline || description || creative?.cta) && <div className="performance-creative-copy">{primary && <p>{primary}</p>}{headline && <strong>{headline}</strong>}{description && <small>{description}</small>}{creative?.cta && <b>{String(creative.cta).replaceAll('_', ' ')}</b>}</div>}</div> }
+export function CreativeVerdictBadge({ verdict }) { return verdict ? <span className={`creative-verdict-badge ${verdict.key}`}>{verdict.label}</span> : null }
+function creativeLabel(row) { return row.ad.creative?.entity_kind === 'asset_group' ? `${row.ad.name} · Asset group creative` : row.ad.name }
+function creativeHref(row, clientId, query, portalBase) { if (!clientId) return null; const suffix = query ? `?${query}` : ''; const root = portalBase ? `${portalBase}/${clientId}/accounts` : `/command-center/clients/${clientId}/ad-accounts`; return `${root}/${row.ad_account.id}/campaigns/${row.campaign.id}/ad-groups/${row.ad_group.id}/ads/${row.ad.id}${suffix}` }
+function formatMoney(value, currency) { return new Intl.NumberFormat('en', { style: 'currency', currency: currency || 'USD', maximumFractionDigits: 0 }).format(Number(value || 0)) }
+function formatNumber(value) { return new Intl.NumberFormat('en', { maximumFractionDigits: 1 }).format(Number(value || 0)) }
+function resultLabel(key) { return ({ leads: 'leads', purchases: 'purchases', installs: 'installs', conversions: 'results' })[key] || 'results' }
+function creativeFilename(name, media, index) { const path = new URL(media.source_url || media.url).pathname; const extension = path.split('.').pop()?.match(/^[a-z0-9]{2,5}$/i)?.[0] || (media.type === 'video' ? 'mp4' : 'jpg'); return `${String(name || 'creative').replace(/[^a-z0-9]+/gi, '-').replace(/^-|-$/g, '').toLowerCase()}-${index + 1}.${extension}` }
+async function fetchDownload(url, filename) { const response = await fetch(url, { mode: 'cors', credentials: 'omit' }); if (!response.ok) throw new Error(`Download failed (${response.status})`); const blob = await response.blob(); const objectUrl = URL.createObjectURL(blob); const anchor = document.createElement('a'); anchor.href = objectUrl; anchor.download = filename; document.body.appendChild(anchor); anchor.click(); anchor.remove(); URL.revokeObjectURL(objectUrl) }

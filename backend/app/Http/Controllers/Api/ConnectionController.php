@@ -197,8 +197,19 @@ class ConnectionController extends Controller
         $account->loadMissing('client:id,name,objective');
         $oldObjective = $account->effective_reporting_objective;
         $data = $request->validate([
-            'reporting_objective' => ['present', 'nullable', new Enum(ReportingObjective::class)],
+            'reporting_objective' => ['sometimes', 'nullable', new Enum(ReportingObjective::class)],
+            'target_costs' => ['sometimes', 'nullable', 'array'],
+            'target_costs.leads' => ['nullable', 'numeric', 'min:0.01'],
+            'target_costs.purchases' => ['nullable', 'numeric', 'min:0.01'],
+            'target_costs.installs' => ['nullable', 'numeric', 'min:0.01'],
         ]);
+        abort_if($data === [], 422, 'Provide a reporting objective or at least one target cost.');
+        if (array_key_exists('target_costs', $data)) {
+            $data['target_costs'] = collect($data['target_costs'] ?? [])
+                ->filter(fn ($value) => $value !== null && $value !== '')
+                ->map(fn ($value) => (float) $value)
+                ->all() ?: null;
+        }
         $account->update($data);
         $account->refresh()->load('client:id,name,objective');
         $refreshRequired = $oldObjective !== $account->effective_reporting_objective;
