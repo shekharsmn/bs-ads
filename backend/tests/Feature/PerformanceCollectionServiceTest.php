@@ -192,6 +192,8 @@ class PerformanceCollectionServiceTest extends TestCase
         $collector->collect($account, '2026-10-20', '2026-10-20');
         $collector->collect($account->fresh(), '2026-10-20', '2026-10-20');
 
+        Http::assertSent(fn ($request) => str_ends_with(parse_url($request->url(), PHP_URL_PATH), '/ads')
+            && ($request->data()['limit'] ?? null) === 50);
         $this->assertDatabaseCount('ad_groups', 1);
         $this->assertDatabaseCount('ads', 1);
         $this->assertDatabaseHas('ad_groups', ['external_id' => 'g1', 'status' => 'PAUSED']);

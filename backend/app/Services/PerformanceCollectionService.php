@@ -20,6 +20,9 @@ class PerformanceCollectionService
 
     private const INCREMENTAL_COLLECTION_DAYS = 14;
 
+    /** Rich Meta creative expansions can exceed Graph's response-size limit at the normal page size. */
+    private const META_CREATIVE_PAGE_SIZE = 50;
+
     public function collect(AdAccount $account, ?string $start = null, ?string $end = null): void
     {
         $account->loadMissing(['connection', 'client']);
@@ -607,7 +610,8 @@ class PerformanceCollectionService
             ? 'id,name,status,effective_status,optimization_goal'
             : 'id,name,status,effective_status,adset_id,creative{id,name,object_type,thumbnail_url,image_url,instagram_permalink_url,effective_object_story_id,object_story_spec,asset_feed_spec,url_tags}';
         $response = Http::connectTimeout(10)->timeout(45)->get("https://graph.facebook.com/v24.0/{$accountId}/{$edge}", [
-            'access_token' => $credentials['access_token'], 'fields' => $fields, 'limit' => 500,
+            'access_token' => $credentials['access_token'], 'fields' => $fields,
+            'limit' => $edge === 'ads' ? self::META_CREATIVE_PAGE_SIZE : 500,
         ]);
         $response->throw();
         $rows = $response->json('data', []);

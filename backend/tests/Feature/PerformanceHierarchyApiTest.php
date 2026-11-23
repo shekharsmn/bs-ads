@@ -440,6 +440,30 @@ class PerformanceHierarchyApiTest extends TestCase
         $this->assertSame(['leads', 'purchases'], collect($response->json('creative_performance.winners'))->pluck('metrics.result_key')->sort()->values()->all());
     }
 
+    public function test_account_overview_exposes_the_90_day_peer_median_when_targets_are_blank(): void
+    {
+        [$viewer, $account] = $this->accountFixture();
+        $account->update(['platform' => 'meta', 'reporting_objective' => 'lead_gen', 'target_costs' => null]);
+        $campaign = Campaign::create(['ad_account_id' => $account->id, 'external_id' => 'history-campaign', 'name' => 'Historical leads', 'status' => 'ACTIVE', 'type' => 'OUTCOME_LEADS']);
+        $group = AdGroup::create(['campaign_id' => $campaign->id, 'external_id' => 'history-group', 'name' => 'Historical group', 'status' => 'ACTIVE']);
+        $efficient = Ad::create(['ad_group_id' => $group->id, 'external_id' => 'history-efficient', 'name' => 'Efficient history', 'status' => 'ACTIVE']);
+        $expensive = Ad::create(['ad_group_id' => $group->id, 'external_id' => 'history-expensive', 'name' => 'Expensive history', 'status' => 'ACTIVE']);
+
+        foreach ([[$efficient, 30], [$expensive, 90]] as [$ad, $spend]) {
+            MetricSnapshot::create([
+                'ad_account_id' => $account->id, 'campaign_id' => $campaign->id, 'ad_group_id' => $group->id, 'ad_id' => $ad->id,
+                'scope' => 'ad', 'scope_key' => 'ad:'.$ad->id, 'metric_date' => '2026-09-30', 'currency' => 'INR',
+                'spend' => $spend, 'impressions' => 1200, 'clicks' => 60, 'conversions' => 3, 'leads' => 3, 'collected_at' => now(),
+            ]);
+        }
+
+        $this->actingAs($viewer)->getJson("/api/performance/accounts/{$account->id}/overview?start_date=2026-10-01&end_date=2026-10-05")
+            ->assertOk()
+            ->assertJsonPath('creative_performance.fallback_targets.leads', 20)
+            ->assertJsonPath('creative_performance.fallback_targets.purchases', null)
+            ->assertJsonPath('creative_performance.fallback_targets.installs', null);
+    }
+
     public function test_google_ads_use_click_and_result_thresholds_against_the_configured_target(): void
     {
         [$viewer, $account] = $this->accountFixture();

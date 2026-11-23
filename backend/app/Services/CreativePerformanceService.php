@@ -20,14 +20,15 @@ class CreativePerformanceService
     {
         $accounts = collect([$account]);
         $scope = $campaignIds !== null ? [$account->id => $campaignIds] : null;
+        $history = $this->historicalRows($accounts, $start, $scope);
         $evaluated = $this->evaluateAccount(
             $account,
             $this->rows($accounts, $start, $end, $scope),
-            $this->historicalRows($accounts, $start, $scope),
+            $history,
             false,
         );
 
-        return $this->summary($evaluated, $start, $end);
+        return $this->summary($evaluated, $start, $end, $this->peerMedians($account, $history));
     }
 
     public function paginateAccount(AdAccount $account, string $start, string $end, array $filters = [], ?array $campaignIds = null): array
@@ -239,12 +240,7 @@ class CreativePerformanceService
             return [null, null];
         }
 
-        $middle = intdiv($values->count(), 2);
-        $median = $values->count() % 2 === 0
-            ? ((float) $values[$middle - 1] + (float) $values[$middle]) / 2
-            : (float) $values[$middle];
-
-        return [$median, '90_day_peer_median'];
+        return [$this->median($values), '90_day_peer_median'];
     }
 
     private function verdict(string $platform, array $metrics, ?float $benchmark, ?string $benchmarkSource): array
@@ -296,7 +292,7 @@ class CreativePerformanceService
         return $this->notEnough('The ad has not crossed the platform-specific evidence threshold.');
     }
 
-    private function summary(Collection $ads, string $start, string $end): array
+    private function summary(Collection $ads, string $start, string $end, array $fallbackTargets = []): array
     {
         $sorted = $ads->sortByDesc(fn (array $row) => $row['verdict']['relative_efficiency'] ?? -1)->values();
         $winners = $this->hydrateCreatives($sorted->where('verdict.key', 'winner')->take(12)->values());
@@ -304,6 +300,7 @@ class CreativePerformanceService
 
         return [
             'reporting_dates' => ['start' => $start, 'end' => $end],
+            'fallback_targets' => $fallbackTargets,
             'methodology' => [
                 'active_ads_only' => true,
                 'winner' => 'Uses the configured target cost first, otherwise a leave-one-out 90-day peer median; Meta requires 3+ results/3+ days/1,000+ impressions and Google requires 5+ results/7+ days/100+ clicks.',
@@ -320,6 +317,33 @@ class CreativePerformanceService
             'did_not_work' => $failed,
             'not_enough_data' => [],
         ];
+    }
+
+    private function peerMedians(AdAccount $account, Collection $historyRows): array
+    {
+        return collect(['leads', 'purchases', 'installs'])->mapWithKeys(function (string $resultKey) use ($account, $historyRows): array {
+            $values = $historyRows
+                ->filter(fn ($row) => $this->resultKey($account->effective_reporting_objective, $row) === $resultKey)
+                ->map(function ($row) use ($resultKey): ?float {
+                    $results = (float) $row->{$resultKey};
+
+                    return $results >= 3 && (float) $row->spend > 0 ? (float) $row->spend / $results : null;
+                })
+                ->filter(fn ($value) => $value !== null && $value > 0)
+                ->sort()
+                ->values();
+
+            return [$resultKey => $values->isEmpty() ? null : $this->median($values)];
+        })->all();
+    }
+
+    private function median(Collection $values): float
+    {
+        $middle = intdiv($values->count(), 2);
+
+        return $values->count() % 2 === 0
+            ? ((float) $values[$middle - 1] + (float) $values[$middle]) / 2
+            : (float) $values[$middle];
     }
 
     private function paginate(Collection $ads, array $filters): array

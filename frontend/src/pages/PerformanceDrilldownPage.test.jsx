@@ -41,7 +41,7 @@ describe('performance drilldown', () => {
     api.getPerformanceAccount.mockResolvedValue({ data: account })
     api.refreshPerformanceAccount.mockResolvedValue({ data: { queued_account_id: 9, refresh: { available: false, available_at: new Date(Date.now() + 300_000).toISOString(), remaining_seconds: 300 } } })
     api.updateAdAccount.mockResolvedValue({ data: { account: { ...account, reporting_objective: 'app_installs', effective_reporting_objective: 'app_installs' }, refresh: { queued: true, days: 30 } } })
-    api.getAccountPerformance.mockResolvedValue({ data: { account, metrics, series } })
+    api.getAccountPerformance.mockResolvedValue({ data: { account, metrics, series, creative_performance: { fallback_targets: { leads: 35, purchases: null, installs: null }, counts: {}, winners: [], did_not_work: [], methodology: {} } } })
     api.getAccountCampaigns.mockResolvedValue({ data: { campaigns: [{ campaign: { id: 3, external_id: 'cmp_3', name: 'Launch', status: 'ACTIVE', type: 'OUTCOME_SALES' }, metrics }] } })
     api.getCampaignAdGroups.mockResolvedValue({ data: { campaign: { id: 3, external_id: 'cmp_3', name: 'Launch' }, metrics, series, ad_groups: [{ ad_group: { id: 4, external_id: 'set_4', name: 'Prospecting', status: 'ACTIVE' }, metrics }] } })
     api.getAdGroupAds.mockResolvedValue({ data: { campaign: { id: 3, external_id: 'cmp_3', name: 'Launch' }, ad_group: { id: 4, external_id: 'set_4', name: 'Prospecting' }, metrics, series, ads: [{ ad: { id: 5, external_id: 'ad_5', name: 'Creative A', status: 'ACTIVE', type: 'IMAGE', creative: { primary_texts: ['Lead with proof, not promises.'], headlines: ['See the result'], media: [{ type: 'image', url: 'https://cdn.example/ad.jpg' }] } }, metrics, verdict: { key: 'winner', label: 'Winner', reason: 'Below target.' } }] } })
@@ -142,6 +142,16 @@ describe('performance drilldown', () => {
     fireEvent.blur(target)
 
     await waitFor(() => expect(api.updateAdAccount).toHaveBeenCalledWith('9', { target_costs: { leads: 42.5 } }))
+  })
+
+  it('shows the actual 90-day peer median beside blank cost targets', async () => {
+    renderPath('/command-center/clients/7/ad-accounts/9?range=30d&start_date=2026-09-28&end_date=2026-10-27')
+
+    expect(await screen.findByText('90-day peer median: $35.00')).toBeInTheDocument()
+    const target = await screen.findByLabelText('Target CPL')
+    expect(target).toHaveValue(null)
+    expect(target).toHaveAttribute('placeholder', '35.00')
+    expect(screen.getAllByText('90-day peer median: not enough peer history')).toHaveLength(2)
   })
 
   it('opens account operations in place while preserving the performance period', async () => {
