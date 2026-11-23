@@ -54,11 +54,13 @@ Run as root inside `/opt/bs-ads`. The production script uses the existing
 `.deployment/compose.yaml` and the versioned `deployment/` Dockerfiles; it does not provision a new server.
 
 ```bash
-git pull --ff-only
 bash deploy-prod.sh
 ```
 
-This builds the checked-out backend and frontend before pausing BS Ads, backs up
+This requires a clean checkout on `main` and pulls `origin/main` with a fast-forward
+before building. It stops if the pull fails or local commits diverge from the remote.
+When the pull updates the script, it reloads the updated script under the same deployment lock.
+It builds the backend and frontend before pausing BS Ads, backs up
 the `bs_ads` database, applies pending migrations, refreshes alert templates and
 caches, and starts the updated services. Builds use a dedicated cached builder
 limited to one CPU and 768 MiB. The scraper is rebuilt only when its source changes

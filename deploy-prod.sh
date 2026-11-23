@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Existing BS Ads Docker installation only. Pull code separately before deploying.
+# Existing BS Ads Docker installation only. Deploy fast-forwards main before building.
 set -Eeuo pipefail
 umask 077
 
@@ -21,9 +21,9 @@ QUEUE_LAYOUT_UPGRADE=0
 
 usage() {
     printf 'Usage: bash deploy-prod.sh [deploy|restart]\n\n'
-    printf '  deploy   Build checked-out code, back up DB, migrate, refresh caches, start BS Ads.\n'
+    printf '  deploy   Pull main, build, back up DB, migrate, refresh caches, start BS Ads.\n'
     printf '  restart  Reload .env/caches and restart existing images (no builds/migrations).\n\n'
-    printf 'Run git pull --ff-only first for new commits. No host PHP is needed.\n'
+    printf 'Deploy requires a clean main checkout. No host PHP is needed.\n'
 }
 die() { printf 'Error: %s\n' "$*" >&2; exit 1; }
 step() { printf '\n=== %s ===\n' "$*"; }
@@ -115,8 +115,34 @@ main() {
     docker compose version >/dev/null
     mkdir -p "$STATE/releases"
     # Prevent overlapping builds, migrations, and restarts for this app.
-    exec 9>"$STATE/deploy.lock"
+    # Retain the same lock when reloading a newly pulled deployment script.
+    local pulled=0
+    if [[ "${BS_ADS_PULL_PID:-}" == "$$" && -e /proc/$$/fd/9 ]]; then
+        pulled=1
+    else
+        exec 9>"$STATE/deploy.lock"
+    fi
+    unset BS_ADS_PULL_PID
     flock -n 9 || die 'Another BS Ads deployment is running.'
+    if [[ "$MODE" == deploy ]]; then
+        local branch source_status before after
+        branch="$(git -C "$ROOT" symbolic-ref --quiet --short HEAD)" || die 'Deploy requires the main branch.'
+        [[ "$branch" == main ]] || die "Deploy requires main; current branch is $branch."
+        source_status="$(git -C "$ROOT" -c core.fileMode=false status --porcelain --untracked-files=normal -- . ':(exclude).deployment')" || die 'Unable to verify the deployment source tree.'
+        [[ -z "$source_status" ]] || die 'Refusing to deploy tracked or untracked source changes.'
+        if (( ! pulled )); then
+            before="$(git -C "$ROOT" rev-parse HEAD)"
+            step 'Updating main from origin'
+            git -C "$ROOT" -c core.fileMode=false pull --ff-only --no-rebase origin main || die 'Unable to fast-forward main; deployment stopped before building.'
+            after="$(git -C "$ROOT" rev-parse HEAD)"
+            [[ "$after" == "$(git -C "$ROOT" rev-parse FETCH_HEAD)" ]] || die 'Local main has commits outside origin/main; deployment stopped.'
+            if [[ "$before" != "$after" ]]; then
+                # Execute the pulled script as well as building the pulled source.
+                export BS_ADS_PULL_PID=$$
+                exec bash "$ROOT/deploy-prod.sh" deploy
+            fi
+        fi
+    fi
     local services
     services="$(dc config --services)"
     local service
@@ -144,16 +170,9 @@ main() {
     trap 'exit 130' INT
     trap 'exit 143' TERM
 
-    local update_scraper=0 previous='' source_status=''
+    local update_scraper=0 previous=''
     if [[ "$MODE" == deploy ]]; then
         command -v mysqldump >/dev/null || die 'Missing command: mysqldump'
-        # .deployment is server-owned runtime state; every other tracked or
-        # untracked file can affect a Docker build and must match the revision.
-        if ! source_status="$(git -C "$ROOT" -c core.fileMode=false status --porcelain --untracked-files=normal -- . ':(exclude).deployment')"; then
-            die 'Unable to verify the deployment source tree.'
-        fi
-        [[ -z "$source_status" ]] || \
-            die 'Refusing to deploy tracked or untracked source changes.'
         for file in deployment/Dockerfile.php deployment/Dockerfile.web deployment/php.ini deployment/fpm.conf; do
             [[ -f "$ROOT/$file" ]] || die "Missing build file: $file"
         done
