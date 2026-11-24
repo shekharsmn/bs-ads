@@ -45,7 +45,7 @@ final class MaintainShopify extends Command
         }
         Installation::where('status', 'active')->chunkById(50, function ($rows) use ($kind, $sync) {
             foreach ($rows as $install) {
-                if (! $install->app->active || ! $install->app->data_approved) {
+                if (! $install->app->active) {
                     continue;
                 }
                 try {

@@ -18,9 +18,6 @@ final class SyncCoordinator
             if ($install->status !== 'active' || ! $install->app->active) {
                 throw new ShopifyException('installation_inactive');
             }
-            if (! $install->app->data_approved) {
-                throw new ShopifyException('data_approval_required');
-            }
             if (! in_array('read_orders', $install->scopes ?? [], true)) {
                 throw new ShopifyException('orders_scope_required');
             }

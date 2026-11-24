@@ -26,8 +26,13 @@ jobs:
       - uses: shivammathur/setup-php@v2
         with:
           php-version: '8.3'
-          extensions: bcmath, pdo_mysql, pdo_sqlite, mbstring, zip
+          extensions: bcmath, pdo_mysql, pdo_sqlite, mbstring, zip, timezonedb
           coverage: none
+      - name: Prepare Laravel runtime directories
+        run: |
+          mkdir -p bootstrap/cache storage/framework/cache/data storage/framework/sessions storage/framework/views storage/logs
+          cp .env.example .env
+        working-directory: backend
       - run: composer install --no-interaction --prefer-dist
         working-directory: backend
       - run: php artisan test

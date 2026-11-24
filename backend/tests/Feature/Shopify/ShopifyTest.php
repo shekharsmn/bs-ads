@@ -69,6 +69,68 @@ class ShopifyTest extends TestCase
         return $header.'.'.$body.'.'.rtrim(strtr(base64_encode(hash_hmac('sha256', $header.'.'.$body, $app->secret, true)), '+/', '-_'), '=');
     }
 
+    public function test_public_merchant_can_import_without_manual_approval_or_agency_link(): void
+    {
+        [, $app, $store, $install] = $this->fixture();
+        $app->update(['distribution' => 'public', 'client_id' => null, 'data_approved' => false]);
+        $store->update(['client_id' => null]);
+        $this->withHeaders(['Authorization' => 'Bearer '.$this->jwt($app), 'X-Shopify-Registration' => $app->slug])
+            ->postJson('/api/shopify/embedded/session')->assertOk()->assertJsonPath('warning', null);
+        $run = SyncRun::where('install_id', $install->id)->firstOrFail();
+        $this->assertSame('pending', $run->status);
+        $this->assertSame($run->id, app(\App\Shopify\SyncCoordinator::class)->enqueue($install)->id);
+        Http::fake(['*' => Http::sequence()
+            ->push(['data' => ['shop' => ['id' => $store->gid, 'name' => 'Fixture', 'ianaTimezone' => 'Asia/Kolkata', 'currencyCode' => 'INR']]])
+            ->push(['data' => ['bulkOperationRunQuery' => ['bulkOperation' => ['id' => 'gid://shopify/BulkOperation/100'], 'userErrors' => []]]])]);
+        app(SyncEngine::class)->step($run);
+        $this->assertSame('poll', $run->fresh()->stage);
+        $run->update(['status' => 'completed']);
+        $this->artisan('shopify:maintain')->assertSuccessful();
+        $this->assertSame(2, SyncRun::where('install_id', $install->id)->count());
+        $this->assertNull($store->fresh()->client_id);
+        $this->assertFalse($app->fresh()->data_approved);
+    }
+
+    public function test_provider_permission_denials_fail_import_with_a_safe_message(): void
+    {
+        [, $app, $store, $install] = $this->fixture();
+        $app->update(['data_approved' => false]);
+        foreach ([
+            [200, ['errors' => [['extensions' => ['code' => 'ACCESS_DENIED']]]]],
+            [200, ['errors' => [['message' => 'This app is not approved to access the Order object. private-provider-detail']]]],
+            [403, ['message' => 'private-provider-detail']],
+        ] as [$status, $body]) {
+            $run = app(\App\Shopify\SyncCoordinator::class)->enqueue($install);
+            Http::fake(['*' => Http::response($body, $status)]);
+            (new \App\Shopify\Jobs\SyncShop($run->id))->handle(app(SyncEngine::class));
+            $this->assertSame('failed', $run->fresh()->status);
+            $this->assertSame('access_denied', $run->fresh()->error_code);
+            $report = app(CommerceReadService::class)->report($store->fresh(), []);
+            $this->assertFalse($report['coverage']['complete']);
+            $this->assertContains('Shopify denied access to order data. Check this app’s order permissions and protected customer data access in Shopify.', $report['warnings']);
+            $this->assertStringNotContainsString('private-provider-detail', json_encode($report));
+        }
+    }
+
+    public function test_missing_scope_and_inactive_installation_still_block_import(): void
+    {
+        [, $app,, $install] = $this->fixture();
+        $app->update(['data_approved' => false]);
+        foreach ([
+            [['scopes' => []], 'orders_scope_required'],
+            [['scopes' => ['read_orders'], 'status' => 'revoked'], 'installation_inactive'],
+        ] as [$attributes, $code]) {
+            $install->update($attributes);
+            try {
+                app(\App\Shopify\SyncCoordinator::class)->enqueue($install);
+                $this->fail('Unauthorized import was accepted.');
+            } catch (ShopifyException $error) {
+                $this->assertSame($code, $error->errorCode);
+            }
+        }
+        $this->assertSame(0, SyncRun::count());
+    }
+
     public function test_identity_rejects_wrong_audience_expiry_and_destination(): void
     {
         [, $app] = $this->fixture();
@@ -120,7 +182,7 @@ class ShopifyTest extends TestCase
         $other = Client::create(['name' => 'Other', 'slug' => 'other-commerce', 'objective' => 'ecommerce']);
         $this->postJson('/api/clients/'.$other->id.'/shopify/connect')->assertStatus(409);
         $app->update(['data_approved' => false]);
-        $this->postJson('/api/clients/'.$client->id.'/shopify/connect')->assertStatus(409);
+        $this->postJson('/api/clients/'.$client->id.'/shopify/connect')->assertOk()->assertExactJson(['url' => $app->install_url]);
     }
 
     public function test_verified_custom_installation_links_its_preassigned_client_without_a_manual_code(): void

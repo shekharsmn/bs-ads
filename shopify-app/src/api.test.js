@@ -2,6 +2,12 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { merchantApi } from './api'
 afterEach(() => { vi.unstubAllGlobals(); document.head.innerHTML = ''; delete window.shopify })
 describe('Shopify-only authentication', () => {
+  it('explains a provider access denial without exposing provider responses', async () => {
+    document.head.innerHTML = '<meta name="shopify-registration" content="public">'
+    window.shopify = { idToken: async () => 'jwt' }
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 401, json: async () => ({ message: 'access_denied' }) }))
+    await expect(merchantApi('session')).rejects.toThrow('Check this app’s permissions and protected customer data access in Shopify.')
+  })
   it('requires Shopify identity, never redirects to agency login', async () => {
     await expect(merchantApi('report')).rejects.toThrow('Shopify admin')
   })
