@@ -28,6 +28,9 @@ jobs:
           php-version: '8.3'
           extensions: bcmath, pdo_mysql, pdo_sqlite, mbstring, zip
           coverage: none
+      - name: Prepare Laravel runtime directories
+        run: mkdir -p bootstrap/cache storage/framework/cache/data storage/framework/sessions storage/framework/views storage/logs
+        working-directory: backend
       - run: composer install --no-interaction --prefer-dist
         working-directory: backend
       - run: php artisan test
