@@ -40,6 +40,9 @@ final class GraphqlClient
             \Illuminate\Support\Facades\Cache::put($throttleKey, now()->timestamp + max(1, (int) $response->header('Retry-After')), max(1, (int) $response->header('Retry-After')));
         }
         if (! $response->successful()) {
+            if ($response->status() === 403) {
+                throw new ShopifyException('access_denied');
+            }
             throw new ShopifyException('api_http_'.$response->status(), $response->status() === 429 || $response->serverError());
         }
         $body = $response->json();
@@ -54,7 +57,15 @@ final class GraphqlClient
             }
         }
         if (! is_array($body) || ! empty($body['errors'])) {
+            $errors = is_array($body) && is_array($body['errors'] ?? null) ? $body['errors'] : [];
             $code = data_get($body, 'errors.0.extensions.code', 'graphql_error');
+            foreach ($errors as $error) {
+                if (data_get($error, 'extensions.code') === 'ACCESS_DENIED' ||
+                    preg_match('/not approved to access|access denied|protected customer data/i', (string) data_get($error, 'message', ''))) {
+                    $code = 'ACCESS_DENIED';
+                    break;
+                }
+            }
             throw new ShopifyException(in_array($code, ['THROTTLED', 'ACCESS_DENIED']) ? strtolower($code) : 'graphql_error', $code === 'THROTTLED');
         }
         if (! isset($body['data'])) {

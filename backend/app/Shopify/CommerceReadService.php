@@ -64,7 +64,9 @@ final class CommerceReadService
             $warnings[] = 'Store authorization requires attention.';
         }
         if ($run?->status === 'failed') {
-            $warnings[] = 'The last synchronization failed: '.$run->error_code;
+            $warnings[] = $run->error_code === 'access_denied'
+                ? 'Shopify denied access to order data. Check this app’s order permissions and protected customer data access in Shopify.'
+                : 'The last synchronization failed: '.$run->error_code;
         }
         if (Order::where('store_id', $store->id)->where('sync_state', 'unsupported')->exists()) {
             $warnings[] = 'Some financial activity is unsupported; revenue coverage is incomplete.';

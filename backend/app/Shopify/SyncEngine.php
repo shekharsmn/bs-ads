@@ -22,9 +22,6 @@ final class SyncEngine
         $cp = $run->checkpoint ?? [];
         $stage = $run->stage;
         $run->update(['status' => 'running']);
-        if (! $install->app->data_approved) {
-            throw new ShopifyException('data_approval_required');
-        }
         if (! in_array('read_orders', $install->scopes ?? [], true)) {
             throw new ShopifyException('orders_scope_required');
         }

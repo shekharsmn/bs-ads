@@ -10,6 +10,8 @@ export async function merchantApi(path, options = {}) {
   let result
   try { result = await response.json() }
   catch { throw new Error('The store connection returned an unexpected response. Please retry.') }
-  if (!response.ok) throw new Error(result?.message || 'The store request failed. Please retry.')
+  if (!response.ok) throw new Error(result?.message === 'access_denied'
+    ? 'Shopify denied access to store data. Check this app’s permissions and protected customer data access in Shopify.'
+    : result?.message || 'The store request failed. Please retry.')
   return result
 }

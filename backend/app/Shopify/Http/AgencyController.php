@@ -41,7 +41,7 @@ final class AgencyController
         }
         $data = $r->validate(['slug' => 'required|regex:/^[a-z0-9-]+$/|max:80|unique:shop_apps,slug', 'name' => 'required|string|max:120',
             'client_key' => 'required|string|max:191|unique:shop_apps,client_key', 'secret' => 'required|string|min:16|max:500',
-            'distribution' => 'required|in:custom,public', 'client_id' => 'nullable|integer|exists:clients,id', 'data_approved' => 'required|boolean',
+            'distribution' => 'required|in:custom,public', 'client_id' => 'nullable|integer|exists:clients,id', 'data_approved' => 'sometimes|boolean',
             'install_url' => ['required', 'url', 'max:2048', function ($attribute, $value, $fail) {
                 if (parse_url($value, PHP_URL_SCHEME) !== 'https' || ! in_array(parse_url($value, PHP_URL_HOST), ['admin.shopify.com', 'apps.shopify.com'], true)) {
                     $fail('Use the Shopify-generated installation or listing URL.');
@@ -73,7 +73,7 @@ final class AgencyController
         abort_if($apps->isEmpty(), 409, 'Shopify has not been configured for this client.');
         abort_unless($apps->count() === 1, 409, 'Multiple Shopify registrations are configured for this client.');
         $app = $apps->first();
-        abort_unless($app->data_approved && $app->install_url, 409, 'Shopify setup is incomplete for this client.');
+        abort_unless($app->install_url, 409, 'Shopify setup is incomplete for this client.');
 
         return ['url' => $app->install_url];
     }
