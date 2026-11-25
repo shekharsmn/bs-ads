@@ -134,7 +134,9 @@ main() {
         if (( ! pulled )); then
             before="$(git -C "$ROOT" rev-parse HEAD)"
             step 'Updating main from origin'
-            git -C "$ROOT" -c core.fileMode=false pull --ff-only --no-rebase origin main || die 'Unable to fast-forward main; deployment stopped before building.'
+            # Source files must remain readable by the application user in the image.
+            # Keep the private release/configuration umask outside this subshell.
+            (umask 022; git -C "$ROOT" -c core.fileMode=false pull --ff-only --no-rebase origin main) || die 'Unable to fast-forward main; deployment stopped before building.'
             after="$(git -C "$ROOT" rev-parse HEAD)"
             [[ "$after" == "$(git -C "$ROOT" rev-parse FETCH_HEAD)" ]] || die 'Local main has commits outside origin/main; deployment stopped.'
             # Pull hooks or another local process may have changed build inputs

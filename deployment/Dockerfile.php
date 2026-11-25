@@ -17,6 +17,7 @@ COPY --from=shopify /backend/public/shopify ./public/shopify
 ENV COMPOSER_ALLOW_SUPERUSER=1 COMPOSER_MEMORY_LIMIT=512M
 RUN mkdir -p storage/framework/cache/data storage/framework/sessions storage/framework/views storage/logs storage/app/public bootstrap/cache \
  && composer install --no-dev --prefer-dist --no-interaction --optimize-autoloader \
+ && chmod -R a+rX . \
  && chown -R www-data:www-data storage bootstrap/cache
 COPY deployment/php.ini /usr/local/etc/php/conf.d/bs-ads.ini
 COPY deployment/fpm.conf /usr/local/etc/php-fpm.d/zz-bs-ads.conf
