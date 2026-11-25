@@ -24,6 +24,10 @@ if name == 'git':
         print(os.environ.get('BRANCH', 'main'))
         sys.exit(int(os.environ.get('DETACHED', '0')))
     elif 'pull' in args:
+        mask = os.umask(0)
+        os.umask(mask)
+        if mask != 0o022:
+            sys.exit('Git pull must create readable application source files')
         if os.environ.get('PULL_ADVANCES'):
             (Path(args[args.index('-C') + 1]) / '.deployment/pulled-fixture').touch()
         sys.exit(int(os.environ.get('FAIL_PULL', '0')))
